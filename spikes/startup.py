@@ -107,8 +107,7 @@ def prepare(significants, bugs_by_signature, totals, date):
                                                               None)
 
         return results, spikes_number, urls, affected_chans, yesterday, today
-    else:
-        return None
+    return None
 
 
 def send_email(emails=[], date='today'):

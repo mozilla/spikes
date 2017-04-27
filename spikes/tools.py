@@ -11,8 +11,7 @@ def get_percent(x, y):
         if y == 0:
             return '0%'
         return '+Inf%'
-    else:
-        return '+{}%'.format(int(round((float(y) / float(x) - 1) * 100)))
+    return '+{}%'.format(int(round((float(y) / float(x) - 1) * 100)))
 
 
 def get_array(d):
@@ -27,8 +26,7 @@ def get_array(d):
     if isinstance(d, dict):
         return [n for _, n in sorted(d.items(),
                                      key=lambda p: p[0])]
-    else:
-        return d
+    return d
 
 
 def __get_lambda_critical(N, i, alpha):
