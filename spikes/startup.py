@@ -138,8 +138,8 @@ def send_email(emails=[], date='today'):
 
 
 if __name__ == '__main__':
-    desc = 'Monitor spikes in startup crashes'
-    parser = argparse.ArgumentParser(description=desc)
+    description = 'Monitor spikes in startup crashes'
+    parser = argparse.ArgumentParser(description=description)
     parser.add_argument('-e', '--email', dest='emails',
                         action='store', nargs='+',
                         default=[], help='emails')
