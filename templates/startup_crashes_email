@@ -1,0 +1,39 @@
+<!doctype html>
+<html lang="en-us">
+<head>
+  <meta charset="utf-8">
+  <title>Spikes</title>
+</head>
+<body>
+<p>Hi all,</p>
+<p>We've {{ spikes_number_word }} spike{{ 's' if spikes_number > 1 else '' }} in startup crashes.<br>
+<ul style="padding: 0">
+{% for product, i1 in results.items() %}<li>{{ product }}
+<ul>{% for chan, i2 in i1.items() %}
+<li>{{ chan }} (<b>{{ totals[product][chan] }}</b> crashes reported):<br>
+Most significant increases from {{ start_date }} to {{ end_date }} (<a href="{{ urls[product][chan] }}">top startup crashers from Socorro</a>):
+<ul>
+{% for sgn, i3 in i2.items() %}<li>{{ sgn|e }}: <b>increased from {{ i3['numbers'][0] }} to {{ i3['numbers'][1] }} ({{ i3['numbers'][2] }})</b>.
+<ul>
+{% if i3['resolved'] -%}
+<li><a href="{{ i3['resolved'][1] }}"><s style="color:red">Bug {{ i3['resolved'][0] }}</s></a></li>
+{% endif -%}
+{% if i3['unresolved'] -%}
+<li><a href="{{ i3['unresolved'][1] }}">Bug {{ i3['unresolved'][0] }}</a></li>
+{% endif -%}
+</ul>
+</li>
+{% endfor -%}
+</ul>
+</li>
+{% endfor -%}
+</ul>
+</li>
+{% endfor -%}
+</ul>
+</p>
+<p>Sincerely,<br>
+Release Management Bot
+</p>
+</body>
+</html>

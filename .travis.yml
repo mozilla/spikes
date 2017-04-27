@@ -1,0 +1,20 @@
+language: python
+python:
+  - "2.7"
+  - "3.5"
+before_install:
+  - if [[ ${TRAVIS_PYTHON_VERSION%%.*} == '3' ]]; then
+       sudo apt-get install -qq python3-numpy python3-scipy ;
+    else
+       sudo apt-get install -qq python-numpy python-scipy ;
+    fi
+install:
+  - pip install --upgrade pip
+  - pip install -r requirements.txt
+  - pip install -r test-requirements.txt
+script:
+  - flake8 .
+  - coverage run --source=spikes -m unittest discover tests/
+after_success:
+  - bash <(curl -s https://codecov.io/bash)
+cache: pip
