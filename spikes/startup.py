@@ -24,7 +24,7 @@ def get(date='today'):
     bugs_by_signature = {}
     totals = {}
     coeff = 4.
-    win = 3
+    win = 5
     for product in products:
         data = dc.get(channels, product=product,
                       date=date, query=query)
