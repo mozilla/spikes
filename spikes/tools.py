@@ -240,3 +240,75 @@ def is_spiking(x, coeff=3., win=7):
         return 'down', mx, md
     else:
         return 'nothing', mx, md
+
+
+def is_sgn_spiking(numbers, stats, coeff,
+                   winmin, winmax, sgn='',
+                   verbose=False):
+    last = numbers[-1]
+    x = __convert(numbers[:-1])
+    for win in range(winmax, winmin - 1, -1):
+        m, e = __get_pd_mean(x[-win:])
+        m = np.ceil(m)
+        e = np.ceil(e) if e != 0 else 1
+        diff = last - m
+        if diff > coeff * e:
+            m_r, e_r, m_d, e_d = __get_mean_rate(stats, coeff, win)
+            if verbose:
+                print(('out', sgn, numbers, win, m, e, m_r, e_r, m_d, e_d))
+            if m == 0:
+                if verbose:
+                    print(('zero', sgn, numbers, win,
+                           m, e, m_r, e_r, m_d, e_d))
+                return win, diff
+            else:
+                rate = np.round(100 * (last / m - 1))
+                if rate - m_r > e_r:
+                    if verbose:
+                        print(('rate', sgn, numbers, win,
+                               m, e, m_r, e_r, m_d, e_d))
+                    return win, diff
+                elif last - m - m_d > e_d:
+                    if verbose:
+                        print(('diff', sgn, numbers, win,
+                               m, e, m_r, e_r, m_d, e_d))
+                    return win, diff
+
+    return None
+
+
+def __get_mean_rate(stats, coeff, win, __cache={}):
+    if win not in __cache:
+        NaN = float('NaN')
+        R = len(stats)
+        for numbers in stats.values():
+            C = len(numbers)
+            break
+        x = np.empty((R, C))
+        for i, numbers in enumerate(stats.values()):
+            x[i, :] = numbers
+
+        last = x[:, -1]
+        y = x[:, -(win + 1):-1]
+        means = np.mean(y, axis=1)
+        means = np.ceil(means)
+        diffs = last - means
+        zeros = means == 0
+        means[zeros] = 1.
+        ratios = 100 * (last / means - 1)
+        ratios[zeros] = NaN
+        outliers = generalized_esd(ratios, 10)
+        ratios[outliers] = NaN
+        m_r, e_r = __get_pd_mean(ratios)
+        m_r = np.round(m_r)
+        e_r = np.round(e_r)
+
+        outliers = generalized_esd(diffs, 10)
+        diffs[outliers] = NaN
+        m_d, e_d = __get_pd_mean(diffs)
+        m_d = np.ceil(m_d)
+        e_d = np.ceil(e_d)
+
+        __cache[win] = (m_r, e_r, m_d, e_d)
+
+    return __cache[win]

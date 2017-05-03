@@ -5,6 +5,7 @@
 import copy
 from collections import defaultdict
 from dateutil.relativedelta import relativedelta
+import functools
 from libmozdata import socorro, utils
 from libmozdata.bugzilla import Bugzilla
 import numpy as np
@@ -111,6 +112,27 @@ def get_total(channels, product='Firefox', date='today'):
     return data
 
 
+def get_top_signatures(data, N=50):
+    for chan, stats_by_sgn in data.items():
+        sbs = {}
+        for sgn, stats in stats_by_sgn.items():
+            # replace dictionary with an array of numbers
+            sbs[sgn] = tools.get_array(stats)
+        data[chan] = sbs
+
+    for chan, stats_by_sgn in data.items():
+        # take only the top N signatures for the last day
+        d = list(sorted(stats_by_sgn.items(),
+                        key=lambda p: p[1][-1],
+                        reverse=True))
+        if len(d) > N:
+            data[chan] = dict(d[:N])
+        else:
+            data[chan] = dict(d)
+
+    return data
+
+
 def get_signatures(channels, product='Firefox',
                    date='today', query={}, ndays=7):
     today = utils.get_date_ymd(date)
@@ -151,24 +173,52 @@ def get_signatures(channels, product='Firefox',
     for s in searches:
         s.wait()
 
-    for chan, stats_by_sgn in data.items():
-        sbs = {}
-        for sgn, stats in stats_by_sgn.items():
-            # replace dictionary with an array of numbers
-            sbs[sgn] = tools.get_array(stats)
-        data[chan] = sbs
+    return get_top_signatures(data)
 
-    for chan, stats_by_sgn in data.items():
-        # take only the top 50 signatures for the last day
-        d = list(sorted(stats_by_sgn.items(),
-                        key=lambda p: p[1][-1],
-                        reverse=True))
-        if len(d) > 50:
-            data[chan] = dict(d[:50])
-        else:
-            data[chan] = dict(d)
 
-    return data
+def get_signatures_by_install_time(channels, product='Firefox',
+                                   date='today', query={}, ndays=7):
+    today = utils.get_date_ymd(date)
+    few_days_ago = today - relativedelta(days=ndays)
+    base = {few_days_ago + relativedelta(days=i): 0 for i in range(ndays + 1)}
+    data = {chan: defaultdict(lambda: copy.copy(base)) for chan in channels}
+
+    def handler(date, json, data):
+        if json['errors'] or not json['facets']['signature']:
+            return
+
+        for facets in json['facets']['signature']:
+            sgn = facets['term']
+            count = facets['facets']['cardinality_install_time']['value']
+            data[sgn][date] = count
+
+    params = {'product': product,
+              'date': '',
+              'release_channel': '',
+              '_aggs.signature': '_cardinality.install_time',
+              '_results_number': 0,
+              '_facets_size': 10000}
+    params.update(query)
+
+    searches = []
+    for chan in channels:
+        params = copy.deepcopy(params)
+        params['release_channel'] = chan
+        for i in range(ndays + 1):
+            day = few_days_ago + relativedelta(days=i)
+            day_after = day + relativedelta(days=1)
+            search_date = socorro.SuperSearch.get_search_date(day, day_after)
+            params = copy.deepcopy(params)
+            params['date'] = search_date
+            handler = functools.partial(handler, day)
+            searches.append(socorro.SuperSearch(params=params,
+                                                handler=handler,
+                                                handlerdata=data[chan]))
+
+    for s in searches:
+        s.wait()
+
+    return get_top_signatures(data)
 
 
 def get_outliers(stats, diff=diftors.diff, noutliers=5):
@@ -194,6 +244,23 @@ def is_spiking(data, coeff, win):
         x = tools.get_array(numbers)
         spike, _, _ = tools.is_spiking(x, coeff=coeff, win=win)
         spikes[chan] = 'yes' if spike == 'up' else 'no'
+
+    return spikes
+
+
+def get_spiking_signatures(data, coeff, winmin, winmax):
+    spikes = defaultdict(lambda: list())
+    for chan, stats in data.items():
+        for sgn, numbers in stats.items():
+            res = tools.is_sgn_spiking(numbers, stats, coeff,
+                                       winmin, winmax, sgn=sgn)
+            if res:
+                win, diff = res
+                info = {'signature': sgn,
+                        'numbers': numbers,
+                        'win': win,
+                        'diff': diff}
+                spikes[chan].append(info)
 
     return spikes
 

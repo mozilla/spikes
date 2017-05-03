@@ -15,10 +15,10 @@ from . import tools
 
 channels = ['nightly', 'aurora', 'beta', 'release']
 products = ['Firefox', 'FennecAndroid']
+query = {'startup_crash': '__true__'}
 
 
 def get(date='today'):
-    query = {'startup_crash': '__true__'}
     significants = defaultdict(lambda: defaultdict(lambda: dict()))
     signatures = set()
     bugs_by_signature = {}
@@ -86,8 +86,8 @@ def prepare(significants, bugs_by_signature, totals, date):
                         affected_chans.append(chan)
                         params = {'product': product,
                                   'date': search_date,
-                                  'release_channel': chan,
-                                  'startup_crash': '__true__'}
+                                  'release_channel': chan}
+                        params.update(query)
                         url = socorro.SuperSearch.get_link(params)
                         urls[product][chan] = url
                         spikes_number += 1
