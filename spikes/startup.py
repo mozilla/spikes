@@ -33,7 +33,7 @@ def get(date='today'):
             continue
 
         spikes = dc.is_spiking(data, coeff, win)
-        dc.plot(data, coeff, win)
+        # dc.plot(data, coeff, win)
         spiking = []
         for chan, res in spikes.items():
             if res == 'yes':
