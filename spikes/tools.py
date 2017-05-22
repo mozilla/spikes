@@ -134,7 +134,7 @@ def ma(x, win):
 
 
 def mean(x):
-    l = len(x)
+    l = float(len(x))
     m = np.sum(x) / l
     e = np.sqrt(np.sum((x - m) ** 2) / l)
     return m, e

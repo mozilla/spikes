@@ -1,0 +1,105 @@
+<!-- This Source Code Form is subject to the terms of the Mozilla Public
+     - License, v. 2.0. If a copy of the MPL was not distributed with this file,
+     - You can obtain one at http://mozilla.org/MPL/2.0/.  -->
+
+<!DOCTYPE html>
+<html lang="en-us">
+  <head>
+    <link rel="shortcut icon" href="/favicon.ico">
+    <meta http-equiv="Content-Type" content="text/html; charset=UTF-8">
+    <title>Signatures for {{ product }} &mdash; {{ channel }} &mdash; {{ date }}</title>
+    <style>
+      td.num {
+      text-align:center;
+      font-weight:bold;
+      }
+      s.red {
+      color:red;
+      }
+      th.norm {
+      font-weight:normal;
+      }
+      table {
+      border:1px solid black;
+      border-collapse:collapse;
+      margin-top:5px;
+      }
+    </style>
+    <script>
+      function update() {
+      var params = ["date", "channel", "product"].map(function(i) {
+      var e = document.getElementById(i);
+      return e.options[e.selectedIndex].value;
+      });
+      location.href = "?date=" + params[0]
+      + "&channel=" + params[1]
+      + "&product=" + params[2];
+      }
+    </script>
+  </head>
+  <body>
+    <p>Date:&nbsp;
+      <select id="date">
+        {% for d in dates -%}
+        {% if d == date -%}
+        <option value="{{ d }}" selected>{{ d }}</option>
+        {% else -%}
+        <option value="{{ d }}">{{ d }}</option>
+        {% endif -%}
+        {% endfor -%}
+      </select>
+      Channel:&nbsp;
+      <select id="channel">
+        {% for c in channels -%}
+        {% if c == channel -%}
+        <option value="{{ c }}" selected>{{ c }}</option>
+        {% else -%}
+        <option value="{{ c }}">{{ c }}</option>
+        {% endif -%}
+        {% endfor -%}
+      </select>
+      Product:&nbsp;
+      <select id="product">
+        {% for p in products -%}
+        {% if p == product -%}
+        <option value="{{ p }}" selected>{{ p }}</option>
+        {% else -%}
+        <option value="{{ p }}">{{ p }}</option>
+        {% endif -%}
+        {% endfor -%}
+      </select>
+      <button onclick="javascript:update();">Go !</button>
+    </p>
+    {% if data['signatures'] -%}
+    <p>Take care: inaccessible bugs are not displayed !</p>
+    <ul>
+      {% for sgn, i in data['signatures'] -%}
+      <li style="margin:10px 0;"><a href="{{ i['socorro_url'] }}">{{ sgn|e }}</a>:<br>
+        <table border="1">
+          <tr>
+            <th class="norm">date</th>
+            {% for d in data['dates'] %}<td>{{ d }}</td>{% endfor -%}
+          </tr>
+          <tr>
+            <th class="norm">installs</th>
+            {% for n in i['numbers'] %}<td class="num">{{ n }}</td>{% endfor -%}
+          </tr>
+        </table>
+        {% if i['resolved'] or i['unresolved'] -%}
+        <ul>
+          {% if i['resolved'] -%}
+          <li><a href="https://bugzil.la/{{ i['resolved'] }}"><s class="red">Bug {{ i['resolved'] }}</s></a></li>
+          {% endif -%}
+          {% if i['unresolved'] -%}
+          <li><a href="https://bugzil.la/{{ i['unresolved'] }}">Bug {{ i['unresolved'] }}</a></li>
+          {% endif -%}
+        </ul>
+        {% endif -%}
+      </li>
+      {% endfor -%}
+    </ul>
+    {% else -%}
+    <p>No more data for this day!</p>
+    {% endif -%}
+  </body>
+</html>

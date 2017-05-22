@@ -8,6 +8,7 @@ from dateutil.relativedelta import relativedelta
 import functools
 from libmozdata import socorro, utils
 from libmozdata.bugzilla import Bugzilla
+from libmozdata.connection import Connection
 import numpy as np
 from . import tools
 from . import differentiators as diftors
@@ -84,6 +85,22 @@ def get_by_install_time(channels, product='Firefox',
     return data
 
 
+def get_versions(channels, date, product='Firefox'):
+    res = defaultdict(lambda: list())
+    versions = socorro.ProductVersions.get_all_versions(product)
+    date = utils.get_date_ymd(date)
+    for chan in channels:
+        infos = sorted(versions[chan].values(),
+                       key=lambda p: p['dates'][0],
+                       reverse=True)
+        for info in infos:
+            res[chan] += info['all']
+            if date > info['dates'][0]:
+                break
+
+    return res
+
+
 def get_total(channels, product='Firefox', date='today'):
     today = utils.get_date_ymd(date)
     tomorrow = today + relativedelta(days=1)
@@ -120,21 +137,22 @@ def get_top_signatures(data, N=50):
             sbs[sgn] = tools.get_array(stats)
         data[chan] = sbs
 
-    for chan, stats_by_sgn in data.items():
-        # take only the top N signatures for the last day
-        d = list(sorted(stats_by_sgn.items(),
-                        key=lambda p: p[1][-1],
-                        reverse=True))
-        if len(d) > N:
-            data[chan] = dict(d[:N])
-        else:
-            data[chan] = dict(d)
+    if N:
+        for chan, stats_by_sgn in data.items():
+            # take only the top N signatures for the last day
+            d = list(sorted(stats_by_sgn.items(),
+                            key=lambda p: p[1][-1],
+                            reverse=True))
+            if len(d) > N:
+                data[chan] = dict(d[:N])
+            else:
+                data[chan] = dict(d)
 
     return data
 
 
 def get_signatures(channels, product='Firefox',
-                   date='today', query={}, ndays=7):
+                   date='today', query={}, ndays=7, N=50):
     today = utils.get_date_ymd(date)
     tomorrow = today + relativedelta(days=1)
     few_days_ago = today - relativedelta(days=ndays)
@@ -173,15 +191,18 @@ def get_signatures(channels, product='Firefox',
     for s in searches:
         s.wait()
 
-    return get_top_signatures(data)
+    return get_top_signatures(data, N=N)
 
 
-def get_signatures_by_install_time(channels, product='Firefox',
-                                   date='today', query={}, ndays=7):
+def get_sgns_by_install_time(channels, product='Firefox',
+                             date='today', query={},
+                             ndays=7, version=False, N=50):
     today = utils.get_date_ymd(date)
     few_days_ago = today - relativedelta(days=ndays)
     base = {few_days_ago + relativedelta(days=i): 0 for i in range(ndays + 1)}
     data = {chan: defaultdict(lambda: copy.copy(base)) for chan in channels}
+    if version:
+        version = get_versions(channels, few_days_ago, product=product)
 
     def handler(date, json, data):
         if json['errors'] or not json['facets']['signature']:
@@ -204,21 +225,80 @@ def get_signatures_by_install_time(channels, product='Firefox',
     for chan in channels:
         params = copy.deepcopy(params)
         params['release_channel'] = chan
+        if version:
+            params['version'] = version[chan]
         for i in range(ndays + 1):
             day = few_days_ago + relativedelta(days=i)
             day_after = day + relativedelta(days=1)
             search_date = socorro.SuperSearch.get_search_date(day, day_after)
             params = copy.deepcopy(params)
             params['date'] = search_date
-            handler = functools.partial(handler, day)
+            hdler = functools.partial(handler, day)
             searches.append(socorro.SuperSearch(params=params,
+                                                handler=hdler,
+                                                handlerdata=data[chan]))
+
+    for s in searches:
+        s.wait()
+
+    return get_top_signatures(data, N=N), version
+
+
+def get_sgns_info(sgns_by_chan, product='Firefox',
+                  date='today', query={}, versions=None):
+    today = utils.get_date(date)
+    tomorrow = utils.get_date(date, -1)
+    data = {chan: {} for chan in sgns_by_chan.keys()}
+
+    def handler(json, data):
+        if json['errors'] or not json['facets']['signature']:
+            return
+
+        for facets in json['facets']['signature']:
+            sgn = facets['term']
+            count = facets['count']
+            platforms = defaultdict(lambda: 0)
+            startup = {True: 0, False: 0}
+            data[sgn] = {'count': count,
+                         'platforms': platforms,
+                         'startup': startup}
+            facets = facets['facets']
+            for ppv in facets['platform_pretty_version']:
+                platforms[ppv['term']] += ppv['count']
+            for sc in facets['startup_crash']:
+                term = sc['term']
+                startup[term == 'T'] += sc['count']
+
+    base = {'product': product,
+            'date': ['>=' + today,
+                     '<' + tomorrow],
+            'release_channel': '',
+            'version': '',
+            'signature': '',
+            '_aggs.signature': ['platform_pretty_version',
+                                'startup_crash'],
+            '_results_number': 0,
+            '_facets_size': 100}
+
+    base.update(query)
+
+    searches = []
+    for chan, signatures in sgns_by_chan.items():
+        params = copy.copy(base)
+        params['release_channel'] = chan
+        if versions:
+            params['version'] = versions[chan]
+        for sgns in Connection.chunks(signatures, 10):
+            p = copy.copy(params)
+            p['signature'] = ['=' + s for s in sgns]
+            searches.append(socorro.SuperSearch(params=p,
                                                 handler=handler,
                                                 handlerdata=data[chan]))
 
     for s in searches:
         s.wait()
 
-    return get_top_signatures(data)
+    return data
 
 
 def get_outliers(stats, diff=diftors.diff, noutliers=5):
@@ -325,10 +405,10 @@ def get_bugs(signatures):
         unresolved = []
         for b in bugs:
             b = int(b)
-            status = data[b]
+            status = data.get(b, None)
             if status == 'RESOLVED':
                 resolved.append(b)
-            else:
+            elif status is not None:
                 unresolved.append(b)
 
         if resolved:

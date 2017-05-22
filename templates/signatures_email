@@ -1,48 +1,66 @@
 <!doctype html>
 <html lang="en-us">
-<head>
-  <meta charset="utf-8">
-  <title>Spikes</title>
-</head>
-<body>
-<p>Hi all,</p>
-<p>We've some signatures which are spiking the {{ date }}.<br>
-<ul style="padding: 0">
-{% for product, i1 in results.items() %}<li>{{ product }}
-<ul>{% for chan, i2 in i1.items() %}
-<li>{{ chan }}:
-<ul>
-{% for sgn, i3 in i2.items() %}<li><a href="{{ i3['url'] }}">{{ sgn|e }}</a>:
-<table border="1" style="border:1px solid black; border-collapse:collapse;">
-<tr>
-<th>date</th>
-{% for d, _ in i3['numbers'] %}<td>{{ d }}</td>{% endfor -%}
-</tr>
-<tr>
-<th>installs</th>
-{% for _, n in i3['numbers'] %}<td style="text-align:center;">{{ n }}</td>{% endfor -%}
-</tr>
-</table>
-<ul>
-{% if i3['resolved'] -%}
-<li><a href="{{ i3['resolved'][1] }}"><s style="color:red;">Bug {{ i3['resolved'][0] }}</s></a></li>
-{% endif -%}
-{% if i3['unresolved'] -%}
-<li><a href="{{ i3['unresolved'][1] }}">Bug {{ i3['unresolved'][0] }}</a></li>
-{% endif -%}
-</ul>
-</li>
-{% endfor -%}
-</ul>
-</li>
-{% endfor -%}
-</ul>
-</li>
-{% endfor -%}
-</ul>
-</p>
-<p>Sincerely,<br>
-Release Management Bot
-</p>
-</body>
+  <head>
+    <meta charset="utf-8">
+    <title>Spikes</title>
+    <style>
+      td.num {
+      text-align:center;
+      font-weight:bold;
+      }
+      s.red {
+      color:red;
+      }
+      th.norm {
+      font-weight:normal;
+      }
+      table {
+      border:1px solid black;
+      border-collapse:collapse;
+      margin-top:5px;
+      }
+    </style>
+  </head>
+  <body>
+    <p>Hi there,</p>
+    <p>We've some spiking signatures the {{ date }}.</p>
+    <ul style="padding: 0">
+      {% for product, i1 in results.items() %}<li>{{ product }}
+        <ul>{% for chan, i2 in i1.items() %}
+          <li>{{ chan }} ({{ ', '.join(versions[product][chan]) }}):
+            <ul>
+              {% for sgn, i3 in i2.items() %}<li style="margin:10px 0;"><a href="{{ i3['url'] }}">{{ sgn|e }}</a>:<br>
+                <table border="1">
+                  <tr>
+                    <th class="norm">date</th>
+                    {% for d, _ in i3['numbers'] %}<td>{{ d }}</td>{% endfor -%}
+                  </tr>
+                  <tr>
+                    <th class="norm">installs</th>
+                    {% for _, n in i3['numbers'] %}<td class="num">{{ n }}</td>{% endfor -%}
+                  </tr>
+                </table>
+                {% if i3['resolved'] or i3['unresolved'] -%}
+                <ul>
+                  {% if i3['resolved'] -%}
+                  <li><a href="{{ i3['resolved'][1] }}"><s class="red">Bug {{ i3['resolved'][0] }}</s></a></li>
+                  {% endif -%}
+                  {% if i3['unresolved'] -%}
+                  <li><a href="{{ i3['unresolved'][1] }}">Bug {{ i3['unresolved'][0] }}</a></li>
+                  {% endif -%}
+                </ul>
+                {% endif -%}
+              </li>
+              {% endfor -%}
+            </ul>
+          </li>
+          {% endfor -%}
+        </ul>
+      </li>
+      {% endfor -%}
+    </ul>
+    <p>Sincerely,<br>
+      Release Management Bot
+    </p>
+  </body>
 </html>

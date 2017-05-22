@@ -4,29 +4,31 @@
 
 import argparse
 from collections import OrderedDict
-from dateutil.relativedelta import relativedelta
 from jinja2 import Environment, FileSystemLoader
 from libmozdata import utils, socorro, gmail
 from . import datacollector as dc
+from . import utils as sputils
 
 
 channels = ['nightly', 'aurora', 'beta', 'release']
 products = ['Firefox', 'FennecAndroid']
-query = {}
-ndays = 11
 
 
-def get(date='today'):
+def get(date='today', ndays=11, query={}):
     coeff = 3.
     winmin = 7
     winmax = ndays
     signatures = set()
     bugs_by_signature = {}
     spikes = {}
+    versions = {}
+    products = sputils.get_products()
+    channels = sputils.get_channels()
     for product in products:
-        data = dc.get_signatures_by_install_time(channels, product=product,
-                                                 date=date, query=query,
-                                                 ndays=winmax)
+        data, version = dc.get_sgns_by_install_time(channels, product=product,
+                                                    date=date, query=query,
+                                                    ndays=winmax, version=True)
+        versions[product] = version
         s = dc.get_spiking_signatures(data, coeff, winmin, winmax)
 
         if not s:
@@ -41,51 +43,52 @@ def get(date='today'):
     if signatures:
         bugs_by_signature = dc.get_bugs(signatures)
 
-    return spikes, bugs_by_signature
+    return spikes, bugs_by_signature, versions
 
 
-def make_numbers(date, numbers, ndays):
-    today = utils.get_date_ymd(date)
-    few_days_ago = today - relativedelta(days=ndays)
-    res = []
-    for i, n in enumerate(numbers):
-        date = few_days_ago + relativedelta(days=i)
-        date = date.strftime('%a %m-%d')
-        res.append((date, n))
+def prepare_for_html(data, product, channel, query={}):
+    params = sputils.get_params_for_link(data['date'], query=query)
+    params['release_channel'] = channel
+    params['product'] = product
+    params['version'] = data['versions']
+    for sgn, info in data['signatures'].items():
+        params['signature'] = '=' + sgn
+        url = socorro.SuperSearch.get_link(params)
+        url += '#crash-reports'
+        info['socorro_url'] = url
 
-    return res
+    def sort_fun(p):
+        last = float(p[1]['numbers'][-1])
+        m = p[1]['mean']
+        e = p[1]['stddev']
+        a = 1 if last >= sputils.get_thresholds()[channel] else 0
+        c = (float(last) - m) / e if e != 0 else float('Inf')
+        return (a, c, last, p[0])
+
+    data['signatures'] = sorted(data['signatures'].items(),
+                                key=lambda p: sort_fun(p),
+                                reverse=True)
 
 
-def prepare(spikes, bugs_by_signature, date):
+def prepare(spikes, bugs_by_signature, date, versions, query, ndays):
     if spikes:
-        today = utils.get_date_ymd(date)
-        tomorrow = today + relativedelta(days=1)
-        tomorrow = utils.get_date_str(tomorrow)
-        today = utils.get_date_str(today)
-
-        search_date = ['>=' + today, '<' + tomorrow]
-        affected_chans = []
+        affected_chans = set()
         results = OrderedDict()
+        today = utils.get_date(date)
+        params = sputils.get_params_for_link(date, query=query)
 
-        params = {'product': '',
-                  'date': search_date,
-                  'release_channel': '',
-                  'signature': '',
-                  '_facets': ['url',
-                              'user_comments',
-                              'install_time']}
-        params.update(query)
-
-        for product in products:
+        for product in sputils.get_products():
             if product in spikes:
                 params['product'] = product
                 data1 = spikes[product]
                 results1 = OrderedDict()
                 results[product] = results1
-                for chan in channels:
+                version_prod = versions[product]
+                for chan in sputils.get_channels():
                     if chan in data1:
-                        affected_chans.append(chan)
+                        affected_chans.add(chan)
                         params['release_channel'] = chan
+                        params['version'] = version_prod[chan]
                         results2 = OrderedDict()
                         results1[chan] = results2
 
@@ -102,27 +105,33 @@ def prepare(spikes, bugs_by_signature, date):
                             results3 = OrderedDict()
                             results2[sgn] = results3
                             numbers = stats['numbers']
-                            results3['numbers'] = make_numbers(today,
-                                                               numbers,
-                                                               ndays)
+                            results3['numbers'] = sputils.make_numbers(today,
+                                                                       numbers,
+                                                                       ndays)
                             results3['resolved'] = bugs.get('resolved', None)
                             results3['unresolved'] = bugs.get('unresolved',
                                                               None)
                             results3['url'] = url
+        affected_chans = list(sorted(affected_chans))
 
         return results, affected_chans, today
     return None
 
 
 def send_email(emails=[], date='today'):
-    spikes, bugs_by_signature = get(date=date)
-    r = prepare(spikes, bugs_by_signature, date)
+    query = {}
+    ndays = 11
+    spikes, bugs_by_signature, versions = get(date=date,
+                                              query=query,
+                                              ndays=ndays)
+    r = prepare(spikes, bugs_by_signature, date, versions, query, ndays)
     if r:
         results, affected_chans, today = r
         env = Environment(loader=FileSystemLoader('templates'))
         template = env.get_template('signatures_email')
         body = template.render(date=today,
-                               results=results)
+                               results=results,
+                               versions=versions)
 
         chan_list = ', '.join(affected_chans)
         title = 'Spikes in signatures in {}'.format(chan_list)
