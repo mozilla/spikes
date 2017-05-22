@@ -26,8 +26,8 @@ def get(date='today'):
     coeff = 4.
     win = 5
     for product in products:
-        data = dc.get(channels, product=product,
-                      date=date, query=query)
+        data = dc.get_by_install_time(channels, product=product,
+                                      date=date, query=query)
 
         if not data:
             continue
@@ -42,11 +42,11 @@ def get(date='today'):
             totals[product] = dc.get_total(channels=spiking,
                                            product=product,
                                            date=date)
-            data = dc.get_signatures(channels=spiking,
-                                     product=product,
-                                     date=date,
-                                     query=query,
-                                     ndays=1)
+            data, _ = dc.get_sgns_by_install_time(channels=spiking,
+                                                  product=product,
+                                                  date=date,
+                                                  query=query,
+                                                  ndays=1)
             for chan, stats in data.items():
                 outliers, _ = dc.get_outliers(stats, diff=diftors.diff)
                 for o in outliers:
@@ -71,7 +71,7 @@ def prepare(significants, bugs_by_signature, totals, date):
         today = utils.get_date_str(today)
 
         search_date = ['>=' + today, '<' + tomorrow]
-        affected_chans = []
+        affected_chans = set()
         urls = defaultdict(lambda: dict())
         spikes_number = 0
         results = OrderedDict()
@@ -83,7 +83,7 @@ def prepare(significants, bugs_by_signature, totals, date):
                 results[product] = results1
                 for chan in channels:
                     if chan in data1:
-                        affected_chans.append(chan)
+                        affected_chans.add(chan)
                         params = {'product': product,
                                   'date': search_date,
                                   'release_channel': chan}
@@ -105,6 +105,7 @@ def prepare(significants, bugs_by_signature, totals, date):
                             results3['resolved'] = bugs.get('resolved', None)
                             results3['unresolved'] = bugs.get('unresolved',
                                                               None)
+        affected_chans = list(sorted(affected_chans))
 
         return results, spikes_number, urls, affected_chans, yesterday, today
     return None
@@ -131,6 +132,8 @@ def send_email(emails=[], date='today'):
         if emails:
             gmail.send(emails, title, body, html=True)
         else:
+            with open('/tmp/foo.html', 'w') as Out:
+                Out.write(body)
             print('Title: %s' % title)
             print('Body:')
             print(body)
