@@ -406,7 +406,7 @@ def get_bugs(signatures):
         for b in bugs:
             b = int(b)
             status = data.get(b, None)
-            if status == 'RESOLVED':
+            if status in ['RESOLVED', 'VERIFIED', 'CLOSED']:
                 resolved.append(b)
             elif status is not None:
                 unresolved.append(b)
