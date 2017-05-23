@@ -134,7 +134,9 @@ def get_top_signatures(data, N=50):
         sbs = {}
         for sgn, stats in stats_by_sgn.items():
             # replace dictionary with an array of numbers
-            sbs[sgn] = tools.get_array(stats)
+            numbers = tools.get_array(stats)
+            if numbers[-1] != 0:
+                sbs[sgn] = numbers
         data[chan] = sbs
 
     if N:
