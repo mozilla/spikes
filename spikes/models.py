@@ -25,7 +25,7 @@ class Signatures(db.Model):
     mean = db.Column(db.Float)
     stddev = db.Column(db.Float)
     signature = db.Column(db.String(512))
-    version = db.Column(db.String(100))
+    version = db.Column(db.String(196))
     bug_o = db.Column(db.Integer, default=0)
     bug_c = db.Column(db.Integer, default=0)
 
