@@ -134,7 +134,7 @@ def send_email(emails=[], date='today'):
                                versions=versions)
 
         chan_list = ', '.join(affected_chans)
-        title = 'Spikes in signatures in {}'.format(chan_list)
+        title = 'Spikes in signatures in {} the {}'.format(chan_list, today)
         if emails:
             gmail.send(emails, title, body, html=True)
         else:
