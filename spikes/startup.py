@@ -128,7 +128,8 @@ def send_email(emails=[], date='today'):
                                urls=urls)
 
         chan_list = ', '.join(affected_chans)
-        title = 'Spikes in startup crashes in {} the {}'.format(chan_list, today)
+        title = 'Spikes in startup crashes in {} the {}'
+        title = title.format(chan_list, today)
         if emails:
             gmail.send(emails, title, body, html=True)
         else:
