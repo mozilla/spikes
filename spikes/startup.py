@@ -13,7 +13,7 @@ from . import differentiators as diftors
 from . import tools
 
 
-channels = ['nightly', 'aurora', 'beta', 'release']
+channels = ['nightly', 'beta', 'release']
 products = ['Firefox', 'FennecAndroid']
 query = {'startup_crash': '__true__'}
 

@@ -10,7 +10,7 @@ from . import datacollector as dc
 from . import utils as sputils
 
 
-channels = ['nightly', 'aurora', 'beta', 'release']
+channels = ['nightly', 'beta', 'release']
 products = ['Firefox', 'FennecAndroid']
 
 
