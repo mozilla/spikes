@@ -15,7 +15,7 @@ except NameError:
 
 
 def get_str(s):
-    if UNICODE_EXISTS and type(sgn) == unicode:
+    if UNICODE_EXISTS and type(s) == unicode:
         return s.encode('raw_unicode_escape')
     return s
 
