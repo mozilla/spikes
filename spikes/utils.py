@@ -8,6 +8,18 @@ import six
 from libmozdata import utils
 
 
+try:
+    UNICODE_EXISTS = bool(type(unicode))
+except NameError:
+    UNICODE_EXISTS = False
+
+
+def get_str(s):
+    if UNICODE_EXISTS and type(sgn) == unicode:
+        return s.encode('raw_unicode_escape')
+    return s
+
+
 def get_products():
     return ['Firefox', 'FennecAndroid']
 

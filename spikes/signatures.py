@@ -5,7 +5,7 @@
 import argparse
 from collections import OrderedDict
 from jinja2 import Environment, FileSystemLoader
-from libmozdata import utils, socorro, gmail
+from libmozdata import utils, socorro#, gmail
 from . import datacollector as dc
 from . import utils as sputils
 
@@ -52,6 +52,7 @@ def prepare_for_html(data, product, channel, query={}):
     params['product'] = product
     params['version'] = data['versions']
     for sgn, info in data['signatures'].items():
+        sgn = sputils.get_str(sgn)
         params['signature'] = '=' + sgn
         url = socorro.SuperSearch.get_link(params)
         url += '#crash-reports'
@@ -98,6 +99,7 @@ def prepare(spikes, bugs_by_signature, date, versions, query, ndays):
                                                            d['numbers'][-1],
                                                            d['signature'])):
                             sgn = stats['signature']
+                            sgn = sputils.get_str(sgn)
                             params['signature'] = '=' + sgn
                             url = socorro.SuperSearch.get_link(params)
                             url += '#crash-reports'
