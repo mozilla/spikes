@@ -5,7 +5,7 @@
 import argparse
 from collections import OrderedDict
 from jinja2 import Environment, FileSystemLoader
-from libmozdata import utils, socorro#, gmail
+from libmozdata import utils, socorro, gmail
 from . import datacollector as dc
 from . import utils as sputils
 
