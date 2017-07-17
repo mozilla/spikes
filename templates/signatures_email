@@ -62,5 +62,8 @@
     <p>Sincerely,<br>
       Release Management Bot
     </p>
+    <p>PS:<br>
+      This email has been generated. You can report any issue on <a href="https://github.com/mozilla/spikes">github</a>.
+    </p>
   </body>
 </html>
