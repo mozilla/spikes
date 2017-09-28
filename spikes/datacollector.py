@@ -97,6 +97,8 @@ def get_versions(channels, date, product='Firefox'):
             res[chan] += info['all']
             if date > info['dates'][0]:
                 break
+    if product == 'FennecAndroid' and 'nightly' in res:
+        res['nightly'] = ['58.0a1']
 
     return res
 
