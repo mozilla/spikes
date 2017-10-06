@@ -13,6 +13,7 @@ import numpy as np
 from . import tools
 from . import differentiators as diftors
 from . import config
+from .gather import gather
 
 
 def get(channels, product='Firefox', date='today', query={}):
@@ -198,6 +199,9 @@ def get_signatures(channels, product='Firefox',
     for s in searches:
         s.wait()
 
+    for chan in channels:
+        gather(data[chan])
+
     return get_top_signatures(data, N=N)
 
 
@@ -250,6 +254,9 @@ def get_sgns_by_install_time(channels, product='Firefox',
 
     for s in searches:
         s.wait()
+
+    for chan in channels:
+        gather(data[chan])
 
     return get_top_signatures(data, N=N), version
 

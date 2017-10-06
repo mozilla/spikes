@@ -53,7 +53,7 @@ def prepare_for_html(data, product, channel, query={}):
     params['version'] = data['versions']
     for sgn, info in data['signatures'].items():
         sgn = sputils.get_str(sgn)
-        params['signature'] = '=' + sgn
+        params['signature'] = sputils.get_supersearch_sgn(sgn)
         url = socorro.SuperSearch.get_link(params)
         url += '#crash-reports'
         info['socorro_url'] = url
@@ -100,7 +100,7 @@ def prepare(spikes, bugs_by_signature, date, versions, query, ndays):
                                                            d['signature'])):
                             sgn = stats['signature']
                             sgn = sputils.get_str(sgn)
-                            params['signature'] = '=' + sgn
+                            params['signature'] = sputils.get_supersearch_sgn(sgn)
                             url = socorro.SuperSearch.get_link(params)
                             url += '#crash-reports'
                             bugs = bugs_by_signature.get(sgn, {})
@@ -144,7 +144,7 @@ def send_email(emails=[], date='today'):
                 Out.write(body)
             print('Title: %s' % title)
             print('Body:')
-            print(body)
+            #print(body)
 
 
 if __name__ == '__main__':

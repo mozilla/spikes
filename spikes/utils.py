@@ -53,7 +53,9 @@ def get_params_for_link(date, query={}):
                           'moz_crash_reason',
                           'reason',
                           'build_id',
-                          'platform_pretty_version']}
+                          'platform_pretty_version',
+                          'signature',
+                          'useragent_locale']}
     params.update(query)
     return params
 
@@ -121,6 +123,12 @@ def get_correct_sgn(sgn):
     elif isinstance(sgn, list) and len(sgn) >= 1:
         return sgn[0]
     return ''
+
+
+def get_supersearch_sgn(sgn):
+    if sgn.startswith('\"'):
+        return '@' + sgn
+    return '=' + sgn
 
 
 def get_bug_number(bug):
