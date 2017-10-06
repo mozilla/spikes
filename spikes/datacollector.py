@@ -131,13 +131,15 @@ def get_total(channels, product='Firefox', date='today'):
     return data
 
 
-def get_top_signatures(data, N=50):
+def get_top_signatures(data, product, N=50):
     for chan, stats_by_sgn in data.items():
+        threshold = config.get_threshold(product, chan)
+        print(threshold)
         sbs = {}
         for sgn, stats in stats_by_sgn.items():
             # replace dictionary with an array of numbers
             numbers = tools.get_array(stats)
-            if numbers[-1] != 0:
+            if numbers[-1] >= threshold:
                 sbs[sgn] = numbers
         data[chan] = sbs
 
@@ -202,7 +204,7 @@ def get_signatures(channels, product='Firefox',
     for chan in channels:
         gather(data[chan])
 
-    return get_top_signatures(data, N=N)
+    return get_top_signatures(data, product, N=N)
 
 
 def get_sgns_by_install_time(channels, product='Firefox',
@@ -258,7 +260,7 @@ def get_sgns_by_install_time(channels, product='Firefox',
     for chan in channels:
         gather(data[chan])
 
-    return get_top_signatures(data, N=N), version
+    return get_top_signatures(data, product, N=N), version
 
 
 def get_sgns_info(sgns_by_chan, product='Firefox',

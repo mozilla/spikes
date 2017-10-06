@@ -7,6 +7,7 @@ import re
 
 
 __SKIPLIST = None
+__THRESHOLDS = None
 
 
 class BadRegEx(Exception):
@@ -28,10 +29,18 @@ def get_skiplist():
                     raise BadRegEx('Regex error: {}'.format(pat))
                 res.append(r)
             __SKIPLIST[k] = res
-            
+
     return __SKIPLIST
 
 
 def get_skiplist_channel(chan):
     sl = get_skiplist()
     return sl.get(chan, []) + sl['common']
+
+
+def get_threshold(prod, chan, kind='normal'):
+    global __THRESHOLDS
+    if not __THRESHOLDS:
+        with open('./config/thresholds.json', 'r') as In:
+            __THRESHOLDS = json.load(In)
+    return __THRESHOLDS[kind][prod][chan]

@@ -8,6 +8,7 @@ from jinja2 import Environment, FileSystemLoader
 from libmozdata import utils, socorro, gmail
 from . import datacollector as dc
 from . import utils as sputils
+from . import config
 
 
 channels = ['nightly', 'beta', 'release']
@@ -62,7 +63,7 @@ def prepare_for_html(data, product, channel, query={}):
         last = float(p[1]['numbers'][-1])
         m = p[1]['mean']
         e = p[1]['stddev']
-        a = 1 if last >= sputils.get_thresholds()[channel] else 0
+        a = 1 if last >= config.get_threshold(product, channel) else 0
         c = (float(last) - m) / e if e != 0 else float('Inf')
         return (a, c, last, p[0])
 

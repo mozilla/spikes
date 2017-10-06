@@ -28,12 +28,6 @@ def get_channels():
     return ['nightly', 'beta', 'release']
 
 
-def get_thresholds():
-    return {'nightly': 5,
-            'beta': 10,
-            'release': 50}
-
-
 def get_params_for_link(date, query={}):
     today = utils.get_date_ymd(date)
     tomorrow = today + relativedelta(days=1)

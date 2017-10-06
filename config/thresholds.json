@@ -1,0 +1,32 @@
+{
+    "normal":
+    {
+        "Firefox":
+        {
+            "nightly": 4,
+            "beta": 50,
+            "release": 100
+        },
+        "FennecAndroid":
+        {
+            "nightly": 2,
+            "beta": 10,
+            "release": 50
+        }
+    },
+    "alert":
+    {
+        "Firefox":
+        {
+            "nightly": 100,
+            "beta": 200,
+            "release": 300
+        },
+        "FennecAndroid":
+        {
+            "nightly": 50,
+            "beta": 100,
+            "release": 500
+        }
+    }
+}
