@@ -4,8 +4,8 @@
 
 import datetime
 from dateutil.relativedelta import relativedelta
-import six
 from libmozdata import utils
+import six
 
 
 try:
@@ -15,7 +15,7 @@ except NameError:
 
 
 def get_str(s):
-    if UNICODE_EXISTS and type(s) == unicode:
+    if UNICODE_EXISTS and type(s) == unicode: # NOQA
         return s.encode('raw_unicode_escape')
     return s
 
@@ -125,7 +125,7 @@ def get_correct_sgn(sgn):
     return ''
 
 
-def get_supersearch_sgn(sgn):
+def get_esearch_sgn(sgn):
     if sgn.startswith('\"'):
         return '@' + sgn
     return '=' + sgn

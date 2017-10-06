@@ -107,7 +107,11 @@ class Signatures(db.Model):
                         if q.bug_c != bug_c:
                             q.bug_c = bug_c
 
-                    v = versions[product][channel]
+                    if versions[product]:
+                        v = versions[product][channel]
+                    else:
+                        v = []
+
                     for sgn in to_create:
                         bug = bugs[sgn]
                         bug_o = sputils.get_bug_number(bug['unresolved'])

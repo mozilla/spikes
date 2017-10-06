@@ -27,7 +27,7 @@
     <ul style="padding: 0">
       {% for product, i1 in results.items() %}<li>{{ product }}
         <ul>{% for chan, i2 in i1.items() %}
-          <li>{{ chan }} ({{ ', '.join(versions[product][chan]) }}):
+          <li>{{ chan }} {% if versions[product] %}({{ ', '.join(versions[product][chan]) }}){% endif %}:
             <ul>
               {% for sgn, i3 in i2.items() %}<li style="margin:10px 0;"><a href="{{ i3['url'] }}">{{ sgn|e }}</a>:<br>
                 <table border="1">
