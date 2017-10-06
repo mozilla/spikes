@@ -1,0 +1,17 @@
+{
+    "common":
+    [
+        "^IPCError-browser \\| ShutDownKill$",
+        "^EMPTY: no crashing thread identified; ERROR_NO_THREAD_LIST$",
+        "^EMPTY: no crashing thread identified; ERROR_NO_MINIDUMP_HEADER$"
+    ],
+    "nightly":
+    [
+    ],
+    "beta":
+    [
+    ],
+    "release":
+    [
+    ]
+}

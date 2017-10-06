@@ -12,6 +12,7 @@ from libmozdata.connection import Connection
 import numpy as np
 from . import tools
 from . import differentiators as diftors
+from . import config
 
 
 def get(channels, product='Firefox', date='today', query={}):
@@ -162,7 +163,7 @@ def get_signatures(channels, product='Firefox',
     base = {few_days_ago + relativedelta(days=i): 0 for i in range(ndays + 1)}
     data = {chan: defaultdict(lambda: copy.copy(base)) for chan in channels}
 
-    def handler(json, data):
+    def handler(skip_pats, json, data):
         if json['errors'] or not json['facets']['histogram_date']:
             return
 
@@ -170,6 +171,8 @@ def get_signatures(channels, product='Firefox',
             date = utils.get_date_ymd(facets['term'])
             signatures = facets['facets']['signature']
             for signature in signatures:
+                if any(p.match(signature) for p in skip_pats):
+                    continue
                 total = signature['count']
                 sgn = signature['term']
                 data[sgn][date] += total
@@ -184,10 +187,12 @@ def get_signatures(channels, product='Firefox',
 
     searches = []
     for chan in channels:
+        skip_pats = config.get_skiplist_channel(chan)
         params = copy.deepcopy(params)
         params['release_channel'] = chan
+        hdler = functools.partial(handler, skip_pats)
         searches.append(socorro.SuperSearch(params=params,
-                                            handler=handler,
+                                            handler=hdler,
                                             handlerdata=data[chan]))
 
     for s in searches:
@@ -206,12 +211,14 @@ def get_sgns_by_install_time(channels, product='Firefox',
     if version:
         version = get_versions(channels, few_days_ago, product=product)
 
-    def handler(date, json, data):
+    def handler(skip_pats, date, json, data):
         if json['errors'] or not json['facets']['signature']:
             return
 
         for facets in json['facets']['signature']:
             sgn = facets['term']
+            if any(p.match(sgn) for p in skip_pats):
+                continue
             count = facets['facets']['cardinality_install_time']['value']
             data[sgn][date] = count
 
@@ -227,6 +234,7 @@ def get_sgns_by_install_time(channels, product='Firefox',
     for chan in channels:
         params = copy.deepcopy(params)
         params['release_channel'] = chan
+        skip_pats = config.get_skiplist_channel(chan)
         if version:
             params['version'] = version[chan]
         for i in range(ndays + 1):
@@ -235,7 +243,7 @@ def get_sgns_by_install_time(channels, product='Firefox',
             search_date = socorro.SuperSearch.get_search_date(day, day_after)
             params = copy.deepcopy(params)
             params['date'] = search_date
-            hdler = functools.partial(handler, day)
+            hdler = functools.partial(handler, skip_pats, day)
             searches.append(socorro.SuperSearch(params=params,
                                                 handler=hdler,
                                                 handlerdata=data[chan]))
