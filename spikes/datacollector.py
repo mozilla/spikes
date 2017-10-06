@@ -134,7 +134,6 @@ def get_total(channels, product='Firefox', date='today'):
 def get_top_signatures(data, product, N=50):
     for chan, stats_by_sgn in data.items():
         threshold = config.get_threshold(product, chan)
-        print(threshold)
         sbs = {}
         for sgn, stats in stats_by_sgn.items():
             # replace dictionary with an array of numbers
