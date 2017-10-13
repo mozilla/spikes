@@ -6,38 +6,12 @@
 <html lang="en-us">
   <head>
     <link rel="shortcut icon" href="/favicon.ico">
+    <link rel="stylesheet" href="/spikes.css">
     <meta http-equiv="Content-Type" content="text/html; charset=UTF-8">
     <title>Signatures for {{ product }} &mdash; {{ channel }} &mdash; {{ date }}</title>
-    <style>
-      td.num {
-      text-align:center;
-      font-weight:bold;
-      }
-      s.red {
-      color:red;
-      }
-      th.norm {
-      font-weight:normal;
-      }
-      table {
-      border:1px solid black;
-      border-collapse:collapse;
-      margin-top:5px;
-      }
-    </style>
-    <script>
-      function update() {
-      var params = ["date", "channel", "product"].map(function(i) {
-      var e = document.getElementById(i);
-      return e.options[e.selectedIndex].value;
-      });
-      location.href = "?date=" + params[0]
-      + "&channel=" + params[1]
-      + "&product=" + params[2];
-      }
-    </script>
+    <script type="text/javascript" src="/spikes.js"></script>
   </head>
-  <body>
+  <body onfocus="javascript:checkDate()">
     <p>Date:&nbsp;
       <select id="date">
         {% for d in dates -%}

@@ -1,0 +1,18 @@
+td.num {
+    text-align:center;
+    font-weight:bold;
+}
+
+s.red {
+    color:red;
+}
+
+th.norm {
+    font-weight:normal;
+}
+
+table {
+    border:1px solid black;
+    border-collapse:collapse;
+    margin-top:5px;
+}

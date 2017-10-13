@@ -35,3 +35,13 @@ def signatures_html():
 @app.route('/favicon.ico')
 def favicon():
     return send_from_directory('../static', 'favicon.ico')
+
+
+@app.route('/spikes.js')
+def spikes_js():
+    return send_from_directory('../static', 'spikes.js')
+
+
+@app.route('/spikes.css')
+def spikes_css():
+    return send_from_directory('../static', 'spikes.css')
