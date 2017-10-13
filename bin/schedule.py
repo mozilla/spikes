@@ -11,7 +11,7 @@ logging.basicConfig()
 sched = BlockingScheduler()
 
 
-@sched.scheduled_job('interval', minutes=30)
+@sched.scheduled_job('interval', minutes=20)
 def timed_job():
     models.update()
 
