@@ -11,7 +11,7 @@
     <title>Signatures for {{ product }} &mdash; {{ channel }} &mdash; {{ date }}</title>
     <script type="text/javascript" src="/spikes.js"></script>
   </head>
-  <body onfocus="javascript:checkDate()">
+  <body onfocus="javascript:checkDate()" onload="javascript:loaded()">
     <p>Date:&nbsp;
       <select id="date">
         {% for d in dates -%}

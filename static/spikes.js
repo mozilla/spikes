@@ -1,4 +1,8 @@
+let isLoaded = false;
 
+function loaded() {
+    isLoaded = true;
+}
 
 function getParams() {
     let params = ["date", "channel", "product"].map(function(i) {
@@ -24,12 +28,16 @@ function toUTC(date) {
 }
 
 function checkDate() {
-    let today = toUTC(new Date());
-    let e = document.getElementById("date");
-    let date = new Date(e.options[0].value);
-    if (date.getYear() != today.getYear() || date.getMonth() != today.getMonth() || date.getDay() != today.getDay()) {
-        let newdate = today.toISOString().slice(0, 10);
-        let params = getParams();
-        setHref(newdate, params[1], params[2]);
+    if (isLoaded) {
+        let today = toUTC(new Date());
+        let e = document.getElementById("date");
+        let date = new Date(e.options[0].value);
+        if (date.getYear() != today.getYear() || date.getMonth() != today.getMonth() || date.getDay() != today.getDay()) {
+            console.log(today + ":::" + date);
+            let newdate = today.toISOString().slice(0, 10);
+            let params = getParams();
+            setHref(newdate, params[1], params[2]);
+            e.selectedIndex = 0;
+        }
     }
 }
