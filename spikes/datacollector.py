@@ -349,8 +349,9 @@ def is_spiking(data, coeff, win):
 def get_spiking_signatures(data, coeff, winmin, winmax):
     spikes = defaultdict(lambda: list())
     for chan, stats in data.items():
+        globalstats = tools.get_global(stats, coeff, winmin, winmax)
         for sgn, numbers in stats.items():
-            res = tools.is_sgn_spiking(numbers, stats, coeff,
+            res = tools.is_sgn_spiking(numbers, globalstats, coeff,
                                        winmin, winmax, sgn=sgn)
             if res:
                 win, diff = res

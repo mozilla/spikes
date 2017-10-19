@@ -3,6 +3,10 @@ td.num {
     font-weight:bold;
 }
 
+td.exp {
+    background-color:#BBBBBB;
+}
+
 s.red {
     color:red;
 }

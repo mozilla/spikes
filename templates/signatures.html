@@ -53,10 +53,14 @@
           <tr>
             <th class="norm">date</th>
             {% for d in data['dates'] %}<td>{{ d }}</td>{% endfor -%}
+            <td class="exp">1-day</td>
+            <td class="exp">3-day</td>
           </tr>
           <tr>
             <th class="norm">installs</th>
             {% for n in i['numbers'] %}<td class="num">{{ n }}</td>{% endfor -%}
+            <td class="num exp">{{ '%0.1f' % i['exp1']|float }}</td>
+            <td class="num exp">{{ '%0.1f' % i['exp3']|float }}</td>
           </tr>
         </table>
         {% if i['resolved'] or i['unresolved'] -%}

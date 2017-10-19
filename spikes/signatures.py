@@ -8,11 +8,6 @@ from jinja2 import Environment, FileSystemLoader
 from libmozdata import utils, socorro, gmail
 from . import datacollector as dc
 from . import utils as sputils
-from . import config
-
-
-channels = ['nightly', 'beta', 'release']
-products = ['Firefox', 'FennecAndroid']
 
 
 def get(date='today', ndays=11, query={}):
@@ -60,12 +55,12 @@ def prepare_for_html(data, product, channel, query={}):
         info['socorro_url'] = url
 
     def sort_fun(p):
-        last = float(p[1]['numbers'][-1])
-        m = p[1]['mean']
-        e = p[1]['stddev']
-        a = 1 if last >= config.get_threshold(product, channel) else 0
-        c = (float(last) - m) / e if e != 0 else float('Inf')
-        return (a, c, last, p[0])
+        data = p[1]
+        last = float(data['numbers'][-1])
+        exp1 = data['exp1']
+        exp3 = data['exp3']
+        c = max(exp1, exp3)
+        return (c, exp1, exp3, last, p[0])
 
     data['signatures'] = sorted(data['signatures'].items(),
                                 key=lambda p: sort_fun(p),

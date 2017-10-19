@@ -22,8 +22,8 @@ class Signatures(db.Model):
     pc = db.Column(db.String(3))
     date = db.Column(db.Date)
     numbers = db.Column(pg.ARRAY(db.Integer))
-    mean = db.Column(db.Float)
-    stddev = db.Column(db.Float)
+    exp1 = db.Column(db.Float)
+    exp3 = db.Column(db.Float)
     signature = db.Column(db.String(512))
     version = db.Column(db.String(196))
     bug_o = db.Column(db.Integer, default=0)
@@ -36,7 +36,8 @@ class Signatures(db.Model):
         self.date = sputils.get_date(date)
         self.signature = signature
         self.numbers = numbers
-        self.mean, self.stddev = tools.mean(numbers[:-1])
+        self.exp1 = tools.explosiveness(numbers, 1, 7)
+        self.exp3 = tools.explosiveness(numbers, 3, 7)
         self.bug_o = bug_o
         self.bug_c = bug_c
 
@@ -99,7 +100,8 @@ class Signatures(db.Model):
                         bug = bugs[sgn]
                         if q.numbers != numbers:
                             q.numbers = numbers
-                            q.mean, q.stddev = tools.mean(numbers[:-1])
+                            q.exp1 = tools.explosiveness(numbers, 1, 7)
+                            q.exp3 = tools.explosiveness(numbers, 3, 7)
                         bug_o = sputils.get_bug_number(bug['unresolved'])
                         if q.bug_o != bug_o:
                             q.bug_o = bug_o
@@ -155,8 +157,8 @@ class Signatures(db.Model):
                 if not r['versions']:
                     r['versions'] = sputils.get_versions_list(c.version)
                 sgns[c.signature] = {'numbers': c.numbers,
-                                     'mean': c.mean,
-                                     'stddev': c.stddev,
+                                     'exp1': c.exp1,
+                                     'exp3': c.exp3,
                                      'unresolved': c.bug_o,
                                      'resolved': c.bug_c}
 

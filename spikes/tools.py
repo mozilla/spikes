@@ -242,7 +242,7 @@ def is_spiking(x, coeff=3., win=7):
         return 'nothing', mx, md
 
 
-def is_sgn_spiking(numbers, stats, coeff,
+def is_sgn_spiking(numbers, globalstats, coeff,
                    winmin, winmax, sgn='',
                    verbose=False):
     last = numbers[-1]
@@ -253,7 +253,7 @@ def is_sgn_spiking(numbers, stats, coeff,
         e = np.ceil(e) if e != 0 else 1
         diff = last - m
         if diff > coeff * e:
-            m_r, e_r, m_d, e_d = __get_mean_rate(stats, coeff, win)
+            m_r, e_r, m_d, e_d = globalstats[win]
             if verbose:
                 print(('out', sgn, numbers, win, m, e, m_r, e_r, m_d, e_d))
             if m == 0:
@@ -277,38 +277,53 @@ def is_sgn_spiking(numbers, stats, coeff,
     return None
 
 
-def __get_mean_rate(stats, coeff, win, __cache={}):
-    if win not in __cache:
-        NaN = float('NaN')
-        R = len(stats)
-        for numbers in stats.values():
-            C = len(numbers)
-            break
-        x = np.empty((R, C))
-        for i, numbers in enumerate(stats.values()):
-            x[i, :] = numbers
+def get_global(stats, coeff, winmin, winmax):
+    res = {}
+    for win in range(winmax, winmin - 1, -1):
+        res[win] = __get_mean_rate(stats, coeff, win)
+    return res
 
-        last = x[:, -1]
-        y = x[:, -(win + 1):-1]
-        means = np.mean(y, axis=1)
-        means = np.ceil(means)
-        diffs = last - means
-        zeros = means == 0
-        means[zeros] = 1.
-        ratios = 100 * (last / means - 1)
-        ratios[zeros] = NaN
-        outliers = generalized_esd(ratios, 10)
-        ratios[outliers] = NaN
-        m_r, e_r = __get_pd_mean(ratios)
-        m_r = np.round(m_r)
-        e_r = np.round(e_r)
 
-        outliers = generalized_esd(diffs, 10)
-        diffs[outliers] = NaN
-        m_d, e_d = __get_pd_mean(diffs)
-        m_d = np.ceil(m_d)
-        e_d = np.ceil(e_d)
+def __get_mean_rate(stats, coeff, win):
+    NaN = float('NaN')
+    R = len(stats)
+    for numbers in stats.values():
+        C = len(numbers)
+        break
+    x = np.empty((R, C))
+    for i, numbers in enumerate(stats.values()):
+        x[i, :] = numbers
 
-        __cache[win] = (m_r, e_r, m_d, e_d)
+    last = x[:, -1]
+    y = x[:, -(win + 1):-1]
+    means = np.mean(y, axis=1)
+    means = np.ceil(means)
+    diffs = last - means
+    zeros = means == 0
+    means[zeros] = 1.
+    ratios = 100 * (last / means - 1)
+    ratios[zeros] = NaN
+    outliers = generalized_esd(ratios, 10)
+    ratios[outliers] = NaN
+    m_r, e_r = __get_pd_mean(ratios)
+    m_r = np.round(m_r)
+    e_r = np.round(e_r)
 
-    return __cache[win]
+    outliers = generalized_esd(diffs, 10)
+    diffs[outliers] = NaN
+    m_d, e_d = __get_pd_mean(diffs)
+    m_d = np.ceil(m_d)
+    e_d = np.ceil(e_d)
+
+    return (m_r, e_r, m_d, e_d)
+
+
+def explosiveness(numbers, nday, win):
+    last = numbers[-nday:]
+    last = __convert(last)
+    last, _ = __get_pd_mean(last)
+    values = numbers[-(win + 1):-nday]
+    values = __convert(values)
+    m, e = __get_pd_mean(values)
+    e = max(e, 2. + 0.1 * m)
+    return (last - m) / e
