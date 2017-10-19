@@ -33,7 +33,6 @@ function checkDate() {
         let e = document.getElementById("date");
         let date = new Date(e.options[0].value);
         if (date.getYear() != today.getYear() || date.getMonth() != today.getMonth() || date.getDay() != today.getDay()) {
-            console.log(today + ":::" + date);
             let newdate = today.toISOString().slice(0, 10);
             let params = getParams();
             setHref(newdate, params[1], params[2]);
