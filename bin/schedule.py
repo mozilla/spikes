@@ -4,10 +4,8 @@
 
 from apscheduler.schedulers.blocking import BlockingScheduler
 from spikes import models
-import logging
 
 
-logging.basicConfig()
 sched = BlockingScheduler()
 
 

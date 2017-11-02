@@ -101,8 +101,8 @@ def generalized_esd(x, r, alpha=0.05, method='mean'):
                 y = np.abs(x - m)
                 j = np.nanargmax(y)
                 R = y[j]
-                l = __get_lambda_critical(N, i, alpha)
-                if R > l * e:
+                lam = __get_lambda_critical(N, i, alpha)
+                if R > lam * e:
                     outliers.append(j)
                     x[j] = NaN
                 else:
@@ -134,9 +134,9 @@ def ma(x, win):
 
 
 def mean(x):
-    l = float(len(x))
-    m = np.sum(x) / l
-    e = np.sqrt(np.sum((x - m) ** 2) / l)
+    L = float(len(x))
+    m = np.sum(x) / L
+    e = np.sqrt(np.sum((x - m) ** 2) / L)
     return m, e
 
 
@@ -155,17 +155,17 @@ def moving(x, f=mean, coeff=2.0):
     x = __convert(x)
     pieces = [[0, 0]]
     coeff = float(coeff)
-    l = len(x)
+    L = len(x)
 
-    for i in range(1, l):
+    for i in range(1, L):
         p, d = f(x[pieces[-1][0]:(i + 1)])
         if abs(x[i] - p) <= coeff * d:
             pieces[-1][1] = i
         else:
             pieces.append([i, i])
 
-    yp = np.empty(l)
-    yd = np.empty(l)
+    yp = np.empty(L)
+    yd = np.empty(L)
     pos = 0
     for piece in pieces:
         p, d = f(x[piece[0]:(piece[1] + 1)])
@@ -190,16 +190,16 @@ def multimoving(x, f=mean, coeff=2.0):
         (numpy.array): the smoothed data
     """
     x = __convert(x)
-    l = len(x)
-    ys = np.empty((l, l))
-    ds = np.empty((l, l))
+    L = len(x)
+    ys = np.empty((L, L))
+    ds = np.empty((L, L))
 
     ys[0], ds[0] = moving(x, f, coeff)
     ys[-1], ds[-1] = moving(x[::-1], f, coeff)
     ys[-1] = ys[-1][::-1]
     ds[-1] = ds[-1][::-1]
 
-    for i in range(1, l - 1):
+    for i in range(1, L - 1):
         x1 = x[:(i + 1)]
         x2 = x[i:]
         y1, d1 = moving(x1[::-1], f, coeff)
@@ -214,10 +214,10 @@ def multimoving(x, f=mean, coeff=2.0):
         ds[i][:len(d1)] = d1[::-1]
         ds[i][len(d1):] = d2[1:]
 
-    y = np.empty(l)
-    d = np.empty(l)
+    y = np.empty(L)
+    d = np.empty(L)
     mins_index = np.argmin(ds, axis=0)
-    for i in range(l):
+    for i in range(L):
         y[i] = ys[mins_index[i]][i]
         d[i] = ds[mins_index[i]][i]
 

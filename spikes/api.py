@@ -3,7 +3,7 @@
 # You can obtain one at http://mozilla.org/MPL/2.0/.
 
 from flask import request, jsonify
-from spikes import models, log, utils
+from spikes import models, utils
 
 
 def signatures():
@@ -15,8 +15,6 @@ def signatures():
     date = utils.get_correct_date(date)
     signature = request.args.get('signature', '')
     signature = utils.get_correct_sgn(signature)
-    log.info('Get signatures for {}::{}, the {}'.format(product,
-                                                        channel,
-                                                        date))
+
     return jsonify(models.Signatures.get(product, channel,
                                          date, sgn=signature))

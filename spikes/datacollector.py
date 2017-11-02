@@ -10,9 +10,9 @@ from libmozdata import socorro, utils
 from libmozdata.bugzilla import Bugzilla
 from libmozdata.connection import Connection
 import numpy as np
-from . import tools
 from . import differentiators as diftors
-from . import config
+from . import config, tools
+from .logger import logger
 from .gather import gather
 
 
@@ -206,6 +206,8 @@ def get_signatures(channels, product='Firefox',
 def get_sgns_by_install_time(channels, product='Firefox',
                              date='today', query={},
                              ndays=7, version=False, N=50):
+    logger.info('Get crashes numbers for {}: started.'.format(product))
+
     today = utils.get_date_ymd(date)
     few_days_ago = today - relativedelta(days=ndays)
     base = {few_days_ago + relativedelta(days=i): 0 for i in range(ndays + 1)}
@@ -252,6 +254,7 @@ def get_sgns_by_install_time(channels, product='Firefox',
         gather(data[chan])
         data[chan] = get_top_signatures(data[chan], product, chan, N=N)
 
+    logger.info('Get crashes numbers: finished.')
     return data, version
 
 
@@ -399,6 +402,8 @@ def plot(data, coeff, win):
 
 
 def get_bugs(signatures):
+    N = len(signatures)
+    logger.info('Get bugs for {} signatures: started.'.format(N))
     bugs_by_signature = socorro.Bugs.get_bugs(list(signatures))
     bugs = set()
     for b in bugs_by_signature.values():
@@ -440,5 +445,7 @@ def get_bugs(signatures):
         unresolved = sorted(unresolved)
         bugs_by_signature[s] = {'resolved': last_resolved,
                                 'unresolved': last_unresolved}
+
+    logger.info('Get bugs: finished.'.format(N))
 
     return bugs_by_signature

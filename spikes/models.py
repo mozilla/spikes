@@ -8,6 +8,7 @@ from spikes import utils as sputils
 from spikes import datacollector as dc
 from sqlalchemy import distinct
 import sqlalchemy.dialects.postgresql as pg
+from .logger import logger
 
 
 NDAYS = 11
@@ -177,7 +178,7 @@ class Signatures(db.Model):
 
 
 def update(date='today'):
-    Signatures.rm(date)
+    logger.info('Update data for {}: started.'.format(date))
     channels = sputils.get_channels()
     data = {p: None for p in sputils.get_products()}
     versions = {}
@@ -195,7 +196,9 @@ def update(date='today'):
             signatures |= set(info.keys())
 
     bugs_by_signature = dc.get_bugs(signatures)
+    Signatures.rm(date)
     Signatures.put_data(data, bugs_by_signature, date, versions)
+    logger.info('Update data for {}: finished.'.format(date))
 
 
 def create(date='today'):
