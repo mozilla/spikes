@@ -131,29 +131,26 @@ def get_total(channels, product='Firefox', date='today'):
     return data
 
 
-def get_top_signatures(data, product, N=50):
-    for chan, stats_by_sgn in data.items():
-        threshold = config.get_threshold(product, chan)
-        sbs = {}
-        for sgn, stats in stats_by_sgn.items():
-            # replace dictionary with an array of numbers
-            numbers = tools.get_array(stats)
-            if numbers[-1] >= threshold:
-                sbs[sgn] = numbers
-        data[chan] = sbs
+def get_top_signatures(data, product, chan, N=50):
+    threshold = config.get_threshold(product, chan)
+    res = {}
+    for sgn, stats in data.items():
+        # replace dictionary with an array of numbers
+        numbers = tools.get_array(stats)
+        if numbers[-1] >= threshold:
+            res[sgn] = numbers
 
     if N:
-        for chan, stats_by_sgn in data.items():
-            # take only the top N signatures for the last day
-            d = list(sorted(stats_by_sgn.items(),
-                            key=lambda p: p[1][-1],
-                            reverse=True))
-            if len(d) > N:
-                data[chan] = dict(d[:N])
-            else:
-                data[chan] = dict(d)
+        # take only the top N signatures for the last day
+        d = list(sorted(res.items(),
+                        key=lambda p: p[1][-1],
+                        reverse=True))
+        if len(d) > N:
+            res = dict(d[:N])
+        else:
+            res = dict(d)
 
-    return data
+    return res
 
 
 def get_signatures(channels, product='Firefox',
@@ -232,10 +229,10 @@ def get_sgns_by_install_time(channels, product='Firefox',
               'release_channel': '',
               '_aggs.signature': '_cardinality.install_time',
               '_results_number': 0,
+              '_facets': 'product',
               '_facets_size': 10000}
     params.update(query)
 
-    searches = []
     for chan in channels:
         params = copy.deepcopy(params)
         params['release_channel'] = chan
@@ -249,17 +246,13 @@ def get_sgns_by_install_time(channels, product='Firefox',
             params = copy.deepcopy(params)
             params['date'] = search_date
             hdler = functools.partial(handler, skip_pats, day)
-            searches.append(socorro.SuperSearch(params=params,
-                                                handler=hdler,
-                                                handlerdata=data[chan]))
-
-    for s in searches:
-        s.wait()
-
-    for chan in channels:
+            socorro.SuperSearch(params=params,
+                                handler=hdler,
+                                handlerdata=data[chan]).wait()
         gather(data[chan])
+        data[chan] = get_top_signatures(data[chan], product, chan, N=N)
 
-    return get_top_signatures(data, product, N=N), version
+    return data, version
 
 
 def get_sgns_info(sgns_by_chan, product='Firefox',

@@ -5,7 +5,7 @@
 import argparse
 from collections import OrderedDict
 from jinja2 import Environment, FileSystemLoader
-from libmozdata import utils, socorro, gmail
+from libmozdata import utils, socorro
 from . import datacollector as dc
 from . import utils as sputils
 
@@ -118,6 +118,8 @@ def prepare(spikes, bugs_by_signature, date, versions, query, ndays):
 
 
 def send_email(emails=[], date='today'):
+    from libmozdata import gmail
+
     query = {}
     ndays = 11
     spikes, bugs_by_signature, versions = get(date=date,
