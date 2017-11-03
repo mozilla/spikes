@@ -128,7 +128,7 @@ class Signatures(db.Model):
                                            bug_o,
                                            bug_c,
                                            commit=True)
-
+            db.session.commit()
             return True
         return False
 
