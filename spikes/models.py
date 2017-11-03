@@ -94,6 +94,7 @@ class Signatures(db.Model):
                             to_update[sgn] = q
                         else:
                             db.session.delete(q)
+                            db.session.commit()
                     to_create = new_sgns - set(to_update.keys())
 
                     for sgn, q in to_update.items():
