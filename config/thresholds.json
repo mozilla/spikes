@@ -28,5 +28,6 @@
             "beta": 100,
             "release": 500
         }
-    }
+    },
+    "socorro_limit": 5000
 }

@@ -38,9 +38,17 @@ def get_skiplist_channel(chan):
     return sl.get(chan, []) + sl['common']
 
 
-def get_threshold(prod, chan, kind='normal'):
+def get_thresholds():
     global __THRESHOLDS
     if not __THRESHOLDS:
         with open('./config/thresholds.json', 'r') as In:
             __THRESHOLDS = json.load(In)
-    return __THRESHOLDS[kind][prod][chan]
+    return __THRESHOLDS
+
+
+def get_threshold(prod, chan, kind='normal'):
+    return get_thresholds()[kind][prod][chan]
+
+
+def get_limit():
+    return get_thresholds()['socorro_limit']

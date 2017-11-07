@@ -207,7 +207,7 @@ def get_sgns_by_install_time(channels, product='Firefox',
                              date='today', query={},
                              ndays=7, version=False, N=50):
     logger.info('Get crashes numbers for {}: started.'.format(product))
-
+    limit = config.get_limit()
     today = utils.get_date_ymd(date)
     few_days_ago = today - relativedelta(days=ndays)
     base = {few_days_ago + relativedelta(days=i): 0 for i in range(ndays + 1)}
@@ -232,7 +232,7 @@ def get_sgns_by_install_time(channels, product='Firefox',
               '_aggs.signature': '_cardinality.install_time',
               '_results_number': 0,
               '_facets': 'product',
-              '_facets_size': 10000}
+              '_facets_size': limit}
     params.update(query)
 
     for chan in channels:
