@@ -195,9 +195,11 @@ def update(date='today'):
         for info in sgns.values():
             signatures |= set(info.keys())
 
-    bugs_by_signature = dc.get_bugs(signatures)
-    Signatures.rm(date)
-    Signatures.put_data(data, bugs_by_signature, date, versions)
+    if signatures:
+        bugs_by_signature = dc.get_bugs(signatures)
+        Signatures.rm(date)
+        Signatures.put_data(data, bugs_by_signature, date, versions)
+
     logger.info('Update data for {}: finished.'.format(date))
 
 
