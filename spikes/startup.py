@@ -7,10 +7,10 @@ from collections import defaultdict, OrderedDict
 from dateutil.relativedelta import relativedelta
 import inflect
 from jinja2 import Environment, FileSystemLoader
-from libmozdata import utils, socorro, gmail
+from libmozdata import utils, socorro
 from . import datacollector as dc
 from . import differentiators as diftors
-from . import tools
+from . import tools, mail
 
 
 channels = ['nightly', 'beta', 'release']
@@ -131,7 +131,7 @@ def send_email(emails=[], date='today'):
         title = 'Spikes in startup crashes in {} the {}'
         title = title.format(chan_list, today)
         if emails:
-            gmail.send(emails, title, body, html=True)
+            mail.send(emails, title, body, html=True)
         else:
             with open('/tmp/foo.html', 'w') as Out:
                 Out.write(body)
