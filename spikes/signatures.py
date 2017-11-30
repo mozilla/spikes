@@ -8,6 +8,7 @@ from jinja2 import Environment, FileSystemLoader
 from libmozdata import utils, socorro
 from . import datacollector as dc
 from . import utils as sputils
+from . import mail
 
 
 def get(date='today', ndays=11, query={}):
@@ -118,8 +119,6 @@ def prepare(spikes, bugs_by_signature, date, versions, query, ndays):
 
 
 def send_email(emails=[], date='today'):
-    from libmozdata import gmail
-
     query = {}
     ndays = 11
     spikes, bugs_by_signature, versions = get(date=date,
@@ -137,7 +136,7 @@ def send_email(emails=[], date='today'):
         chan_list = ', '.join(affected_chans)
         title = 'Spikes in signatures in {} the {}'.format(chan_list, today)
         if emails:
-            gmail.send(emails, title, body, html=True)
+            mail.send(emails, title, body, html=True)
         else:
             with open('/tmp/foo.html', 'w') as Out:
                 Out.write(body)

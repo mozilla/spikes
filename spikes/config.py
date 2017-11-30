@@ -8,6 +8,7 @@ import re
 
 __SKIPLIST = None
 __THRESHOLDS = None
+__GLOBAL = None
 
 
 class BadRegEx(Exception):
@@ -46,9 +47,25 @@ def get_thresholds():
     return __THRESHOLDS
 
 
+def get_global():
+    global __GLOBAL
+    if not __GLOBAL:
+        with open('./config/global.json', 'r') as In:
+            __GLOBAL = json.load(In)
+    return __GLOBAL
+
+
 def get_threshold(prod, chan, kind='normal'):
     return get_thresholds()[kind][prod][chan]
 
 
 def get_limit():
     return get_thresholds()['socorro_limit']
+
+
+def get_smtp_server():
+    return get_global()['smtp']
+
+
+def get_sender():
+    return get_global()['sender']
