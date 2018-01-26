@@ -46,6 +46,7 @@
     </p>
     {% if data['signatures'] -%}
     <p>Take care: inaccessible bugs are not displayed !</p>
+    <p>Crash submitted from infobar are not count.</p>
     <ul>
       {% for sgn, i in data['signatures'] -%}
       <li style="margin:10px 0;"><a href="{{ i['socorro_url'] }}">{{ sgn|e }}</a>:<br>
