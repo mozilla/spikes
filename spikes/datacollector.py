@@ -232,6 +232,7 @@ def get_sgns_by_install_time(channels, product='Firefox',
               '_aggs.signature': '_cardinality.install_time',
               '_results_number': 0,
               '_facets': 'product',
+              'submitted_from_infobar': '!__true__',
               '_facets_size': limit}
     params.update(query)
 
