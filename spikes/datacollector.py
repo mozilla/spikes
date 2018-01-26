@@ -232,7 +232,6 @@ def get_sgns_by_install_time(channels, product='Firefox',
               '_aggs.signature': '_cardinality.install_time',
               '_results_number': 0,
               '_facets': 'product',
-              'submitted_from_infobar': '!__true__',
               '_facets_size': limit}
     params.update(query)
 
@@ -242,6 +241,8 @@ def get_sgns_by_install_time(channels, product='Firefox',
         skip_pats = config.get_skiplist_channel(chan)
         if version:
             params['version'] = version[chan]
+        if chan != 'nightly':
+            params['submitted_from_infobar'] = '!__true__'
         for i in range(ndays + 1):
             day = few_days_ago + relativedelta(days=i)
             day_after = day + relativedelta(days=1)
