@@ -204,11 +204,15 @@ def update(date='today'):
     logger.info('Update data for {}: finished.'.format(date))
 
 
+def redo(date='today'):
+    d = sputils.get_date(date)
+    for i in range(NDAYS_OF_DATA):
+        update(date=d.strftime('%Y-%m-%d'))
+        d -= relativedelta(days=1)
+    
+
 def create(date='today'):
     engine = db.get_engine(app)
     if not engine.dialect.has_table(engine, 'signatures'):
         db.create_all()
-        d = sputils.get_date(date)
-        for i in range(NDAYS_OF_DATA):
-            update(date=d.strftime('%Y-%m-%d'))
-            d -= relativedelta(days=1)
+        redo()
