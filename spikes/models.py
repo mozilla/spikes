@@ -111,7 +111,7 @@ class Signatures(db.Model):
                         if q.bug_c != bug_c:
                             q.bug_c = bug_c
 
-                    if versions[product]:
+                    if versions and versions[product]:
                         v = versions[product][channel]
                     else:
                         v = []
@@ -191,7 +191,8 @@ def update(date='today'):
                                               version=True,
                                               N=NSGNS)
         data[prod] = sgns
-        versions[prod] = v
+        if v:
+            versions[prod] = v
         for info in sgns.values():
             signatures |= set(info.keys())
 
