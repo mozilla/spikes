@@ -13,9 +13,9 @@ function getParams() {
 }
 
 function setHref(date, channel, product) {
-    location.href = "?date=" + date
-                  + "&channel=" + channel
-                  + "&product=" + product;
+    location.search = "?date=" + date
+                    + "&channel=" + channel
+                    + "&product=" + product;
     location.reload(true);
 }
 
