@@ -16,6 +16,7 @@ function setHref(date, channel, product) {
     location.href = "?date=" + date
                   + "&channel=" + channel
                   + "&product=" + product;
+    location.reload(true);
 }
 
 function update() {
