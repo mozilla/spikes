@@ -9,7 +9,7 @@ from spikes import models
 sched = BlockingScheduler()
 
 
-@sched.scheduled_job('interval', minutes=20)
+@sched.scheduled_job('interval', minutes=10)
 def timed_job():
     models.update()
 
