@@ -67,10 +67,10 @@
         {% if i['resolved'] or i['unresolved'] -%}
         <ul>
           {% if i['resolved'] -%}
-          <li><a href="https://bugzil.la/{{ i['resolved'] }}"><s class="red">Bug {{ i['resolved'] }}</s></a></li>
+          <li><a href="https://bugzilla.mozilla.org/{{ i['resolved'] }}"><s class="red">Bug {{ i['resolved'] }}</s></a></li>
           {% endif -%}
           {% if i['unresolved'] -%}
-          <li><a href="https://bugzil.la/{{ i['unresolved'] }}">Bug {{ i['unresolved'] }}</a></li>
+          <li><a href="https://bugzilla.mozilla.org/{{ i['unresolved'] }}">Bug {{ i['unresolved'] }}</a></li>
           {% endif -%}
         </ul>
         {% endif -%}
