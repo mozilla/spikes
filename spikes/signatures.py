@@ -11,7 +11,7 @@ from . import utils as sputils
 from . import mail
 
 
-def get(date='today', ndays=11, query={}):
+def get(date='today', ndays=11, query={}, version=False):
     coeff = 3.
     winmin = 7
     winmax = ndays
@@ -24,7 +24,7 @@ def get(date='today', ndays=11, query={}):
     for product in products:
         data, version = dc.get_sgns_by_install_time(channels, product=product,
                                                     date=date, query=query,
-                                                    ndays=winmax, version=True)
+                                                    ndays=winmax, version=version)
         versions[product] = version
         s = dc.get_spiking_signatures(data, coeff, winmin, winmax)
 
@@ -118,12 +118,13 @@ def prepare(spikes, bugs_by_signature, date, versions, query, ndays):
     return None
 
 
-def send_email(emails=[], date='today'):
+def send_email(emails=[], date='today', version=False):
     query = {}
     ndays = 11
     spikes, bugs_by_signature, versions = get(date=date,
                                               query=query,
-                                              ndays=ndays)
+                                              ndays=ndays,
+                                              version=version)
     r = prepare(spikes, bugs_by_signature, date, versions, query, ndays)
     if r:
         results, affected_chans, today = r
@@ -142,7 +143,7 @@ def send_email(emails=[], date='today'):
                 Out.write(body)
             print('Title: %s' % title)
             print('Body:')
-            # print(body)
+            print(body)
 
 
 if __name__ == '__main__':
@@ -153,6 +154,8 @@ if __name__ == '__main__':
                         default=[], help='emails')
     parser.add_argument('-d', '--date', dest='date',
                         action='store', default='today', help='date')
+    parser.add_argument('-v', '--version', dest='version',
+                        action='store_true', help='add version to search query')
     args = parser.parse_args()
 
-    send_email(emails=args.emails, date=args.date)
+    send_email(emails=args.emails, date=args.date, version=args.version)

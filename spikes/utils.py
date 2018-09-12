@@ -37,7 +37,6 @@ def get_params_for_link(date, query={}):
     params = {'product': '',
               'date': search_date,
               'release_channel': '',
-              'version': '',
               'signature': '',
               '_facets': ['url',
                           'user_comments',
