@@ -188,7 +188,7 @@ def update(date='today'):
                                               product=prod,
                                               date=date,
                                               ndays=NDAYS,
-                                              version=True,
+                                              version=False,
                                               N=NSGNS)
         data[prod] = sgns
         if v:
