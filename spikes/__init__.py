@@ -10,7 +10,7 @@ import os
 
 app = Flask(__name__, template_folder='../templates')
 
-uri = os.getenv('DATABASE_URL', config.get_database())
+uri = os.getenv('DATABASE_URL')
 # Workaround for Heroku
 if uri.startswith('postgres://'):
     uri = uri.replace('postgres://', 'postgresql://', 1)
