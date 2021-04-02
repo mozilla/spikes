@@ -12,7 +12,7 @@ app = Flask(__name__, template_folder='../templates')
 
 uri = os.getenv('DATABASE_URL')
 # Workaround for Heroku
-if uri.startswith('postgres://'):
+if uri and uri.startswith('postgres://'):
     uri = uri.replace('postgres://', 'postgresql://', 1)
 app.config['SQLALCHEMY_DATABASE_URI'] = uri
 app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
