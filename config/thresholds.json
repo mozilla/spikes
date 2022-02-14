@@ -7,10 +7,10 @@
             "beta": 50,
             "release": 100
         },
-        "FennecAndroid":
+        "Fenix":
         {
             "nightly": 2,
-            "beta": 10,
+            "beta": 25,
             "release": 50
         }
     },

@@ -21,7 +21,7 @@ def get_str(s):
 
 
 def get_products():
-    return ['Firefox']
+    return ['Firefox', 'Fenix']
 
 
 def get_channels():
