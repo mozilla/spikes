@@ -96,7 +96,7 @@ def get_correct_product(p):
     if isinstance(p, six.string_types):
         p = p.lower()
         prods = {'firefox': 'Firefox',
-                 'fennecandroid': 'FennecAndroid'}
+                 'fenix': 'Fenix'}
         return prods.get(p, 'Firefox')
     return 'Firefox'
 
