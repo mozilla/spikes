@@ -14,7 +14,7 @@ from . import tools, mail
 
 
 channels = ['nightly', 'beta', 'release']
-products = ['Firefox', 'Fenix']
+products = ['Firefox', 'Fenix', 'Thunderbird']
 query = {'startup_crash': '__true__'}
 
 
