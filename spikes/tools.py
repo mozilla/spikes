@@ -279,6 +279,8 @@ def is_sgn_spiking(numbers, globalstats, coeff,
 
 def get_global(stats, coeff, winmin, winmax):
     res = {}
+    if len(stats) == 0:
+        return res
     for win in range(winmax, winmin - 1, -1):
         res[win] = __get_mean_rate(stats, coeff, win)
     return res
