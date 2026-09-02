@@ -56,6 +56,11 @@ def favicon():
     return send_from_directory('../static', 'favicon.ico')
 
 
+@app.route('/robots.txt')
+def robots():
+    return send_from_directory('../static', 'robots.txt')
+
+
 @app.route('/spikes.js')
 def spikes_js():
     return send_from_directory('../static', 'spikes.js')

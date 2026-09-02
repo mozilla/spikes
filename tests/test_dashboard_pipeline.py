@@ -688,6 +688,13 @@ class ApiTest(DBTestCase):
         r = self.client.get('/dashboard.html')
         self.assertEqual(r.status_code, 200)
 
+    def test_robots(self):
+        with self.client.get('/robots.txt') as r:
+            self.assertEqual(r.status_code, 200)
+            self.assertEqual(r.mimetype, 'text/plain')
+            self.assertEqual(r.get_data(as_text=True),
+                             'User-agent: *\nDisallow: /\n')
+
     def test_conditional_and_gzip(self):
         r = self.client.get('/dashboard/api/summary')
         etag = r.headers.get('ETag')
