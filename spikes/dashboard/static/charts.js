@@ -9,7 +9,7 @@ const DAY_MS = 86400000;
 const MINUS = '−';
 const NBSP = ' ';
 
-export const SEV_COLOR = {
+const SEV_COLOR = {
   major: 'var(--st-major)', spike: 'var(--st-spike)', watch: 'var(--st-watch)',
   drop: 'var(--st-drop)', new: 'var(--st-new)', ok: 'var(--ink)',
 };

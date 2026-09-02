@@ -1,13 +1,17 @@
 // dashboard.js — crash-spikes dashboard: fetch, state, rendering, interactions.
 import {
   lineChart, barChart, sparkline, miniFactors, el,
-  fmtInt, fmtCompact, fmtSigned, fmtRatio, fmtZ, parseDay, zoneLabel,
+  fmtInt, fmtCompact, fmtSigned, fmtRatio, fmtZ, parseDay, fmtDateLong,
+  zoneLabel,
 } from './charts.js';
 
-const API = '/dashboard/api';
+const API = new URL('../api/', import.meta.url);
 const REFRESH_MS = 5 * 60 * 1000;
 const FOCUS_REFRESH_MS = 60 * 1000;
 const DAY_MS = 86400000;
+const ALERT_SEVERITIES = ['major', 'spike', 'watch', 'drop'];
+const COUNT_SEVERITIES = [...ALERT_SEVERITIES, 'new'];
+const COUNT_KINDS = [...COUNT_SEVERITIES, 'storm'];
 const SEV_RANK = { major: 0, spike: 1, watch: 2, new: 3, drop: 4, ok: 5 };
 const WDAYS = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
 const CHART_HEIGHT = 280;
@@ -16,17 +20,11 @@ const CHART_HEIGHT = 280;
 // their own logos; Firefox beta wears the Developer Edition logo (the
 // beta channel itself ships the release one); Fenix is Firefox for Android.
 function logoFor(product, channel) {
-  if (product === 'Thunderbird') {
-    if (channel === 'nightly') return 'logo-thunderbird-nightly.svg';
-    if (channel === 'beta') return 'logo-thunderbird-beta.svg';
-    return 'logo-thunderbird.svg';
-  }
-  if (product === 'Firefox' || product === 'Fenix') {
-    if (channel === 'nightly') return 'logo-firefox-nightly.svg';
-    if (channel === 'beta') return 'logo-firefox-beta.svg';
-    return 'logo-firefox.svg';
-  }
-  return null;
+  const family = product === 'Thunderbird' ? 'thunderbird'
+    : product === 'Firefox' || product === 'Fenix' ? 'firefox' : null;
+  if (!family) return null;
+  const suffix = channel === 'nightly' || channel === 'beta' ? `-${channel}` : '';
+  return `logo-${family}${suffix}.svg`;
 }
 
 const app = {
@@ -36,13 +34,11 @@ const app = {
   days: 90,
   granularity: 'day',
   sort: { key: 'severity', dir: 'asc' },
-  filters: { sev: new Set(['major', 'spike', 'watch', 'drop', 'new']), text: '', hideNoise: true, minCrashes: 0, showUnflagged: false, showStorms: false },
   expanded: new Map(), // signature -> { tr, panel, charts, data }
   charts: {},
   lastFetch: 0,
   pendingFocus: null,
   hideDrops: false,
-  versions: { summary: null, channel: null }, // data_version of what is rendered
 };
 
 const $ = (id) => document.getElementById(id);
@@ -53,7 +49,7 @@ const $ = (id) => document.getElementById(id);
 const etags = new Map(); // url -> { etag, data }
 
 async function fetchJSON(endpoint, params = {}) {
-  const url = new URL(`${API}/${endpoint}`, location.origin);
+  const url = new URL(endpoint, API);
   for (const [k, v] of Object.entries(params)) if (v != null) url.searchParams.set(k, v);
   const key = url.toString();
   const known = etags.get(key);
@@ -74,11 +70,6 @@ async function fetchJSON(endpoint, params = {}) {
   const etag = res.headers.get('ETag');
   if (etag) etags.set(key, { etag, data });
   return data;
-}
-
-function setRefreshing(on) {
-  // background refreshes update elements in place; nothing is dimmed
-  document.body.classList.toggle('is-loading', on);
 }
 
 function showError(msg) {
@@ -110,19 +101,17 @@ function restoreFocus(container, key) {
 }
 
 async function refresh({ initial = false } = {}) {
-  setRefreshing(true);
   try {
     const summary = await fetchJSON('summary');
-    // unchanged data version: nothing to redraw (the poll cost a 304)
-    const changed = summary.data_version == null || summary.data_version !== app.versions.summary;
-    if (changed || !app.summary) {
+    // A 304 returns the cached object, so identity is enough to avoid a redraw.
+    const changed = summary !== app.summary;
+    if (changed) {
       app.summary = summary;
-      app.versions.summary = summary.data_version || null;
       renderSummary();
     } else renderFreshness(app.summary); // "N min ago" keeps counting
     const target = app.selected || defaultChannel();
     if (isAll(target)) {
-      if (changed || !app.selected) selectAll();
+      if (!app.selected) selectAll();
     } else if (target) {
       if (!app.selected && target.signature) app.pendingFocus = target.signature; // deep link to a signature
       await loadChannel(target.product, target.channel);
@@ -131,8 +120,6 @@ async function refresh({ initial = false } = {}) {
   } catch (e) {
     const asOf = app.summary?.as_of ? ` — showing data from ${fmtTime(app.summary.as_of)}` : '';
     showError(initial && !app.summary ? `Could not load the dashboard (${e.message})` : `Could not refresh (${e.message})${asOf}`);
-  } finally {
-    setRefreshing(false);
   }
 }
 
@@ -149,12 +136,10 @@ async function loadChannel(product, channel) {
   // a newer selection or range change owns the view: drop this response
   if (!app.selected || isAll(app.selected) || app.selected.product !== req.product ||
       app.selected.channel !== req.channel || app.days !== req.days || app.granularity !== req.granularity) return;
-  const key = `${req.product}/${req.channel}|${req.days}|${req.granularity}|${data.data_version}`;
-  if (!changed && data.data_version != null && key === app.versions.channel) {
+  if (data === app.channel) {
     showView();
     return; // same data, same view: leave the DOM alone
   }
-  app.versions.channel = key;
   app.channel = data;
   showView(); // final layout before renderDetail() may scroll to a row
   renderDetail();
@@ -184,6 +169,10 @@ function todayMs() {
 function sevOf(score) {
   const s = score?.severity || 'ok';
   return s === 'drop' && app.hideDrops ? 'ok' : s;
+}
+
+function visibleAlerts(summary) {
+  return (summary.alerts || []).filter((row) => !(row.severity === 'drop' && app.hideDrops));
 }
 
 function rowRank(row) {
@@ -236,6 +225,19 @@ function deltaText(score) {
 
 function plural(n, word) {
   return `${n} ${word}${n === 1 ? '' : 's'}`;
+}
+
+function displayedSeverities(kinds = COUNT_SEVERITIES) {
+  return app.hideDrops ? kinds.filter((kind) => kind !== 'drop') : kinds;
+}
+
+function countBadges(counts = {}) {
+  const wrap = el('div', { class: 'card-counts' });
+  for (const kind of displayedSeverities()) {
+    if (counts[kind]) wrap.append(countChip(kind, counts[kind]));
+  }
+  if (counts.storm) wrap.append(badge('storm', plural(counts.storm, 'storm')));
+  return wrap;
 }
 
 /** "channel excess mostly from crash loops (72 %)" for storm-driven totals, else null. */
@@ -356,15 +358,15 @@ function selectAll() {
 // a small status swatch at the bottom right, and a short title prefix.
 const TAB_COLORS = { major: '#d03b3b', spike: '#ec835a', watch: '#fab219', drop: '#2a78d6', ok: '#0ca30c', stale: '#898781' };
 const baseIcon = new Image();
-baseIcon.src = '/dashboard/static/favicon.png';
+baseIcon.src = new URL('favicon.png', import.meta.url).href;
 let lastTabColor = null;
 baseIcon.addEventListener('load', () => { if (lastTabColor) drawFavicon(lastTabColor); });
 
 function overallHealth(s) {
-  const rows = (s.alerts || []).filter((r) => !(r.severity === 'drop' && app.hideDrops));
+  const rows = visibleAlerts(s);
   const counts = {};
   for (const r of rows) if (r.severity !== 'ok') counts[r.severity] = (counts[r.severity] || 0) + 1;
-  const worst = ['major', 'spike', 'watch', 'drop'].find((k) => counts[k]) || 'ok';
+  const worst = ALERT_SEVERITIES.find((kind) => counts[kind]) || 'ok';
   const stale = s.data_health && s.data_health.status !== 'ok' && s.data_health.status !== 'backfilling';
   return { worst, counts, stale };
 }
@@ -398,7 +400,7 @@ function drawFavicon(color) {
 function renderTabStatus(s) {
   const h = overallHealth(s);
   const label = h.stale ? 'stale' : h.worst === 'ok' ? 'OK'
-    : ['major', 'spike', 'watch', 'drop'].filter((k) => h.counts[k]).slice(0, 2).map((k) => `${h.counts[k]} ${k}`).join(' · ');
+    : ALERT_SEVERITIES.filter((kind) => h.counts[kind]).slice(0, 2).map((kind) => `${h.counts[kind]} ${kind}`).join(' · ');
   document.title = `${label} – Crash spikes`;
   lastTabColor = h.stale ? TAB_COLORS.stale : TAB_COLORS[h.worst];
   drawFavicon(lastTabColor);
@@ -460,53 +462,39 @@ function renderBanner(s) {
 function renderCards(s) {
   const wrap = $('channel-cards');
   const channels = s.channels || [];
+  const focus = focusedKey(wrap);
   $('empty-state').hidden = channels.length > 0;
-  // cards are grouped by product; the structure is rebuilt only when the
-  // set of channels changes, otherwise every card is updated in place
-  const keys = channels.length ? [ALL_KEY, ...channels.map(channelKey)] : [];
-  const current = [...wrap.querySelectorAll('.card')].map((c) => c.dataset.key);
-  const fresh = new Map();
-  if (channels.length) fresh.set(ALL_KEY, allCard(s));
-  for (const c of channels) fresh.set(channelKey(c), channelCard(c));
-  const sameShape = keys.length === current.length && keys.every((k, i) => k === current[i]);
-  if (sameShape) {
-    for (const node of wrap.querySelectorAll('.card')) {
-      const card = fresh.get(node.dataset.key);
-      node.replaceChildren(...card.childNodes);
-      node.className = card.className;
+  wrap.textContent = '';
+  if (channels.length) {
+    const all = el('div', { class: 'card-group card-group-all' }, el('div', { class: 'card-group-title', 'aria-hidden': 'true' }, '\u00a0'));
+    all.append(el('div', { class: 'card-row' }, allCard(s)));
+    wrap.append(all);
+
+    const groups = new Map();
+    for (const channel of channels) {
+      if (!groups.has(channel.product)) groups.set(channel.product, []);
+      groups.get(channel.product).push(channel);
     }
-  } else {
-    wrap.textContent = '';
-    if (channels.length) {
-      const all = el('div', { class: 'card-group card-group-all' }, el('div', { class: 'card-group-title', 'aria-hidden': 'true' }, '\u00a0'));
-      all.append(el('div', { class: 'card-row' }, fresh.get(ALL_KEY)));
-      wrap.append(all);
-      const groups = [];
-      for (const c of channels) {
-        let g = groups.find((x) => x.product === c.product);
-        if (!g) { g = { product: c.product, channels: [] }; groups.push(g); }
-        g.channels.push(c);
-      }
-      for (const g of groups) {
-        const grp = el('div', { class: 'card-group', role: 'group', 'aria-label': g.product, style: `--n:${g.channels.length}` });
-        grp.append(el('div', { class: 'card-group-title', 'aria-hidden': 'true' }, g.product));
-        const row = el('div', { class: 'card-row' });
-        for (const c of g.channels) row.append(fresh.get(channelKey(c)));
-        grp.append(row);
-        wrap.append(grp);
-      }
+    for (const [product, productChannels] of groups) {
+      const group = el('div', { class: 'card-group', role: 'group', 'aria-label': product, style: `--n:${productChannels.length}` });
+      group.append(el('div', { class: 'card-group-title', 'aria-hidden': 'true' }, product));
+      const row = el('div', { class: 'card-row' });
+      for (const channel of productChannels) row.append(channelCard(channel));
+      group.append(row);
+      wrap.append(group);
     }
   }
   highlightCard();
+  restoreFocus(wrap, focus);
   showView();
 }
 
 /** Cross-channel card: what is flagged anywhere right now. */
 function allCard(s) {
-  const rows = (s.alerts || []).filter((r) => !(r.severity === 'drop' && app.hideDrops));
+  const rows = visibleAlerts(s);
   const worst = rows.map((r) => r.severity).filter((sev) => sev in SEV_RANK && sev !== 'ok')
     .sort((a, b) => SEV_RANK[a] - SEV_RANK[b])[0] || 'ok';
-  const card = el('button', { type: 'button', class: 'card card-all', 'data-key': ALL_KEY, 'aria-pressed': 'false' });
+  const card = el('button', { type: 'button', class: 'card card-all', 'data-key': ALL_KEY, 'data-focus': `card:${ALL_KEY}`, 'aria-pressed': 'false' });
   card.append(el('div', { class: 'card-head' },
     el('span', { class: 'card-title' }, 'All channels'),
     chip(worst)));
@@ -514,24 +502,19 @@ function allCard(s) {
   const nchan = new Set(rows.map((r) => `${r.product}/${r.channel}`)).size;
   card.append(el('div', { class: 'card-value' }, fmtInt(rows.length),
     el('span', { class: 'vs' }, rows.length ? `flagged in ${plural(nchan, 'channel')}` : 'nothing flagged')));
-  const counts = el('div', { class: 'card-counts' });
   const totals = {};
   for (const c of s.channels || []) {
-    for (const k of ['major', 'spike', 'watch', 'drop', 'new', 'storm']) totals[k] = (totals[k] || 0) + (c.counts?.[k] || 0);
+    for (const kind of COUNT_KINDS) totals[kind] = (totals[kind] || 0) + (c.counts?.[kind] || 0);
   }
-  for (const k of ['major', 'spike', 'watch', 'drop', 'new']) {
-    if (k === 'drop' && app.hideDrops) continue;
-    if (totals[k]) counts.append(countChip(k, totals[k]));
-  }
-  if (totals.storm) counts.append(badge('storm', plural(totals.storm, 'storm')));
-  card.append(counts);
+  card.append(countBadges(totals));
   return card;
 }
 
 function channelCard(c) {
   const t = c.total || {};
   const sev = sevOf(t);
-  const card = el('button', { type: 'button', class: 'card', 'data-key': channelKey(c), 'aria-pressed': 'false' });
+  const key = channelKey(c);
+  const card = el('button', { type: 'button', class: 'card', 'data-key': key, 'data-focus': `card:${key}`, 'aria-pressed': 'false' });
   // the product is the group's title; keep it in the button's name
   card.append(el('div', { class: 'card-head' },
     el('span', { class: 'card-title' }, el('span', { class: 'visually-hidden' }, `${c.product} `), c.channel),
@@ -541,17 +524,10 @@ function channelCard(c) {
   card.append(el('div', { class: 'card-delta' }, deltaText(t), dots(t.confidence)));
   const note = stormNote(t);
   if (note) card.append(el('div', { class: 'card-note' }, note));
-  const counts = el('div', { class: 'card-counts' });
-  for (const k of ['major', 'spike', 'watch', 'drop', 'new']) {
-    if (k === 'drop' && app.hideDrops) continue;
-    const n = c.counts?.[k] || 0;
-    if (n) counts.append(countChip(k, n));
-  }
-  if (c.counts?.storm) counts.append(badge('storm', plural(c.counts.storm, 'storm')));
-  card.append(counts);
+  card.append(countBadges(c.counts));
   // product logo, bottom right (decorative: the product is in the name)
   const logo = logoFor(c.product, c.channel);
-  if (logo) card.append(el('img', { class: 'card-logo', src: `/dashboard/static/${logo}`, alt: '', 'aria-hidden': 'true', width: 20, height: 20 }));
+  if (logo) card.append(el('img', { class: 'card-logo', src: new URL(logo, import.meta.url).href, alt: '', 'aria-hidden': 'true', width: 20, height: 20 }));
   return card;
 }
 
@@ -582,7 +558,7 @@ async function selectChannel(product, channel, signature = null) {
 
 // ---------------------------------------------------------------- flagged now
 function renderAlerts(s) {
-  const rows = (s.alerts || []).filter((r) => !(r.severity === 'drop' && app.hideDrops));
+  const rows = visibleAlerts(s);
   $('flagged-meta').textContent = rows.length ? `${rows.length} flagged ${rows.length === 1 ? 'signature' : 'signatures'} across ${new Set(rows.map(channelKey)).size} channels` : 'Nothing flagged right now';
   const wrap = $('alerts-table');
   const focus = focusedKey(wrap);
@@ -613,7 +589,7 @@ function renderDetail() {
   section.hidden = false;
   renderRangeOptions(ch);
   $('detail-title').textContent = `${ch.product} ${ch.channel}`;
-  $('detail-meta').textContent = `${fmtDateLongIso(ch.day)} · data as of ${fmtTime(ch.as_of)}`;
+  $('detail-meta').textContent = `${fmtDateLong(parseDay(ch.day))} · data as of ${fmtTime(ch.as_of)}`;
   renderTiles(ch);
   renderDrivers(ch);
   renderCharts(ch);
@@ -624,12 +600,6 @@ function renderDetail() {
     app.pendingFocus = null;
     focusSignature(sig);
   }
-}
-
-function fmtDateLongIso(day) {
-  const ms = parseDay(day);
-  const d = new Date(ms);
-  return `${WDAYS[d.getUTCDay()]} ${d.getUTCDate()} ${['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'][d.getUTCMonth()]} ${d.getUTCFullYear()}`;
 }
 
 function tile(label, valueNodes, subNodes, { chipNode, note, counts } = {}) {
@@ -675,14 +645,10 @@ function renderTiles(ch) {
   }
   // Flagged
   const c = ch.counts || {};
-  const keys = ['major', 'spike', 'watch', ...(app.hideDrops ? [] : ['drop'])];
-  const flagged = keys.reduce((n, k) => n + (c[k] || 0), 0);
-  const counts = el('div', { class: 'card-counts' });
-  for (const k of [...keys, 'new']) if (c[k]) counts.append(countChip(k, c[k]));
-  if (c.storm) counts.append(badge('storm', plural(c.storm, 'storm')));
+  const flagged = displayedSeverities(ALERT_SEVERITIES).reduce((n, kind) => n + (c[kind] || 0), 0);
   wrap.append(tile('Flagged', [String(flagged), el('span', { class: 'vs' }, `of ${fmtInt(c.scored)} scored`)],
     [[c.new ? `${c.new} new` : null, c.storm ? plural(c.storm, 'storm') : null, c.noise ? `${c.noise} noise` : null].filter(Boolean).join(' · ') || 'nothing unusual'],
-    { counts }));
+    { counts: countBadges(c) }));
 }
 
 function renderDrivers(ch) {
@@ -798,17 +764,45 @@ function renderModel(model, ch) {
 }
 
 // ---------------------------------------------------------------- signature table
+function readFilters() {
+  const data = new FormData($('sig-filters'));
+  return {
+    severities: new Set(data.getAll('sev')),
+    text: String(data.get('query') || '').trim().toLowerCase(),
+    hideNoise: data.has('hide-noise'),
+    minCrashes: Math.max(0, Number(data.get('min-crashes')) || 0),
+    showStorms: data.has('show-storms'),
+    showUnflagged: data.has('show-unflagged'),
+  };
+}
+
+function rowCategory(row) {
+  if (sevOf(row) !== 'ok' || row.is_new) return 'flagged';
+  return row.storm ? 'storm' : 'unflagged';
+}
+
+function matchesSeverityFilter(row, severities) {
+  const severity = sevOf(row);
+  return (severity !== 'ok' && severities.has(severity)) || (row.is_new && severities.has('new'));
+}
+
 function visibleRows() {
   const rows = app.channel?.signatures || [];
-  const f = app.filters;
-  const text = f.text.trim().toLowerCase();
-  const base = rows.filter((r) => (!f.hideNoise || !r.noise) && (r.observed || 0) >= f.minCrashes && (!text || r.signature.toLowerCase().includes(text)));
-  const flaggedOf = (r) => { const s = sevOf(r); return (s !== 'ok' && f.sev.has(s)) || (r.is_new && f.sev.has('new')); };
-  const plain = (r) => sevOf(r) === 'ok' && !r.is_new;
-  const unflagged = base.filter((r) => plain(r) && !r.storm);
-  const storms = base.filter((r) => plain(r) && r.storm);
-  const shown = base.filter((r) => flaggedOf(r) || (f.showStorms && r.storm) || (f.showUnflagged && plain(r)));
-  return { shown, unflaggedCount: unflagged.length, stormCount: storms.length, total: rows.length };
+  const filters = readFilters();
+  const shown = [];
+  let unflaggedCount = 0;
+  let stormCount = 0;
+  for (const row of rows) {
+    if ((filters.hideNoise && row.noise) || (row.observed || 0) < filters.minCrashes ||
+        (filters.text && !row.signature.toLowerCase().includes(filters.text))) continue;
+    const category = rowCategory(row);
+    if (category === 'storm') stormCount += 1;
+    else if (category === 'unflagged') unflaggedCount += 1;
+    if ((category === 'flagged' && matchesSeverityFilter(row, filters.severities)) ||
+        (category === 'storm' && filters.showStorms) ||
+        (category === 'unflagged' && filters.showUnflagged)) shown.push(row);
+  }
+  return { shown, unflaggedCount, stormCount, total: rows.length };
 }
 
 const SORTERS = {
@@ -915,12 +909,12 @@ function buildTable(rows, { withChannel, sortable, onRow }) {
   }
   thead.append(hr);
   const tbody = el('tbody');
-  for (const row of rows) tbody.append(buildRow(row, cols, withChannel, onRow));
+  for (const row of rows) tbody.append(buildRow(row, withChannel, onRow));
   table.append(thead, tbody);
   return table;
 }
 
-function buildRow(row, cols, withChannel, onRow) {
+function buildRow(row, withChannel, onRow) {
   const sev = sevOf(row);
   // the row is clickable; keyboard users get a real button (the expander,
   // or the channel chip in the cross-channel table)
@@ -1062,10 +1056,8 @@ async function loadSignature(st) {
   try {
     const data = await fetchJSON('signature', { product, channel, signature: st.row.signature, days: app.days, granularity: app.granularity });
     // same data as what the panel shows: nothing to redraw
-    if (st.panel && data.data_version != null && data.data_version === st.data?.data_version &&
-        st.view === `${app.days}|${app.granularity}`) return;
+    if (st.panel && data === st.data) return;
     st.data = data;
-    st.view = `${app.days}|${app.granularity}`;
     renderSignaturePanel(st);
   } catch (e) {
     st.panel = null;
@@ -1090,45 +1082,53 @@ function signatureModelText(data, r) {
     + (data.hourly?.profile_source ? ` · hourly profile: ${data.hourly.profile_source === 'own' ? 'this signature' : 'channel'}` : '');
 }
 
-/** Build the expanded panel once; later refreshes update its text and charts in place
- * (keeps chart zoom, log/table toggles and focus). */
-function renderSignaturePanel(st) {
-  const { td, data, row } = st;
-  const r = data.row || row;
-  if (st.panel && st.panel.isConnected) {
-    st.modelEl.textContent = signatureModelText(data, r);
-    const notes = signatureNotes(data, r);
-    st.noteEl.textContent = notes;
-    st.noteEl.hidden = !notes;
-    st.charts.intraday?.update(hourlySpec(data, { emptyMessage: 'No hourly data for this signature', ariaLabel: `Crashes per hour today, ${midTruncate(r.signature, 60)}` }));
-    st.charts.daily?.update(dailySpec(data, { ariaLabel: `Daily crashes, ${midTruncate(r.signature, 60)}` }));
-    return;
-  }
-  td.textContent = '';
+function createSignaturePanel(st) {
+  st.td.textContent = '';
   if (st.statusEl) {
     st.statusEl.className = 'visually-hidden';
     st.statusEl.textContent = 'Details loaded';
-    td.append(st.statusEl);
+    st.td.append(st.statusEl);
   }
   const panel = el('div', { class: 'detail-panel' });
-  st.modelEl = el('p', { class: 'detail-model full' }, signatureModelText(data, r));
+  st.modelEl = el('p', { class: 'detail-model full' });
   panel.append(st.modelEl);
-  const notes = signatureNotes(data, r);
-  st.noteEl = el('p', { class: 'detail-note full' }, notes);
-  st.noteEl.hidden = !notes;
+  st.noteEl = el('p', { class: 'detail-note full', hidden: true });
   panel.append(st.noteEl);
   const intradayCard = el('div', { class: 'chart-card' }, el('h3', {}, 'Today by hour ', el('span', { class: 'sub tz-label' }, zoneLabel())));
-  const intraday = el('div');
-  intradayCard.append(intraday);
+  st.intradayEl = el('div');
+  intradayCard.append(st.intradayEl);
   const dailyCard = el('div', { class: 'chart-card' }, el('h3', {}, 'Daily crashes'));
-  const daily = el('div');
-  dailyCard.append(daily);
+  st.dailyEl = el('div');
+  dailyCard.append(st.dailyEl);
   panel.append(intradayCard, dailyCard);
-  td.append(panel);
+  st.td.append(panel);
   st.panel = panel;
   for (const c of Object.values(st.charts)) c.destroy?.();
-  st.charts.intraday = barChart(intraday, hourlySpec(data, { emptyMessage: 'No hourly data for this signature', ariaLabel: `Crashes per hour today, ${midTruncate(r.signature, 60)}` }));
-  st.charts.daily = lineChart(daily, dailySpec(data, { ariaLabel: `Daily crashes, ${midTruncate(r.signature, 60)}` }));
+  st.charts = {};
+}
+
+/** Build the expanded panel once; later refreshes update its text and charts in place
+ * (keeps chart zoom, log/table toggles and focus). */
+function renderSignaturePanel(st) {
+  const { data, row } = st;
+  const r = data.row || row;
+  const shortSignature = midTruncate(r.signature, 60);
+  const intraday = hourlySpec(data, { emptyMessage: 'No hourly data for this signature', ariaLabel: `Crashes per hour today, ${shortSignature}` });
+  const daily = dailySpec(data, { ariaLabel: `Daily crashes, ${shortSignature}` });
+  const create = !st.panel || !st.panel.isConnected;
+  if (create) createSignaturePanel(st);
+
+  st.modelEl.textContent = signatureModelText(data, r);
+  const notes = signatureNotes(data, r);
+  st.noteEl.textContent = notes;
+  st.noteEl.hidden = !notes;
+  if (create) {
+    st.charts.intraday = barChart(st.intradayEl, intraday);
+    st.charts.daily = lineChart(st.dailyEl, daily);
+  } else {
+    st.charts.intraday.update(intraday);
+    st.charts.daily.update(daily);
+  }
 }
 
 async function refreshExpanded() {
@@ -1143,15 +1143,19 @@ function focusSignature(sig) {
   const rows = app.channel?.signatures || [];
   const row = rows.find((r) => r.signature === sig);
   if (!row) { showError(`No scored row today for "${midTruncate(sig, 80)}" in ${app.selected?.product} ${app.selected?.channel}`); return; }
-  const f = app.filters;
+  const filters = readFilters();
+  const category = rowCategory(row);
   let changed = false;
-  if (row.noise && f.hideNoise) { f.hideNoise = false; $('hide-noise').checked = false; changed = true; }
-  if (sevOf(row) === 'ok' && !row.is_new && row.storm && !f.showStorms) { f.showStorms = true; $('show-storms').checked = true; changed = true; }
-  else if (sevOf(row) === 'ok' && !row.is_new && !row.storm && !f.showUnflagged) { f.showUnflagged = true; $('show-unflagged').checked = true; changed = true; }
-  if (f.text && !sig.toLowerCase().includes(f.text.toLowerCase())) { f.text = ''; $('sig-search').value = ''; changed = true; }
-  if ((row.observed || 0) < f.minCrashes) { f.minCrashes = 0; $('min-crashes').value = '0'; changed = true; }
-  const s = sevOf(row);
-  if (s !== 'ok' && !f.sev.has(s)) { f.sev.add(s); document.querySelector(`#sig-filters input[value="${s}"]`).checked = true; changed = true; }
+  if (row.noise && filters.hideNoise) { $('hide-noise').checked = false; changed = true; }
+  if (category === 'storm' && !filters.showStorms) { $('show-storms').checked = true; changed = true; }
+  else if (category === 'unflagged' && !filters.showUnflagged) { $('show-unflagged').checked = true; changed = true; }
+  if (filters.text && !sig.toLowerCase().includes(filters.text)) { $('sig-search').value = ''; changed = true; }
+  if ((row.observed || 0) < filters.minCrashes) { $('min-crashes').value = '0'; changed = true; }
+  if (category === 'flagged' && !matchesSeverityFilter(row, filters.severities)) {
+    const severity = sevOf(row) === 'ok' ? 'new' : sevOf(row);
+    document.querySelector(`#sig-filters input[value="${severity}"]`).checked = true;
+    changed = true;
+  }
   if (changed || !document.querySelector(`#signature-table tr.row[data-sig="${cssEscape(sig)}"]`)) renderSignatures();
   const tr = document.querySelector(`#signature-table tr.row[data-sig="${cssEscape(sig)}"]`);
   if (!tr) return;
@@ -1164,7 +1168,7 @@ function focusSignature(sig) {
 
 // ---------------------------------------------------------------- controls
 function bindControls() {
-  // cards are updated in place: one delegated click handler
+  // Cards are rebuilt on refresh, so their click handler is delegated.
   $('channel-cards').addEventListener('click', (e) => {
     const card = e.target.closest('.card');
     if (!card) return;
@@ -1180,22 +1184,14 @@ function bindControls() {
   const filters = $('sig-filters');
   filters.addEventListener('submit', (e) => e.preventDefault());
   filters.addEventListener('change', (e) => {
-    const f = app.filters;
-    if (e.target.name === 'sev') { if (e.target.checked) f.sev.add(e.target.value); else f.sev.delete(e.target.value); }
-    if (e.target.id === 'hide-noise') f.hideNoise = e.target.checked;
-    if (e.target.id === 'show-unflagged') f.showUnflagged = e.target.checked;
-    if (e.target.id === 'show-storms') f.showStorms = e.target.checked;
-    if (e.target.id === 'min-crashes') f.minCrashes = Math.max(0, Number(e.target.value) || 0);
-    renderSignatures();
+    if (e.target.id !== 'sig-search' && e.target.id !== 'min-crashes') renderSignatures();
   });
   let timer = null;
-  $('sig-search').addEventListener('input', (e) => {
+  filters.addEventListener('input', (e) => {
+    const delay = e.target.id === 'sig-search' ? 120 : e.target.id === 'min-crashes' ? 200 : null;
+    if (delay == null) return;
     clearTimeout(timer);
-    timer = setTimeout(() => { app.filters.text = e.target.value; renderSignatures(); }, 120);
-  });
-  $('min-crashes').addEventListener('input', (e) => {
-    clearTimeout(timer);
-    timer = setTimeout(() => { app.filters.minCrashes = Math.max(0, Number(e.target.value) || 0); renderSignatures(); }, 200);
+    timer = setTimeout(renderSignatures, delay);
   });
   window.addEventListener('hashchange', () => {
     const h = parseHash();
