@@ -249,11 +249,12 @@ def _chunks(items, size=CHUNK):
         yield items[i:i + size]
 
 
-def upsert(model, rows, keys):
-    """Insert *rows* into *model*, updating the non-key columns on conflict.
+def upsert(model, rows, keys, ignore_conflicts=False):
+    """Insert *rows* into *model*, updating the non-key columns on conflict
+    (or leaving the existing row alone with ``ignore_conflicts``).
 
-    Uses ``ON CONFLICT DO UPDATE`` on PostgreSQL and SQLite.  Rows may have
-    different key sets: they are grouped so every statement is homogeneous.
+    Uses ``ON CONFLICT`` on PostgreSQL and SQLite.  Rows may have different
+    key sets: they are grouped so every statement is homogeneous.
     """
     rows = [r for r in rows if r]
     if not rows:
@@ -269,7 +270,8 @@ def upsert(model, rows, keys):
     for r in rows:
         groups.setdefault(tuple(sorted(r)), []).append(r)
     for cols, group in groups.items():
-        update_cols = [c for c in cols if c not in keys]
+        update_cols = [] if ignore_conflicts else \
+            [c for c in cols if c not in keys]
         for chunk in _chunks(group, 200):
             stmt = insert(model.__table__).values(chunk)
             if update_cols:
@@ -304,10 +306,13 @@ def series_ids(product, channel, signatures, create=True, noise=None):
         res.update(dict(db.session.execute(q).all()))
     missing = signatures - set(res)
     if missing and create:
-        db.session.execute(sa.insert(Series), [
+        # another process (the clock job next to a one-off backfill) may
+        # create the same series concurrently: ignore the conflict
+        upsert(Series, [
             {'product': product, 'channel': channel, 'signature': s,
              'noise': bool(noise(s)) if noise and s != TOTAL else False}
-            for s in sorted(missing)])
+            for s in sorted(missing)],
+            ['product', 'channel', 'signature'], ignore_conflicts=True)
         for chunk in _chunks(missing):
             q = sa.select(Series.signature, Series.id).where(
                 Series.product == product, Series.channel == channel,
