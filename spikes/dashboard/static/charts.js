@@ -677,6 +677,12 @@ export function zoneLabel(local = useLocalTime()) {
   return short && short !== offset ? `${short} (${offset})` : offset;
 }
 
+/** Short name of the local zone for the toggle button: "CEST" when the browser knows it, else "UTC+2". */
+export function localZoneShort() {
+  const label = zoneLabel(true);
+  return label.includes(' (') ? label.slice(0, label.indexOf(' (')) : label;
+}
+
 /** Label of the start of UTC hour *h* of *day* ("YYYY-MM-DD"), in UTC or local time. */
 export function hourLabel(day, h, local = useLocalTime()) {
   if (!local) return `${String(h % 24).padStart(2, '0')}:00`;
@@ -700,6 +706,7 @@ export function barChart(container, spec) {
       { key: 'table', label: 'Table', onToggle: (on) => f.showTable(on) },
     ],
   });
+  f.buttons.tz.textContent = `Local time (${localZoneShort()})`;
   const syncTz = () => { f.buttons.tz.setAttribute('aria-pressed', String(useLocalTime())); };
   syncTz();
   const onTz = () => { syncTz(); render(); };
