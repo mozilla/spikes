@@ -39,7 +39,7 @@ uv run coverage report
 
 ## Deployment
 
-The app runs on Heroku (`heroku-24` stack). The Python buildpack reads the
+The app runs on Heroku (`heroku-26` stack). The Python buildpack reads the
 Python version from `.python-version` and installs the dependencies from
 `uv.lock` with `uv sync --locked`, so the lock file must be up to date:
 
