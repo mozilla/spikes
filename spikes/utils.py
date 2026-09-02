@@ -8,7 +8,7 @@ from libmozdata import utils
 
 
 def get_products():
-    return ['Firefox', 'FennecAndroid']
+    return ['Firefox', 'Fenix']
 
 
 def get_channels():
@@ -83,7 +83,7 @@ def get_correct_product(p):
     if isinstance(p, str):
         p = p.lower()
         prods = {'firefox': 'Firefox',
-                 'fennecandroid': 'FennecAndroid'}
+                 'fenix': 'Fenix'}
         return prods.get(p, 'Firefox')
     return 'Firefox'
 
