@@ -279,6 +279,8 @@ table.rows tr.row-detail td { padding: 4px 12px 14px; white-space: normal; }
 .detail-model { font-size: 12.5px; color: var(--ink-2); margin: 0 0 6px; }
 .detail-note { font-size: 12.5px; color: var(--ink-2); margin: 0; }
 .copy-btn { border: 0; background: transparent; color: var(--muted); cursor: pointer; padding: 0 4px; font-size: 12px; border-radius: 4px; vertical-align: middle; }
+.perma-btn { color: var(--muted); text-decoration: none; padding: 0 4px; font-size: 12px; border-radius: 4px; vertical-align: middle; }
+.perma-btn:hover, .copy-btn:hover { color: var(--ink); }
 .copy-btn:hover { color: var(--ink); background: var(--hover); }
 .copy-btn:focus-visible { outline: 2px solid var(--focus); }
 .bug-closed { text-decoration: line-through; color: var(--ink-2); }

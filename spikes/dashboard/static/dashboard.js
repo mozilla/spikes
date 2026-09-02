@@ -123,7 +123,10 @@ async function refresh({ initial = false } = {}) {
     const target = app.selected || defaultChannel();
     if (isAll(target)) {
       if (changed || !app.selected) selectAll();
-    } else if (target) await loadChannel(target.product, target.channel);
+    } else if (target) {
+      if (!app.selected && target.signature) app.pendingFocus = target.signature; // deep link to a signature
+      await loadChannel(target.product, target.channel);
+    }
     showError('');
   } catch (e) {
     const asOf = app.summary?.as_of ? ` — showing data from ${fmtTime(app.summary.as_of)}` : '';
@@ -285,17 +288,33 @@ function channelKey(c) {
   return isAll(c) ? ALL_KEY : `${c.product}/${c.channel}`;
 }
 
+/** `#all`, `#Product/channel` or `#Product/channel/<encoded signature>`
+ * (the signature part is percent-encoded, so its own slashes are safe). */
 function parseHash() {
-  const h = decodeURIComponent(location.hash.slice(1));
-  if (h === ALL_KEY) return ALL;
-  const m = h.match(/^([^/]+)\/([^/]+)$/);
-  return m ? { product: m[1], channel: m[2] } : null;
+  const raw = location.hash.slice(1);
+  if (!raw) return null;
+  if (decodeURIComponent(raw) === ALL_KEY) return ALL;
+  const parts = raw.split('/');
+  if (parts.length < 2 || !parts[0] || !parts[1]) return null;
+  const res = { product: decodeURIComponent(parts[0]), channel: decodeURIComponent(parts[1]) };
+  if (parts.length > 2 && parts.slice(2).join('/')) res.signature = decodeURIComponent(parts.slice(2).join('/'));
+  return res;
 }
 
-function updateHash() {
+function channelHash(product, channel, signature = null) {
+  let hash = `#${encodeURIComponent(product)}/${encodeURIComponent(channel)}`;
+  if (signature) hash += `/${encodeURIComponent(signature)}`;
+  return hash;
+}
+
+function updateHash(signature = null) {
   if (!app.selected) return;
-  const hash = isAll(app.selected) ? `#${ALL_KEY}`
-    : `#${encodeURIComponent(app.selected.product)}/${encodeURIComponent(app.selected.channel)}`;
+  if (!isAll(app.selected) && !signature) {
+    // keep a signature deep link in the address bar while its channel is shown
+    const current = parseHash();
+    if (current && !isAll(current) && current.signature && channelKey(current) === channelKey(app.selected)) return;
+  }
+  const hash = isAll(app.selected) ? `#${ALL_KEY}` : channelHash(app.selected.product, app.selected.channel, signature);
   if (location.hash !== hash) history.replaceState(null, '', hash);
 }
 
@@ -305,7 +324,7 @@ function defaultChannel() {
   if (!channels.length) return null;
   const fromHash = parseHash();
   if (isAll(fromHash)) return ALL;
-  if (fromHash && channels.some((c) => c.product === fromHash.product && c.channel === fromHash.channel)) return fromHash;
+  if (fromHash && channels.some((c) => c.product === fromHash.product && c.channel === fromHash.channel)) return fromHash; // may carry a signature
   return ALL;
 }
 
@@ -932,6 +951,18 @@ function buildRow(row, cols, withChannel, onRow) {
     } catch { announce('Could not copy the signature'); }
   });
   sigCell.append(copy);
+  if (!withChannel) {
+    const permalink = el('a', { class: 'perma-btn', href: channelHash(row.product || app.selected?.product, row.channel || app.selected?.channel, row.signature),
+      title: 'Link to this signature', 'aria-label': 'Link to this signature', 'data-focus': `perma:${row.signature}` }, '#');
+    permalink.addEventListener('click', (e) => {
+      e.stopPropagation();
+      e.preventDefault();
+      history.replaceState(null, '', permalink.getAttribute('href'));
+      focusSignature(row.signature);
+      announce('Link to this signature is in the address bar');
+    });
+    sigCell.append(permalink);
+  }
   tr.append(sigCell);
   tr.append(el('td', { class: 'num' }, fmtInt(row.observed)));
   tr.append(el('td', { class: 'num' }, fmtInt(row.expected)));
@@ -1104,7 +1135,7 @@ function clearExpanded() {
 function focusSignature(sig) {
   const rows = app.channel?.signatures || [];
   const row = rows.find((r) => r.signature === sig);
-  if (!row) return;
+  if (!row) { showError(`No scored row today for "${midTruncate(sig, 80)}" in ${app.selected?.product} ${app.selected?.channel}`); return; }
   const f = app.filters;
   let changed = false;
   if (row.noise && f.hideNoise) { f.hideNoise = false; $('hide-noise').checked = false; changed = true; }
@@ -1161,9 +1192,10 @@ function bindControls() {
   });
   window.addEventListener('hashchange', () => {
     const h = parseHash();
-    if (!h || !app.summary || (app.selected && channelKey(h) === channelKey(app.selected))) return;
-    if (isAll(h)) selectAll();
-    else selectChannel(h.product, h.channel);
+    if (!h || !app.summary) return;
+    if (isAll(h)) { if (!isAll(app.selected)) selectAll(); return; }
+    const same = app.selected && channelKey(h) === channelKey(app.selected);
+    if (!same || h.signature) selectChannel(h.product, h.channel, h.signature || null);
   });
   // the sticky toolbar's height offsets anchored scrolls (scroll-margin-top)
   const toolbar = $('toolbar');
