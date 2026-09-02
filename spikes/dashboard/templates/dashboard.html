@@ -13,10 +13,11 @@
   <header class="page-header">
     <div class="header-row">
       <h1>Crash spikes</h1>
-      <p id="freshness" class="freshness" aria-live="polite"></p>
+      <p id="freshness" class="freshness"></p>
     </div>
     <p id="error-line" class="error-line" role="alert" hidden></p>
-    <div id="banner" class="banner" role="status" hidden></div>
+    <div id="banner" class="banner" role="status"></div>
+    <div id="sr-status" class="visually-hidden" role="status"></div>
   </header>
   <section id="overview" aria-labelledby="overview-title">
     <h2 id="overview-title" class="visually-hidden">Channels</h2>
@@ -79,7 +80,7 @@
 
     <div class="section-head">
       <h3 id="signatures-title">Signatures</h3>
-      <p id="signatures-meta" class="meta"></p>
+      <p id="signatures-meta" class="meta" role="status"></p>
     </div>
     <form id="sig-filters" class="filter-row" aria-label="Signature filters">
       <div class="chip-toggles" role="group" aria-label="Severity">
@@ -91,7 +92,7 @@
       </div>
       <input id="sig-search" type="search" placeholder="Filter signatures" aria-label="Filter signatures" autocomplete="off">
       <label class="check"><input type="checkbox" id="hide-noise" checked><span>hide noise</span></label>
-      <label class="check">min crashes <input type="number" id="min-crashes" min="0" step="1" value="0" aria-label="Minimum crashes today"></label>
+      <label class="check">min crashes <input type="number" id="min-crashes" min="0" step="1" value="0" title="Minimum crashes observed today"></label>
       <label class="check"><input type="checkbox" id="show-storms"><span>show <span id="storm-count">0 storms</span></span></label>
       <label class="check"><input type="checkbox" id="show-unflagged"><span>show <span id="unflagged-count">0</span> unflagged</span></label>
     </form>

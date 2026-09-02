@@ -328,6 +328,24 @@ class CollectTest(DBTestCase):
         self.assertIn(today, starts)
         self.assertNotIn(datetime.date(2026, 9, 1), starts)
 
+    def test_empty_signature_does_not_clobber_total(self):
+        data = load('socorro_daily.json')
+        # Socorro sometimes reports crashes with an empty signature
+        for bucket in data['facets']['histogram_date']:
+            bucket['facets']['signature'].append({'term': '', 'count': 3})
+        unit = collect.Unit('daily', 'Firefox', 'nightly',
+                            datetime.date(2026, 8, 18),
+                            datetime.date(2026, 9, 1))
+        collect.write_daily(unit, socorro.parse_daily(data), NOW, TODAY)
+        db.session.commit()
+        total_id = models.total_series('Firefox', 'nightly')
+        day = datetime.date(2026, 8, 18)
+        self.assertEqual(models.load_daily([total_id], day, day)[total_id][
+            day][0], 21458)
+        s = models.get_series('Firefox', 'nightly', socorro.EMPTY_SIGNATURE)
+        self.assertEqual(models.load_daily([s.id], day, day)[s.id][day][0],
+                         3)
+
     def test_write_marks_noise(self):
         data = load('socorro_day.json')
         data['facets']['signature'].append(

@@ -70,6 +70,28 @@ function showError(msg) {
   line.hidden = !msg;
 }
 
+/** Polite screen-reader announcement (a persistent live region). */
+function announce(msg) {
+  const r = $('sr-status');
+  if (!r) return;
+  r.textContent = '';
+  setTimeout(() => { r.textContent = msg; }, 50);
+}
+
+/** Key of the focused control inside *container* (data-focus attribute), for restoring
+ * focus after the container is rebuilt. */
+function focusedKey(container) {
+  const a = document.activeElement;
+  if (!a || !container.contains(a)) return null;
+  return a.closest('[data-focus]')?.dataset.focus || null;
+}
+
+function restoreFocus(container, key) {
+  if (!key) return;
+  const target = [...container.querySelectorAll('[data-focus]')].find((n) => n.dataset.focus === key);
+  target?.focus({ preventScroll: true });
+}
+
 async function refresh({ initial = false } = {}) {
   setRefreshing(true);
   try {
@@ -114,8 +136,8 @@ async function loadChannel(product, channel) {
   }
   app.versions.channel = key;
   app.channel = data;
+  showView(); // final layout before renderDetail() may scroll to a row
   renderDetail();
-  showView();
   await refreshExpanded();
 }
 
@@ -378,7 +400,6 @@ function renderBanner(s) {
   const health = s.data_health || { status: 'ok' };
   banner.textContent = '';
   banner.className = 'banner';
-  banner.hidden = true;
   if (health.status === 'ok') return;
   let text = '';
   if (health.status === 'stale_upstream') {
@@ -397,7 +418,6 @@ function renderBanner(s) {
   banner.append(el('strong', {}, text));
   if (health.detail) banner.append(el('span', {}, health.detail));
   if (s.last_run?.status !== 'ok' && s.last_run?.message) banner.append(el('span', {}, `Last run: ${s.last_run.message}`));
-  banner.hidden = false;
 }
 
 // ---------------------------------------------------------------- overview cards
@@ -508,10 +528,12 @@ function renderAlerts(s) {
   const rows = (s.alerts || []).filter((r) => !(r.severity === 'drop' && app.hideDrops));
   $('flagged-meta').textContent = rows.length ? `${rows.length} flagged ${rows.length === 1 ? 'signature' : 'signatures'} across ${new Set(rows.map(channelKey)).size} channels` : 'Nothing flagged right now';
   const wrap = $('alerts-table');
+  const focus = focusedKey(wrap);
   wrap.textContent = '';
   if (!rows.length) return;
   const sorted = rows.slice().sort((a, b) => rowRank(a) - rowRank(b) || Math.abs(b.excess || 0) - Math.abs(a.excess || 0));
   wrap.append(buildTable(sorted, { withChannel: true, sortable: false, onRow: (row) => selectChannel(row.product, row.channel, row.signature) }));
+  restoreFocus(wrap, focus);
 }
 
 // ---------------------------------------------------------------- channel detail
@@ -608,6 +630,7 @@ function renderTiles(ch) {
 
 function renderDrivers(ch) {
   const p = $('drivers');
+  const focus = focusedKey(p);
   p.textContent = '';
   const drivers = (ch.total?.drivers || []).filter((d) => d.share != null);
   const note = stormNote(ch.total);
@@ -618,12 +641,13 @@ function renderDrivers(ch) {
   p.append('Driven by ');
   drivers.forEach((d, i) => {
     if (i) p.append(', ');
-    const link = el('a', { href: '#', title: d.signature, 'data-sig': d.signature }, `${midTruncate(d.signature, 48)} (${Math.round(d.share * 100)} %)`);
+    const link = el('a', { href: '#', title: d.signature, 'data-sig': d.signature, 'data-focus': `driver:${d.signature}` }, `${midTruncate(d.signature, 48)} (${Math.round(d.share * 100)} %)`);
     link.addEventListener('click', (e) => { e.preventDefault(); focusSignature(d.signature); });
     p.append(link);
     if (d.storm) p.append(' ', badge('crash-loop'), d.installs != null ? ` ${plural(d.installs, 'install')}` : '');
     if (d.noise) p.append(' ', badge('noise'));
   });
+  restoreFocus(p, focus);
 }
 
 function dailySpec(data, extra = {}) {
@@ -637,12 +661,14 @@ function hourlySpec(data, extra = {}) {
 
 function renderCharts(ch) {
   $('daily-sub').textContent = `${ch.daily?.start?.length || 0} ${ch.daily?.granularity === 'week' ? 'weeks' : 'days'}`;
+  const names = { hourly: { ariaLabel: `Crashes per hour today, ${ch.product} ${ch.channel}` },
+    daily: { ariaLabel: `Daily crashes, ${ch.product} ${ch.channel}` } };
   if (!app.charts.intraday) {
-    app.charts.intraday = barChart($('intraday-chart'), hourlySpec(ch));
-    app.charts.daily = lineChart($('daily-chart'), dailySpec(ch));
+    app.charts.intraday = barChart($('intraday-chart'), hourlySpec(ch, names.hourly));
+    app.charts.daily = lineChart($('daily-chart'), dailySpec(ch, names.daily));
   } else {
-    app.charts.intraday.update(hourlySpec(ch));
-    app.charts.daily.update(dailySpec(ch));
+    app.charts.intraday.update(hourlySpec(ch, names.hourly));
+    app.charts.daily.update(dailySpec(ch, names.daily));
   }
 }
 
@@ -755,8 +781,13 @@ function renderSignatures() {
   const { shown, unflaggedCount, stormCount, total } = visibleRows();
   $('unflagged-count').textContent = String(unflaggedCount);
   $('storm-count').textContent = plural(stormCount, 'storm');
-  $('signatures-meta').textContent = `${shown.length} of ${total} scored signatures shown`;
+  const metaText = total
+    ? `${shown.length} of ${total} scored signatures shown${shown.length ? '' : ' — no signature matches the current filters'}`
+    : 'No scored signatures yet';
+  const meta = $('signatures-meta');
+  if (meta.textContent !== metaText) meta.textContent = metaText; // role=status: announce changes only
   const wrap = $('signature-table');
+  const focus = focusedKey(wrap); // the table is rebuilt: keep the keyboard user's place
   wrap.textContent = '';
   const open = new Set(app.expanded.keys());
   if (!shown.length) {
@@ -769,6 +800,7 @@ function renderSignatures() {
     if (tr) reattachExpanded(tr, sig);
     else app.expanded.delete(sig);
   }
+  restoreFocus(wrap, focus);
 }
 
 function cssEscape(s) {
@@ -784,7 +816,7 @@ function columns(withChannel) {
     { key: 'observed', label: 'Today so far', num: true },
     { key: 'expected', label: 'Expected', num: true },
     { key: 'excess', label: 'Delta', num: true },
-    { key: 'recent', label: `Last ${hours}h`, num: true, title: 'observed / expected over the last hours' },
+    { key: 'recent', label: `Last ${hours}h`, num: true, hint: 'observed / expected', title: 'observed / expected over the last hours' },
     { key: 'installs', label: 'Installs', num: true },
     { key: 'since', label: 'Since' },
     { key: 'trend', label: '28 days' },
@@ -802,14 +834,19 @@ function buildTable(rows, { withChannel, sortable, onRow }) {
     if (sortable) {
       const active = app.sort.key === c.key;
       if (active) th.setAttribute('aria-sort', app.sort.dir === 'asc' ? 'ascending' : 'descending');
-      const btn = el('button', { type: 'button' }, c.label, el('span', { class: 'sort-ind', 'aria-hidden': 'true' }, active ? (app.sort.dir === 'asc' ? '▲' : '▼') : ''));
+      const btn = el('button', { type: 'button', 'data-focus': `sort:${c.key}` }, c.label,
+        c.hint ? el('span', { class: 'visually-hidden' }, `, ${c.hint}`) : '',
+        el('span', { class: 'sort-ind', 'aria-hidden': 'true' }, active ? (app.sort.dir === 'asc' ? '▲' : '▼') : ''));
       btn.addEventListener('click', () => {
         if (app.sort.key === c.key) app.sort.dir = app.sort.dir === 'asc' ? 'desc' : 'asc';
         else app.sort = { key: c.key, dir: DEFAULT_DIR[c.key] || 'desc' };
         renderSignatures();
       });
       th.append(btn);
-    } else th.textContent = c.label;
+    } else {
+      th.append(c.label);
+      if (c.hint) th.append(el('span', { class: 'visually-hidden' }, `, ${c.hint}`));
+    }
     hr.append(th);
   }
   thead.append(hr);
@@ -832,7 +869,7 @@ function buildRow(row, cols, withChannel, onRow) {
   if (row.noise) badges.append(badge('noise'));
   tr.append(el('td', {}, badges));
   if (withChannel) {
-    const open = el('button', { type: 'button', class: 'chip chip-neutral chip-btn',
+    const open = el('button', { type: 'button', class: 'chip chip-neutral chip-btn', 'data-focus': `open:${row.signature}`,
       'aria-label': `Open ${row.product} ${row.channel} at this signature` }, `${row.product} ${row.channel}`);
     open.addEventListener('click', (e) => { e.stopPropagation(); onRow(row, tr); });
     tr.append(el('td', {}, open));
@@ -840,32 +877,42 @@ function buildRow(row, cols, withChannel, onRow) {
   // signature
   const sigCell = el('td', { class: 'sig' });
   if (!withChannel) {
-    const expander = el('button', { type: 'button', class: 'row-expander', 'aria-expanded': 'false',
+    const expander = el('button', { type: 'button', class: 'row-expander', 'aria-expanded': 'false', 'data-focus': `exp:${row.signature}`,
       'aria-label': `Details of ${midTruncate(row.signature, 60)}` }, '▸');
     expander.addEventListener('click', (e) => { e.stopPropagation(); onRow(row, tr); });
     sigCell.append(expander);
   }
-  sigCell.append(el('a', { href: row.socorro_url || '#', title: row.signature, target: '_blank', rel: 'noopener' }, midTruncate(row.signature, 70)));
-  const copy = el('button', { type: 'button', class: 'copy-btn', 'aria-label': 'Copy signature', title: 'Copy signature' }, '⧉');
+  sigCell.append(el('a', { href: row.socorro_url || '#', title: row.signature, target: '_blank', rel: 'noopener', 'data-focus': `link:${row.signature}` }, midTruncate(row.signature, 70)));
+  const copy = el('button', { type: 'button', class: 'copy-btn', 'aria-label': 'Copy signature', title: 'Copy signature', 'data-focus': `copy:${row.signature}` }, '⧉');
   copy.addEventListener('click', async (e) => {
     e.stopPropagation();
-    try { await navigator.clipboard.writeText(row.signature); copy.textContent = '✓'; setTimeout(() => { copy.textContent = '⧉'; }, 1200); } catch { /* clipboard unavailable */ }
+    try {
+      await navigator.clipboard.writeText(row.signature);
+      copy.textContent = '✓';
+      announce('Signature copied');
+      setTimeout(() => { copy.textContent = '⧉'; }, 1200);
+    } catch { announce('Could not copy the signature'); }
   });
   sigCell.append(copy);
   tr.append(sigCell);
   tr.append(el('td', { class: 'num' }, fmtInt(row.observed)));
   tr.append(el('td', { class: 'num' }, fmtInt(row.expected)));
   const ratio = fmtRatio(row.ratio);
-  tr.append(el('td', { class: 'num', title: row.z != null ? `z ${fmtZ(row.z)}` : 'not scored' }, `${fmtSigned(row.excess)}${ratio ? ` ${ratio}` : ''}`, dots(row.confidence)));
+  // scores live in title attributes for mouse users and as hidden text for the rest
+  const hidden = (text) => el('span', { class: 'visually-hidden' }, text);
+  tr.append(el('td', { class: 'num', title: row.z != null ? `z ${fmtZ(row.z)}` : 'not scored' }, `${fmtSigned(row.excess)}${ratio ? ` ${ratio}` : ''}`, dots(row.confidence),
+    row.z != null ? hidden(` (z ${fmtZ(row.z)})`) : ''));
   if (row.recent && row.recent.z != null) {
-    tr.append(el('td', { class: 'num', title: `z ${fmtZ(row.recent.z)}${row.recent.ratio != null ? ` · ${fmtRatio(row.recent.ratio)}` : ''}` }, `${fmtInt(row.recent.observed)} / ${fmtInt(row.recent.expected)}`));
+    tr.append(el('td', { class: 'num', title: `z ${fmtZ(row.recent.z)}${row.recent.ratio != null ? ` · ${fmtRatio(row.recent.ratio)}` : ''}` },
+      `${fmtInt(row.recent.observed)} / ${fmtInt(row.recent.expected)}`, hidden(` (z ${fmtZ(row.recent.z)})`)));
   } else if (row.recent) {
     // too few expected crashes to score the window: show the activity, muted
-    tr.append(el('td', { class: 'num muted', title: row.recent_reason || 'not scored' }, `${fmtInt(row.recent.observed)} / ${fmtInt(row.recent.expected)}`));
+    tr.append(el('td', { class: 'num muted', title: row.recent_reason || 'not scored' }, `${fmtInt(row.recent.observed)} / ${fmtInt(row.recent.expected)}`,
+      hidden(` (${row.recent_reason || 'not scored'})`)));
   } else {
-    tr.append(el('td', { class: 'num' }, el('span', { class: 'dash', title: row.recent_reason || 'not scorable' }, '—')));
+    tr.append(el('td', { class: 'num' }, el('span', { class: 'dash', title: row.recent_reason || 'not scorable' }, '—'), hidden(row.recent_reason || 'not scorable')));
   }
-  const inst = el('td', { class: 'num', title: installsTitle(row) }, fmtInt(row.installs));
+  const inst = el('td', { class: 'num', title: installsTitle(row) }, fmtInt(row.installs), el('span', { class: 'visually-hidden' }, ` (${installsTitle(row)})`));
   if (row.storm) inst.append(' ', badge('crash-loop'));
   tr.append(inst);
   tr.append(el('td', { class: 'since' }, sev === 'ok' && !row.is_new ? '—' : sinceText(row)));
@@ -886,8 +933,8 @@ function buildRow(row, cols, withChannel, onRow) {
 
 function bugCell(bugs) {
   const td = el('td', { class: 'num' });
-  if (bugs?.open) td.append(el('a', { href: `https://bugzilla.mozilla.org/${bugs.open}`, target: '_blank', rel: 'noopener', title: 'Open bug' }, String(bugs.open)));
-  else if (bugs?.closed) td.append(el('a', { class: 'bug-closed', href: `https://bugzilla.mozilla.org/${bugs.closed}`, target: '_blank', rel: 'noopener', title: 'Closed bug' }, String(bugs.closed)));
+  if (bugs?.open) td.append(el('a', { href: `https://bugzilla.mozilla.org/${bugs.open}`, target: '_blank', rel: 'noopener', title: 'Open bug' }, String(bugs.open), el('span', { class: 'visually-hidden' }, ' (open bug)')));
+  else if (bugs?.closed) td.append(el('a', { class: 'bug-closed', href: `https://bugzilla.mozilla.org/${bugs.closed}`, target: '_blank', rel: 'noopener', title: 'Closed bug' }, String(bugs.closed), el('span', { class: 'visually-hidden' }, ' (closed bug)')));
   else td.append(el('span', { class: 'dash' }, '—'));
   return td;
 }
@@ -917,9 +964,11 @@ function expandRow(row, tr) {
   tr.classList.add('is-expanded');
   const btn = tr.querySelector('.row-expander');
   if (btn) { btn.setAttribute('aria-expanded', 'true'); btn.textContent = '▾'; }
-  const st = { tr, detail, td, charts: {}, row, data: null };
+  const status = el('p', { class: 'detail-note', role: 'status' });
+  const st = { tr, detail, td, charts: {}, row, data: null, statusEl: status };
   app.expanded.set(row.signature, st);
-  td.append(el('p', { class: 'detail-note' }, 'Loading…'));
+  td.append(status);
+  setTimeout(() => { if (!st.panel) status.textContent = 'Loading…'; }, 50); // live region exists before its text
   loadSignature(st);
 }
 
@@ -945,7 +994,9 @@ async function loadSignature(st) {
   } catch (e) {
     st.panel = null;
     st.td.textContent = '';
-    st.td.append(el('p', { class: 'detail-note' }, `Could not load this signature (${e.message})`));
+    st.statusEl.className = 'detail-note';
+    st.statusEl.textContent = `Could not load this signature (${e.message})`;
+    st.td.append(st.statusEl);
   }
 }
 
@@ -973,11 +1024,16 @@ function renderSignaturePanel(st) {
     const notes = signatureNotes(data, r);
     st.noteEl.textContent = notes;
     st.noteEl.hidden = !notes;
-    st.charts.intraday?.update(hourlySpec(data, { emptyMessage: 'No hourly data for this signature' }));
-    st.charts.daily?.update(dailySpec(data));
+    st.charts.intraday?.update(hourlySpec(data, { emptyMessage: 'No hourly data for this signature', ariaLabel: `Crashes per hour today, ${midTruncate(r.signature, 60)}` }));
+    st.charts.daily?.update(dailySpec(data, { ariaLabel: `Daily crashes, ${midTruncate(r.signature, 60)}` }));
     return;
   }
   td.textContent = '';
+  if (st.statusEl) {
+    st.statusEl.className = 'visually-hidden';
+    st.statusEl.textContent = 'Details loaded';
+    td.append(st.statusEl);
+  }
   const panel = el('div', { class: 'detail-panel' });
   st.modelEl = el('p', { class: 'detail-model full' }, signatureModelText(data, r));
   panel.append(st.modelEl);
@@ -995,8 +1051,8 @@ function renderSignaturePanel(st) {
   td.append(panel);
   st.panel = panel;
   for (const c of Object.values(st.charts)) c.destroy?.();
-  st.charts.intraday = barChart(intraday, hourlySpec(data, { emptyMessage: 'No hourly data for this signature' }));
-  st.charts.daily = lineChart(daily, dailySpec(data));
+  st.charts.intraday = barChart(intraday, hourlySpec(data, { emptyMessage: 'No hourly data for this signature', ariaLabel: `Crashes per hour today, ${midTruncate(r.signature, 60)}` }));
+  st.charts.daily = lineChart(daily, dailySpec(data, { ariaLabel: `Daily crashes, ${midTruncate(r.signature, 60)}` }));
 }
 
 async function refreshExpanded() {
@@ -1024,7 +1080,7 @@ function focusSignature(sig) {
   const tr = document.querySelector(`#signature-table tr.row[data-sig="${cssEscape(sig)}"]`);
   if (!tr) return;
   if (!app.expanded.has(sig)) expandRow(row, tr);
-  tr.scrollIntoView({ behavior: 'smooth', block: 'center' });
+  tr.scrollIntoView({ behavior: 'smooth', block: 'start' }); // scroll-padding keeps it below the toolbar
   tr.classList.add('is-target');
   tr.focus({ preventScroll: true });
   setTimeout(() => tr.classList.remove('is-target'), 2500);

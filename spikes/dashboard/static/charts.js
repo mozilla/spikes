@@ -304,7 +304,7 @@ function hoverLayer(root, box, pxs, onIndex, onBrush, describe) {
     'aria-orientation': 'horizontal', 'aria-valuemin': 0, 'aria-valuemax': Math.max(0, pxs.length - 1),
     'aria-valuenow': Math.max(0, pxs.length - 1),
     'aria-label': onBrush
-      ? 'Chart reader: arrow keys move between points, Escape closes; drag to zoom, double-click to reset'
+      ? 'Chart reader: arrow keys move between points, Escape closes; Shift+arrows select a range and Enter zooms on it, Backspace resets the zoom'
       : 'Chart reader: arrow keys move between points, Escape closes',
   });
   let index = -1;
@@ -348,7 +348,7 @@ function hoverLayer(root, box, pxs, onIndex, onBrush, describe) {
     set(nearestIndex(pxs, localX(e)));
   });
   const set = (i) => {
-    index = i;
+    index = i == null ? -1 : i; // null would pass `index >= 0`
     if (i == null || i < 0) { cross.setAttribute('visibility', 'hidden'); onIndex(null); return; }
     cross.setAttribute('x1', pxs[i]);
     cross.setAttribute('x2', pxs[i]);
@@ -361,15 +361,43 @@ function hoverLayer(root, box, pxs, onIndex, onBrush, describe) {
   overlay.addEventListener('pointerleave', () => { if (!drag) set(null); });
   overlay.addEventListener('focus', () => set(index >= 0 ? index : pxs.length - 1));
   overlay.addEventListener('blur', () => set(null));
+  // keyboard zoom: Shift+Arrow extends a selection from an anchor, Enter zooms
+  // on it, Backspace/Delete resets the zoom, Escape drops the selection
+  let anchor = null;
+  const showBrush = (a, b) => {
+    const lo = pxs[Math.min(a, b)], hi = pxs[Math.max(a, b)];
+    brush.setAttribute('x', Math.max(box.left, lo - 3));
+    brush.setAttribute('width', Math.max(0, Math.min(box.right, hi + 3) - Math.max(box.left, lo - 3)));
+    brush.setAttribute('visibility', 'visible');
+  };
+  const clearBrush = () => { anchor = null; brush.setAttribute('visibility', 'hidden'); };
   overlay.addEventListener('keydown', (e) => {
     const n = pxs.length;
     const cur = index >= 0 ? index : n - 1;
+    if (onBrush && e.shiftKey && (e.key === 'ArrowLeft' || e.key === 'ArrowRight')) {
+      e.preventDefault();
+      if (anchor == null) anchor = cur;
+      const next = Math.max(0, Math.min(n - 1, cur + (e.key === 'ArrowRight' ? 1 : -1)));
+      set(next);
+      showBrush(anchor, next);
+      return;
+    }
+    if (onBrush && e.key === 'Enter' && anchor != null && anchor !== cur) {
+      e.preventDefault();
+      const a = Math.min(anchor, cur), b = Math.max(anchor, cur);
+      clearBrush();
+      onBrush(a, b);
+      return;
+    }
+    if (onBrush && (e.key === 'Backspace' || e.key === 'Delete')) { e.preventDefault(); clearBrush(); onBrush(null); return; }
+    if (e.key === 'Escape') { if (anchor != null) clearBrush(); else set(null); return; }
     const map = { ArrowLeft: cur - 1, ArrowRight: cur + 1, Home: 0, End: n - 1 };
-    if (e.key === 'Escape') { set(null); return; }
     if (!(e.key in map)) return;
     e.preventDefault();
+    if (anchor != null && !e.shiftKey) clearBrush();
     set(Math.max(0, Math.min(n - 1, map[e.key])));
   });
+  overlay.addEventListener('blur', clearBrush);
   root.append(brush, cross, overlay);
   return { cross, overlay };
 }
@@ -420,6 +448,9 @@ export function lineChart(container, spec) {
   }
 
   function render() {
+    // keep keyboard focus on the chart reader across re-renders (setEmpty
+    // below already drops the old svg)
+    const hadFocus = f.plot.contains(document.activeElement) && document.activeElement.classList.contains('overlay');
     const s = state.zoom ? sliceSpec(state.spec, state.zoom[0], state.zoom[1]) : state.spec;
     const width = f.container.clientWidth;
     if (width < 40) return;
@@ -544,6 +575,7 @@ export function lineChart(container, spec) {
     }, (i) => `${bucketTitle(i)}: ${tipRows(i).map((r) => `${r.label} ${r.value}`).join(', ')}`);
     f.plot.querySelector('svg')?.remove();
     f.plot.prepend(root);
+    if (hadFocus) root.querySelector('.overlay')?.focus({ preventScroll: true });
 
     function bucketTitle(i) {
       return weekly ? `Week of ${fmtDate(xs[i], true)}` : fmtDateLong(xs[i]);
@@ -630,6 +662,7 @@ export function barChart(container, spec) {
   });
 
   function render() {
+    const hadFocus = f.plot.contains(document.activeElement) && document.activeElement.classList.contains('overlay');
     const s = state.spec;
     const width = f.container.clientWidth;
     if (width < 40) return;
@@ -708,6 +741,7 @@ export function barChart(container, spec) {
     root.querySelector('.crosshair')?.remove();
     f.plot.querySelector('svg')?.remove();
     f.plot.prepend(root);
+    if (hadFocus) root.querySelector('.overlay')?.focus({ preventScroll: true });
 
     fillTable(f, 'Crashes per hour, table view', ['Hour (UTC)', 'Today', 'Expected', 'Yesterday'],
       hours.map((h, i) => [

@@ -90,6 +90,11 @@ class SocorroParsingTest(unittest.TestCase):
     def test_normalize_signature(self):
         self.assertEqual(socorro.normalize_signature('foo | bar'),
                          'foo | bar')
+        # an empty signature must never collide with the total's key ('')
+        self.assertEqual(socorro.normalize_signature(''),
+                         socorro.EMPTY_SIGNATURE)
+        self.assertEqual(socorro.normalize_signature('  '),
+                         socorro.EMPTY_SIGNATURE)
         norm = socorro.normalize_signature('foo | 0x1a2B | bar')
         self.assertEqual(norm, '"foo | "0x[0-9a-fA-F]+" | bar"')
         self.assertEqual(socorro.normalize_signature('foo | 0xdead'),

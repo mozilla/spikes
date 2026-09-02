@@ -56,6 +56,7 @@ from . import config
 
 
 HOURS = 24
+EMPTY_SIGNATURE = '(empty signature)'
 KINDS = ('day', 'recent', 'installs', 'daily', 'hourly_total')
 
 
@@ -94,6 +95,10 @@ def normalize_signature(signature):
     the legacy code uses and which SuperSearch accepts as a regex (with the
     ``@`` operator, see :func:`search_term`).
     """
+    # Socorro has reports with an empty signature; the empty string is the
+    # channel total's key in dashboard_series, so give them a name
+    if not signature or not signature.strip():
+        return EMPTY_SIGNATURE
     parts = ADDRESS_PAT.split(signature)
     if len(parts) == 1:
         return signature
