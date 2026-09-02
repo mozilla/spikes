@@ -2,12 +2,16 @@
 # License, v. 2.0. If a copy of the MPL was not distributed with this file,
 # You can obtain one at http://mozilla.org/MPL/2.0/.
 
-from flask import Flask, send_from_directory
+from flask import Flask, request, send_from_directory
 from flask_cors import CORS, cross_origin
 from flask_sqlalchemy import SQLAlchemy
 from libmozdata import config as lmdconfig
 from libmozdata.config import ConfigEnv
 import os
+
+
+IMMUTABLE_CACHE_CONTROL = 'public, max-age=31536000, immutable'
+IMMUTABLE_ASSET_SUFFIXES = ('.ico', '.png', '.svg', '.woff2')
 
 
 # libmozdata settings come from LIBMOZDATA_CFG_<SECTION>_<OPTION> environment
@@ -69,3 +73,13 @@ def spikes_js():
 @app.route('/spikes.css')
 def spikes_css():
     return send_from_directory('../static', 'spikes.css')
+
+
+@app.after_request
+def cache_immutable_assets(response):
+    """Let browsers keep stable image and font assets without revalidating."""
+    if response.status_code in (200, 206, 304) and \
+            request.endpoint in ('dashboard.static', 'favicon') and \
+            request.path.lower().endswith(IMMUTABLE_ASSET_SUFFIXES):
+        response.headers['Cache-Control'] = IMMUTABLE_CACHE_CONTROL
+    return response

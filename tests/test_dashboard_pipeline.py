@@ -91,6 +91,31 @@ class DBTestCase(unittest.TestCase):
         self.ctx.pop()
 
 
+class StaticAssetTest(unittest.TestCase):
+
+    def setUp(self):
+        self.client = app.test_client()
+
+    def test_images_and_fonts_are_cached_immutably(self):
+        paths = ('/favicon.ico',
+                 '/dashboard/static/favicon.png',
+                 '/dashboard/static/logo-firefox.svg',
+                 '/dashboard/static/ZillaSlabHighlight-Bold.woff2')
+        for path in paths:
+            with self.subTest(path=path), self.client.get(path) as response:
+                self.assertEqual(response.status_code, 200)
+                self.assertEqual(response.headers.get('Cache-Control'),
+                                 'public, max-age=31536000, immutable')
+
+    def test_code_assets_are_not_immutable(self):
+        for name in ('dashboard.css', 'dashboard.js'):
+            with self.subTest(name=name), self.client.get(
+                    f'/dashboard/static/{name}') as response:
+                self.assertEqual(response.status_code, 200)
+                self.assertNotIn('immutable',
+                                 response.headers.get('Cache-Control', ''))
+
+
 class ConfigTest(unittest.TestCase):
 
     def test_channels_per_product(self):
