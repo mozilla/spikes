@@ -739,7 +739,9 @@ export function barChart(container, spec) {
     root.append(band);
     root.append(svg('line', { class: 'baseline', x1: box.left, x2: box.right, y1: box.bottom, y2: box.bottom }));
     for (let i = 0; i < n; i++) {
-      if (tickAt(hours[i])) root.append(svg('text', { x: cx(i), y: box.bottom + 16, 'text-anchor': 'middle', text: hl(hours[i]) }));
+      // no tick label under the zone label at the right end of the axis
+      const zoneWidth = zone.length * 6.5 + 10;
+      if (tickAt(hours[i]) && cx(i) + 20 < box.right - zoneWidth) root.append(svg('text', { x: cx(i), y: box.bottom + 16, 'text-anchor': 'middle', text: hl(hours[i]) }));
     }
     root.append(svg('text', { class: 'lbl', x: box.right, y: box.bottom + 16, 'text-anchor': 'end', text: zone }));
 
