@@ -12,6 +12,9 @@ const SEV_RANK = { major: 0, spike: 1, watch: 2, new: 3, drop: 4, ok: 5 };
 const WDAYS = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
 const CHART_HEIGHT = 280;
 
+// Fenix is Firefox for Android: same logo
+const PRODUCT_LOGOS = { Firefox: 'logo-firefox.svg', Fenix: 'logo-firefox.svg', Thunderbird: 'logo-thunderbird.png' };
+
 const app = {
   summary: null,
   channel: null,
@@ -513,6 +516,9 @@ function channelCard(c) {
   }
   if (c.counts?.storm) counts.append(badge('storm', plural(c.counts.storm, 'storm')));
   card.append(counts);
+  // product logo, bottom right (decorative: the product is in the name)
+  const logo = PRODUCT_LOGOS[c.product];
+  if (logo) card.append(el('img', { class: 'card-logo', src: `/dashboard/static/${logo}`, alt: '', 'aria-hidden': 'true', width: 20, height: 20 }));
   return card;
 }
 
