@@ -10,8 +10,14 @@
         "Fenix":
         {
             "nightly": 2,
-            "beta": 10,
+            "beta": 25,
             "release": 50
+        },
+        "Thunderbird":
+        {
+            "nightly": 4,
+            "beta": 50,
+            "release": 100
         }
     },
     "alert":
@@ -25,8 +31,14 @@
         "Fenix":
         {
             "nightly": 50,
-            "beta": 100,
+            "beta": 50,
             "release": 500
+        },
+        "Thunderbird":
+        {
+            "nightly": 100,
+            "beta": 200,
+            "release": 300
         }
     },
     "socorro_limit": 5000
