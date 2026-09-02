@@ -2,10 +2,10 @@
 
 `spikes/dashboard/` is a self-contained package that collects crash counts
 from Socorro, models their seasonality, scores what is happening *right now*
-against what was expected, and serves `dashboard.html`.  It does not touch
-the legacy `signatures` pipeline; the only integration points are the Flask
-blueprint registered in `spikes/__init__.py` and the job added to
-`bin/schedule.py`.
+against what was expected, and serves `dashboard.html`.  It is independent
+from the spike emails (`spikes/signatures.py`, `spikes/startup.py`); the only
+integration points are the Flask blueprint registered in `spikes/__init__.py`
+and the job in `bin/schedule.py`.
 
 ## What it answers
 
@@ -86,7 +86,7 @@ Query budget:
   Signatures first seen by a `recent` window get the window's distinct
   installs until then.  Yesterday is refetched with the full `day` query
   until it is *final*.  That is 7 queries per run for 7 channels, ~1 MB
-  per run on average (the legacy job makes 72 queries every 10 minutes).
+  per run on average.
 * **backfill / catch-up**: `collect.plan` lists the days that are missing or
   not final and fetches them within `max_queries_per_run` (60) and
   `max_run_seconds` (420), interleaving channels so all of them progress.
@@ -267,7 +267,7 @@ uv run gunicorn spikes:app                        # then open /dashboard.html
 ```
 
 `bin/schedule.py` runs `spikes.dashboard.update.run()` every 5 minutes at
-:02, :07, ... (the legacy job is pinned to :00, :10, ...).  The page polls
+:02, :07, ...  The page polls
 every 5 minutes; unchanged data costs a `304` and no re-render.  Tests: `uv run python -m unittest
 discover tests/` (`test_dashboard_*` use fixtures and an in-memory SQLite
 database, no network).

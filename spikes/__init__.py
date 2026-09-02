@@ -2,8 +2,8 @@
 # License, v. 2.0. If a copy of the MPL was not distributed with this file,
 # You can obtain one at http://mozilla.org/MPL/2.0/.
 
-from flask import Flask, request, send_from_directory
-from flask_cors import CORS, cross_origin
+from flask import Flask, redirect, request, send_from_directory, url_for
+from flask_cors import CORS
 from flask_sqlalchemy import SQLAlchemy
 from libmozdata import config as lmdconfig
 from libmozdata.config import ConfigEnv
@@ -20,7 +20,7 @@ IMMUTABLE_ASSET_SUFFIXES = ('.ico', '.png', '.svg', '.woff2')
 lmdconfig.set_config(ConfigEnv())
 lmdconfig.set_default_value('User-Agent', 'name', 'crash-clouseau')
 
-app = Flask(__name__, template_folder='../templates')
+app = Flask(__name__)
 
 # Fall back to an in-memory SQLite database so the package can be imported
 # (e.g. by the tests) without a DATABASE_URL.
@@ -41,18 +41,9 @@ from spikes.dashboard.api import blueprint as dashboard_blueprint  # noqa: E402
 app.register_blueprint(dashboard_blueprint)
 
 
-@app.route('/signatures', methods=['GET'])
-@cross_origin()
-def signatures_rest():
-    from spikes import api
-    return api.signatures()
-
-
 @app.route('/')
-@app.route('/signatures.html')
-def signatures_html():
-    from spikes import html
-    return html.sgns()
+def index():
+    return redirect(url_for('dashboard.html'))
 
 
 @app.route('/favicon.ico')
@@ -63,16 +54,6 @@ def favicon():
 @app.route('/robots.txt')
 def robots():
     return send_from_directory('../static', 'robots.txt')
-
-
-@app.route('/spikes.js')
-def spikes_js():
-    return send_from_directory('../static', 'spikes.js')
-
-
-@app.route('/spikes.css')
-def spikes_css():
-    return send_from_directory('../static', 'spikes.css')
 
 
 @app.after_request

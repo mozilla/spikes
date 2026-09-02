@@ -49,7 +49,7 @@ from libmozdata.connection import Query
 from requests.adapters import HTTPAdapter
 from urllib3.util.retry import Retry
 
-from spikes import config as legacy_config
+from spikes import config as spikes_config
 from spikes.gather import ADDRESS, ADDRESS_PAT
 from spikes.logger import logger
 from . import config
@@ -92,7 +92,7 @@ def normalize_signature(signature):
     """Merge signatures that only differ by a memory address.
 
     ``foo | 0x1a2b`` becomes ``"foo | "0x[0-9a-fA-F]+`` which is the form
-    the legacy code uses and which SuperSearch accepts as a regex (with the
+    ``spikes.gather`` uses and which SuperSearch accepts as a regex (with the
     ``@`` operator, see :func:`search_term`).
     """
     # Socorro has reports with an empty signature; the empty string is the
@@ -114,7 +114,7 @@ def search_term(signature):
 
 def noise_patterns(channel):
     """Regexes of config/skiplist.json: noise signatures (never alerted)."""
-    return legacy_config.get_skiplist_channel(channel)
+    return spikes_config.get_skiplist_channel(channel)
 
 
 def is_noise(signature, patterns):

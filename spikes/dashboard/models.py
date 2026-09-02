@@ -4,10 +4,9 @@
 
 """Database tables of the dashboard.
 
-All tables are prefixed with ``dashboard_`` and are independent from the
-legacy ``signatures`` table.  Only portable column types are used so the
-tests can run against the in-memory SQLite database that ``spikes`` falls
-back to when ``DATABASE_URL`` is not set.
+All tables are prefixed with ``dashboard_``.  Only portable column types
+are used so the tests can run against the in-memory SQLite database that
+``spikes`` falls back to when ``DATABASE_URL`` is not set.
 
 The per-(product, channel) total is stored as a regular series whose
 signature is the empty string (:data:`TOTAL`), so every model/score row has

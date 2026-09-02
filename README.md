@@ -26,10 +26,19 @@ is optional and the User-Agent defaults to `crash-clouseau`:
 ```sh
 export DATABASE_URL=postgresql://user:password@localhost/spikes
 export LIBMOZDATA_CFG_BUGZILLA_TOKEN=...   # optional
-# First run only: create the table and backfill the last few days.
-uv run python -c 'from spikes import models; models.create()'
-uv run gunicorn spikes:app
-PYTHONPATH=. uv run python bin/schedule.py
+uv run gunicorn spikes:app                  # serves /dashboard.html
+PYTHONPATH=. uv run python bin/schedule.py  # collects the data every 5 minutes
+```
+
+The dashboard creates its tables on first use and backfills Socorro's
+history over its first runs; see `spikes/dashboard/README.md`.
+
+The spike emails are sent by separate one-shot scripts that query Socorro
+directly and do not need the database:
+
+```sh
+uv run python -m spikes.signatures -e someone@example.com   # spiking signatures
+uv run python -m spikes.startup -e someone@example.com      # startup crashes
 ```
 
 ## Running tests

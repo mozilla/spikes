@@ -45,30 +45,6 @@ def get(date='today', ndays=11, query={}, version=False):
     return spikes, bugs_by_signature, versions
 
 
-def prepare_for_html(data, product, channel, query={}):
-    params = sputils.get_params_for_link(data['date'], query=query)
-    params['release_channel'] = channel
-    params['product'] = product
-    params['version'] = data['versions']
-    for sgn, info in data['signatures'].items():
-        params['signature'] = sputils.get_esearch_sgn(sgn)
-        url = socorro.SuperSearch.get_link(params)
-        url += '#crash-reports'
-        info['socorro_url'] = url
-
-    def sort_fun(p):
-        data = p[1]
-        last = float(data['numbers'][-1])
-        exp1 = data['exp1']
-        exp3 = data['exp3']
-        c = max(exp1, exp3)
-        return (c, exp1, exp3, last, p[0])
-
-    data['signatures'] = sorted(data['signatures'].items(),
-                                key=lambda p: sort_fun(p),
-                                reverse=True)
-
-
 def prepare(spikes, bugs_by_signature, date, versions, query, ndays):
     if spikes:
         affected_chans = set()

@@ -319,16 +319,3 @@ def __get_mean_rate(stats, coeff, win):
     e_d = np.ceil(e_d)
 
     return (m_r, e_r, m_d, e_d)
-
-
-def explosiveness(numbers, nday, win):
-    last = numbers[-nday:]
-    last = __convert(last)
-    last, _ = __get_pd_mean(last)
-    values = numbers[-(win + 1):-nday]
-    values = __convert(values)
-    m, e = __get_pd_mean(values)
-    e = max(e, 2. + 0.1 * m)
-    # Return a plain float: psycopg2 quotes float subclasses with repr(), and
-    # NumPy >= 2 renders np.float64(x) which is not valid SQL.
-    return float((last - m) / e)

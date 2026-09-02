@@ -2,7 +2,6 @@
 # License, v. 2.0. If a copy of the MPL was not distributed with this file,
 # You can obtain one at http://mozilla.org/MPL/2.0/.
 
-import datetime
 from dateutil.relativedelta import relativedelta
 from libmozdata import utils
 
@@ -40,84 +39,10 @@ def get_params_for_link(date, query={}):
     return params
 
 
-def get_date(date):
-    if date:
-        try:
-            if isinstance(date, str):
-                if date.startswith('today'):
-                    s = date.split('-')
-                    if len(s) == 2 and s[1].isdigit():
-                        date = utils.get_date_ymd('today')
-                        date -= relativedelta(days=int(s[1]))
-                        return datetime.date(date.year, date.month, date.day)
-
-                date = utils.get_date_ymd(date)
-                return datetime.date(date.year, date.month, date.day)
-            elif isinstance(date, datetime.date):
-                return date
-            elif isinstance(date, datetime.datetime):
-                return datetime.date(date.year, date.month, date.day)
-        except Exception:
-            pass
-    return None
-
-
-def get_versions_str(v):
-    return '|'.join(v)
-
-
-def get_versions_list(v):
-    return v.split('|')
-
-
-def get_correct_date(date):
-    date = get_date(date)
-    if date:
-        return utils.get_date_str(date)
-    return utils.get_date('today')
-
-
-def get_correct_product(p):
-    if isinstance(p, list) and len(p) >= 1:
-        p = p[0]
-    if isinstance(p, str):
-        p = p.lower()
-        prods = {'firefox': 'Firefox',
-                 'fenix': 'Fenix',
-                 'thunderbird': 'Thunderbird'}
-        return prods.get(p, 'Firefox')
-    return 'Firefox'
-
-
-def get_correct_channel(c):
-    if isinstance(c, list) and len(c) >= 1:
-        c = c[0]
-    if isinstance(c, str):
-        c = c.lower()
-        return c if c in get_channels() else 'nightly'
-    return 'nightly'
-
-
-def get_correct_sgn(sgn):
-    if isinstance(sgn, str):
-        return sgn
-    elif isinstance(sgn, list) and len(sgn) >= 1:
-        return sgn[0]
-    return ''
-
-
 def get_esearch_sgn(sgn):
     if sgn.startswith('\"'):
         return '@' + sgn
     return '=' + sgn
-
-
-def get_bug_number(bug):
-    if bug is None:
-        return 0
-    if isinstance(bug, tuple):
-        return int(bug[0])
-    return int(bug)
 
 
 def make_numbers(date, numbers, ndays):
@@ -128,17 +53,5 @@ def make_numbers(date, numbers, ndays):
         date = few_days_ago + relativedelta(days=i)
         date = date.strftime('%a %m-%d')
         res.append((date, n))
-
-    return res
-
-
-def make_dates(date, ndays):
-    today = utils.get_date_ymd(date)
-    few_days_ago = today - relativedelta(days=ndays)
-    res = []
-    for i in range(ndays + 1):
-        date = few_days_ago + relativedelta(days=i)
-        date = date.strftime('%a %m-%d')
-        res.append(date)
 
     return res
