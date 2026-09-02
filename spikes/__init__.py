@@ -10,8 +10,11 @@ import os
 
 app = Flask(__name__, template_folder='../templates')
 
-uri = os.getenv('DATABASE_URL')
-# Workaround for Heroku
+# Fall back to an in-memory SQLite database so the package can be imported
+# (e.g. by the tests) without a DATABASE_URL.
+uri = os.getenv('DATABASE_URL', 'sqlite://')
+# Heroku exposes the URL with a postgres:// scheme, which SQLAlchemy >= 1.4
+# no longer accepts.
 if uri.startswith('postgres://'):
     uri = uri.replace('postgres://', 'postgresql://', 1)
 app.config['SQLALCHEMY_DATABASE_URI'] = uri

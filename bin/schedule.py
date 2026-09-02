@@ -3,7 +3,7 @@
 # You can obtain one at http://mozilla.org/MPL/2.0/.
 
 from apscheduler.schedulers.blocking import BlockingScheduler
-from spikes import models
+from spikes import app, models
 
 
 sched = BlockingScheduler()
@@ -11,7 +11,8 @@ sched = BlockingScheduler()
 
 @sched.scheduled_job('interval', minutes=10)
 def timed_job():
-    models.update()
+    with app.app_context():
+        models.update()
 
 
 sched.start()

@@ -6,7 +6,7 @@ from dateutil.relativedelta import relativedelta
 from spikes import app, db, tools
 from spikes import utils as sputils
 from spikes import datacollector as dc
-from sqlalchemy import distinct
+from sqlalchemy import distinct, inspect
 import sqlalchemy.dialects.postgresql as pg
 from .logger import logger
 
@@ -209,10 +209,10 @@ def redo(date='today'):
     for i in range(NDAYS_OF_DATA):
         update(date=d.strftime('%Y-%m-%d'))
         d -= relativedelta(days=1)
-    
+
 
 def create(date='today'):
-    engine = db.get_engine(app)
-    if not engine.dialect.has_table(engine, 'signatures'):
-        db.create_all()
-        redo()
+    with app.app_context():
+        if not inspect(db.engine).has_table('signatures'):
+            db.create_all()
+            redo()

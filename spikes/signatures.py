@@ -22,9 +22,11 @@ def get(date='today', ndays=11, query={}, version=False):
     products = sputils.get_products()
     channels = sputils.get_channels()
     for product in products:
-        data, version = dc.get_sgns_by_install_time(channels, product=product,
+        data, version = dc.get_sgns_by_install_time(channels,
+                                                    product=product,
                                                     date=date, query=query,
-                                                    ndays=winmax, version=version)
+                                                    ndays=winmax,
+                                                    version=version)
         versions[product] = version
         s = dc.get_spiking_signatures(data, coeff, winmin, winmax)
 
@@ -49,7 +51,6 @@ def prepare_for_html(data, product, channel, query={}):
     params['product'] = product
     params['version'] = data['versions']
     for sgn, info in data['signatures'].items():
-        sgn = sputils.get_str(sgn)
         params['signature'] = sputils.get_esearch_sgn(sgn)
         url = socorro.SuperSearch.get_link(params)
         url += '#crash-reports'
@@ -97,7 +98,6 @@ def prepare(spikes, bugs_by_signature, date, versions, query, ndays):
                                                            d['numbers'][-1],
                                                            d['signature'])):
                             sgn = stats['signature']
-                            sgn = sputils.get_str(sgn)
                             params['signature'] = sputils.get_esearch_sgn(sgn)
                             url = socorro.SuperSearch.get_link(params)
                             url += '#crash-reports'
@@ -155,7 +155,8 @@ if __name__ == '__main__':
     parser.add_argument('-d', '--date', dest='date',
                         action='store', default='today', help='date')
     parser.add_argument('-v', '--version', dest='version',
-                        action='store_true', help='add version to search query')
+                        action='store_true',
+                        help='add version to search query')
     args = parser.parse_args()
 
     send_email(emails=args.emails, date=args.date, version=args.version)

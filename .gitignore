@@ -1,4 +1,8 @@
 *~
 *.pyc
 *.pyo
+__pycache__/
+.venv/
+.coverage
+.ruff_cache/
 mozdata.ini

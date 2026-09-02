@@ -26,8 +26,8 @@ def get_skiplist():
             for pat in v:
                 try:
                     r = re.compile(pat)
-                except Exception as ex:
-                    raise BadRegEx('Regex error: {}'.format(pat))
+                except re.error as ex:
+                    raise BadRegEx('Regex error: {}'.format(pat)) from ex
                 res.append(r)
             __SKIPLIST[k] = res
 

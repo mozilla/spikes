@@ -448,6 +448,6 @@ def get_bugs(signatures):
         bugs_by_signature[s] = {'resolved': last_resolved,
                                 'unresolved': last_unresolved}
 
-    logger.info('Get bugs: finished.'.format(N))
+    logger.info('Get bugs: finished.')
 
     return bugs_by_signature

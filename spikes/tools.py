@@ -141,7 +141,7 @@ def mean(x):
 
 
 def median(x):
-    q1, m, q3 = np.percentile(x, [25, 50, 100], interpolation='midpoint')
+    q1, m, q3 = np.percentile(x, [25, 50, 100], method='midpoint')
     return m, q3 - q1
 
 
@@ -178,8 +178,9 @@ def moving(x, f=mean, coeff=2.0):
 
 
 def multimoving(x, f=mean, coeff=2.0):
-    """Compute all the moving curves in moving the first point from left to right
-       and for each point, select the position which minimize the dispersion.
+    """Compute all the moving curves in moving the first point from left to
+       right and for each point, select the position which minimize the
+       dispersion.
 
     Args:
         x (list): numbers
@@ -326,4 +327,6 @@ def explosiveness(numbers, nday, win):
     values = __convert(values)
     m, e = __get_pd_mean(values)
     e = max(e, 2. + 0.1 * m)
-    return (last - m) / e
+    # Return a plain float: psycopg2 quotes float subclasses with repr(), and
+    # NumPy >= 2 renders np.float64(x) which is not valid SQL.
+    return float((last - m) / e)

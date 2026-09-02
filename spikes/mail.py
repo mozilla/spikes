@@ -6,7 +6,6 @@ from os.path import basename
 from email.mime.text import MIMEText
 from email.mime.application import MIMEApplication
 from email.mime.multipart import MIMEMultipart
-import six
 import smtplib
 from . import config
 
@@ -16,7 +15,7 @@ def send(To, Subject, Body,
          files=[]):
     """Send an email
     """
-    if isinstance(To, six.string_types):
+    if isinstance(To, str):
         To = [To]
 
     From = config.get_sender()
