@@ -13,14 +13,19 @@ const WDAYS = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
 const CHART_HEIGHT = 280;
 
 // Channel branding (mozilla-central / comm-central): Nightly and Daily have
-// their own logos, beta only for Thunderbird; Fenix is Firefox for Android.
+// their own logos; Firefox beta wears the Developer Edition logo (the
+// beta channel itself ships the release one); Fenix is Firefox for Android.
 function logoFor(product, channel) {
   if (product === 'Thunderbird') {
     if (channel === 'nightly') return 'logo-thunderbird-nightly.svg';
     if (channel === 'beta') return 'logo-thunderbird-beta.svg';
     return 'logo-thunderbird.svg';
   }
-  if (product === 'Firefox' || product === 'Fenix') return channel === 'nightly' ? 'logo-firefox-nightly.svg' : 'logo-firefox.svg';
+  if (product === 'Firefox' || product === 'Fenix') {
+    if (channel === 'nightly') return 'logo-firefox-nightly.svg';
+    if (channel === 'beta') return 'logo-firefox-beta.svg';
+    return 'logo-firefox.svg';
+  }
   return null;
 }
 
