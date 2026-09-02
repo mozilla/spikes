@@ -5,8 +5,16 @@
 from flask import Flask, send_from_directory
 from flask_cors import CORS, cross_origin
 from flask_sqlalchemy import SQLAlchemy
+from libmozdata import config as lmdconfig
+from libmozdata.config import ConfigEnv
 import os
 
+
+# libmozdata settings come from LIBMOZDATA_CFG_<SECTION>_<OPTION> environment
+# variables (e.g. LIBMOZDATA_CFG_BUGZILLA_TOKEN). This must run before any
+# other libmozdata module is imported, since they read the config on import.
+lmdconfig.set_config(ConfigEnv())
+lmdconfig.set_default_value('User-Agent', 'name', 'crash-clouseau')
 
 app = Flask(__name__, template_folder='../templates')
 

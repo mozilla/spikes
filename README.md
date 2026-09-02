@@ -19,10 +19,13 @@ Add `--extra plot` to also install matplotlib, which is only used by the
 ## Running
 
 Both the web app and the scheduler need a `DATABASE_URL` pointing to a
-PostgreSQL database:
+PostgreSQL database. libmozdata is configured through
+`LIBMOZDATA_CFG_<SECTION>_<OPTION>` environment variables; the Bugzilla token
+is optional and the User-Agent defaults to `crash-clouseau`:
 
 ```sh
 export DATABASE_URL=postgresql://user:password@localhost/spikes
+export LIBMOZDATA_CFG_BUGZILLA_TOKEN=...   # optional
 # First run only: create the table and backfill the last few days.
 uv run python -c 'from spikes import models; models.create()'
 uv run gunicorn spikes:app
