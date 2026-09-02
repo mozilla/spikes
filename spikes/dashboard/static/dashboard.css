@@ -68,7 +68,21 @@ main > section { margin-top: 28px; }
 .section-head { display: flex; align-items: baseline; justify-content: space-between; gap: 16px; flex-wrap: wrap; margin-bottom: 10px; }
 
 /* header */
-.header-row { display: flex; align-items: baseline; justify-content: space-between; gap: 16px; flex-wrap: wrap; }
+@font-face {
+  font-family: "Zilla Slab Highlight";
+  src: url("ZillaSlabHighlight-Bold.woff2") format("woff2");
+  font-weight: bold;
+  font-display: swap;
+}
+.header-row { display: flex; align-items: center; justify-content: space-between; gap: 16px; flex-wrap: wrap; }
+.brand-row { display: flex; align-items: center; gap: 14px; }
+.brand { font-family: "Zilla Slab Highlight", "Zilla Slab", Georgia, serif; font-weight: bold; font-size: 30px; line-height: 1;
+  color: var(--ink); text-decoration: none; letter-spacing: -0.01em; }
+.brand:focus-visible { outline: 2px solid var(--focus); outline-offset: 3px; }
+.header-right { display: flex; align-items: center; gap: 14px; }
+.github-link { color: var(--ink-2); display: inline-flex; border-radius: 50%; }
+.github-link:hover { color: var(--ink); }
+.github-link:focus-visible { outline: 2px solid var(--focus); outline-offset: 2px; }
 .freshness { margin: 0; color: var(--ink-2); font-size: 13px; }
 .freshness .bad { color: var(--danger-text); font-weight: 600; }
 .error-line { margin: 8px 0 0; color: var(--danger-text); font-size: 13px; }
