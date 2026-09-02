@@ -49,7 +49,7 @@
 * { box-sizing: border-box; }
 [hidden] { display: none !important; }
 html { background: var(--plane); color: var(--ink); font: 14px/1.4 var(--font); }
-body { margin: 0; padding: 0 24px 48px; max-width: 1480px; margin-inline: auto; }
+body { margin: 0; padding: 0 24px 48px; max-width: 100%; }
 /* the title bar and the channel cards stay pinned like a toolbar */
 .toolbar { position: sticky; top: 0; z-index: 20; background: var(--plane); padding: 16px 0 12px;
   border-bottom: 1px solid var(--border); }
