@@ -425,24 +425,41 @@ function renderCards(s) {
   const wrap = $('channel-cards');
   const channels = s.channels || [];
   $('empty-state').hidden = channels.length > 0;
-  const fresh = channels.length ? [allCard(s), ...channels.map(channelCard)] : [];
-  // update existing cards in place (same key), add new ones, drop stale
-  // ones; a card is only moved when its position changed (a move blurs it)
-  const existing = new Map([...wrap.children].map((c) => [c.dataset.key, c]));
-  const keep = new Set(fresh.map((c) => c.dataset.key));
-  for (const [key, node] of existing) if (!keep.has(key)) { node.remove(); existing.delete(key); }
-  let cursor = null;
-  for (const card of fresh) {
-    const old = existing.get(card.dataset.key);
-    let node = card;
-    if (old) {
-      old.replaceChildren(...card.childNodes);
-      old.className = card.className;
-      node = old;
+  // cards are grouped by product; the structure is rebuilt only when the
+  // set of channels changes, otherwise every card is updated in place
+  const keys = channels.length ? [ALL_KEY, ...channels.map(channelKey)] : [];
+  const current = [...wrap.querySelectorAll('.card')].map((c) => c.dataset.key);
+  const fresh = new Map();
+  if (channels.length) fresh.set(ALL_KEY, allCard(s));
+  for (const c of channels) fresh.set(channelKey(c), channelCard(c));
+  const sameShape = keys.length === current.length && keys.every((k, i) => k === current[i]);
+  if (sameShape) {
+    for (const node of wrap.querySelectorAll('.card')) {
+      const card = fresh.get(node.dataset.key);
+      node.replaceChildren(...card.childNodes);
+      node.className = card.className;
     }
-    const expected = cursor ? cursor.nextSibling : wrap.firstChild;
-    if (node !== expected) { if (cursor) cursor.after(node); else wrap.prepend(node); }
-    cursor = node;
+  } else {
+    wrap.textContent = '';
+    if (channels.length) {
+      const all = el('div', { class: 'card-group card-group-all' }, el('div', { class: 'card-group-title', 'aria-hidden': 'true' }, '\u00a0'));
+      all.append(el('div', { class: 'card-row' }, fresh.get(ALL_KEY)));
+      wrap.append(all);
+      const groups = [];
+      for (const c of channels) {
+        let g = groups.find((x) => x.product === c.product);
+        if (!g) { g = { product: c.product, channels: [] }; groups.push(g); }
+        g.channels.push(c);
+      }
+      for (const g of groups) {
+        const grp = el('div', { class: 'card-group', role: 'group', 'aria-label': g.product, style: `--n:${g.channels.length}` });
+        grp.append(el('div', { class: 'card-group-title', 'aria-hidden': 'true' }, g.product));
+        const row = el('div', { class: 'card-row' });
+        for (const c of g.channels) row.append(fresh.get(channelKey(c)));
+        grp.append(row);
+        wrap.append(grp);
+      }
+    }
   }
   highlightCard();
   showView();
@@ -479,8 +496,9 @@ function channelCard(c) {
   const t = c.total || {};
   const sev = sevOf(t);
   const card = el('button', { type: 'button', class: 'card', 'data-key': channelKey(c), 'aria-pressed': 'false' });
+  // the product is the group's title; keep it in the button's name
   card.append(el('div', { class: 'card-head' },
-    el('span', { class: 'card-title' }, `${c.product} `, el('span', { class: 'ch' }, c.channel)),
+    el('span', { class: 'card-title' }, el('span', { class: 'visually-hidden' }, `${c.product} `), c.channel),
     chip(sev)));
   card.append(el('div', { class: 'tile-label' }, 'Today so far'));
   card.append(el('div', { class: 'card-value' }, fmtInt(t.observed), el('span', { class: 'vs' }, `vs ${fmtInt(t.expected)} expected`)));

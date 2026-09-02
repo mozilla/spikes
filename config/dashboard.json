@@ -1,7 +1,8 @@
 {
-    "products": ["Firefox", "Fenix"],
+    "products": ["Firefox", "Fenix", "Thunderbird"],
     "channels": {"Firefox": ["nightly", "beta", "release", "esr"],
-                 "Fenix": ["nightly", "beta", "release"]},
+                 "Fenix": ["nightly", "beta", "release"],
+                 "Thunderbird": ["beta", "release", "esr"]},
 
     "history_days": 180,
     "day_backfill_days": 7,
@@ -18,7 +19,9 @@
     "exclude_submitted_from": ["Infobar", "AboutCrashes"],
 
     "min_crashes": {"nightly": 5, "beta": 10, "release": 20, "esr": 20,
-                    "default": 10, "Fenix/nightly": 10},
+                    "default": 10, "Fenix/nightly": 10,
+                    "Thunderbird/beta": 3, "Thunderbird/release": 10,
+                    "Thunderbird/esr": 10},
     "min_expected_drop": 20,
     "min_expected_recent": 10,
     "recent_hours": [3, 6, 12],
@@ -34,7 +37,8 @@
     "max_fits_per_run": 800,
     "new_days": 14,
     "min_installs": {"nightly": 3, "beta": 5, "release": 10, "esr": 10,
-                     "default": 5},
+                     "default": 5, "Thunderbird/beta": 2,
+                     "Thunderbird/release": 5, "Thunderbird/esr": 5},
     "install_share_days": 28,
     "storm_max_installs": 5,
     "storm_min_ratio": 5,

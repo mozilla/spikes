@@ -10,8 +10,9 @@ blueprint registered in `spikes/__init__.py` and the job added to
 ## What it answers
 
 For every (product, channel) pair configured in `config/dashboard.json`
-(Firefox nightly, beta, release and ESR; Fenix nightly, beta and release)
-and every signature with meaningful volume:
+(Firefox nightly, beta, release and ESR; Fenix nightly, beta and release;
+Thunderbird beta, release and ESR) and every signature with meaningful
+volume:
 
 * Is the volume seen **today so far**, or in the **last few hours**, higher
   or lower than the seasonal pattern predicts for this weekday and time of

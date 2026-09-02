@@ -24,10 +24,10 @@ blueprint = Blueprint('dashboard', __name__, template_folder='templates',
 
 ALERT_SEVERITIES = ('major', 'spike', 'watch', 'drop')
 PRODUCT_DETAILS = 'https://product-details.mozilla.org/1.0/'
-RELEASES_URL = PRODUCT_DETAILS + 'firefox_history_major_releases.json'
-STABILITY_URL = PRODUCT_DETAILS + 'firefox_history_stability_releases.json'
-VERSIONS_URL = PRODUCT_DETAILS + 'firefox_versions.json'
-_releases_cache = {'at': 0.0, 'data': [], 'esr': []}
+# product-details feed prefix per product (Fenix follows the Firefox train)
+FEEDS = {'Firefox': 'firefox', 'Fenix': 'firefox',
+         'Thunderbird': 'thunderbird'}
+_releases_cache = {}
 
 
 class BadRequest(Exception):
@@ -198,21 +198,27 @@ def _fetch_json(url):
     return r.json()
 
 
-def _load_releases():
-    """Firefox major releases and ESR point releases (product-details)."""
-    major = _fetch_json(RELEASES_URL)
+def _load_releases(feed):
+    """Major releases and ESR point releases of a product-details feed
+    (``firefox`` or ``thunderbird``)."""
+    major = _fetch_json('{}{}_history_major_releases.json'.format(
+        PRODUCT_DETAILS, feed))
     data = [{'version': v, 'date': d}
             for v, d in sorted(major.items(), key=lambda p: p[1])]
-    # the ESR trains are the majors of FIREFOX_ESR* in firefox_versions;
+    # the ESR trains are the majors of <PRODUCT>_ESR* in <feed>_versions;
     # their point releases are in the stability list without a suffix
     esr = []
     try:
-        versions = _fetch_json(VERSIONS_URL)
+        versions = _fetch_json('{}{}_versions.json'.format(PRODUCT_DETAILS,
+                                                           feed))
         # the current ESR and the next one (not the legacy ESR115 train)
+        prefix = feed.upper()
         majors = {versions[k].split('.')[0]
-                  for k in ('FIREFOX_ESR', 'FIREFOX_ESR_NEXT')
+                  for k in (prefix + '_ESR', prefix + '_ESR_NEXT')
                   if versions.get(k)}
-        stability = _fetch_json(STABILITY_URL)
+        stability = _fetch_json(
+            '{}{}_history_stability_releases.json'.format(PRODUCT_DETAILS,
+                                                          feed))
         # ESR point releases are X.N.0 (N >= 1); X.0.y are the release
         # channel's own dot releases of that major
         points = {}
@@ -237,21 +243,25 @@ def _load_releases():
     return data, esr
 
 
-def releases(since=None, channel=None):
+def releases(since=None, channel=None, product='Firefox'):
     """Release dates to mark on the charts (cached for a day).
 
-    Firefox major releases (merge/ship days, meaningful for nightly, beta,
-    release and Fenix); the ESR channel gets the ESR point releases.
+    Major releases of the product's train (merge/ship days, meaningful for
+    nightly, beta and release); the ESR channel gets the ESR point
+    releases.
     """
+    feed = FEEDS.get(product, 'firefox')
+    cache = _releases_cache.setdefault(feed, {'at': 0.0, 'data': [],
+                                              'esr': []})
     now = time.time()
-    if now - _releases_cache['at'] > 86400:
+    if now - cache['at'] > 86400:
         try:
-            data, esr = _load_releases()
-            _releases_cache.update(at=now, data=data, esr=esr)
+            data, esr = _load_releases(feed)
+            cache.update(at=now, data=data, esr=esr)
         except Exception as ex:  # the dashboard works without it
             logger.warning('Dashboard: releases unavailable: %s', ex)
-            _releases_cache['at'] = now - 86400 + 600
-    data = _releases_cache['esr' if channel == 'esr' else 'data']
+            cache['at'] = now - 86400 + 600
+    data = cache['esr' if channel == 'esr' else 'data']
     if since is not None:
         data = [x for x in data if x['date'] >= since.isoformat()]
     return data
@@ -750,7 +760,7 @@ def channel_view():
                                np.isfinite(fit.expected[-1]) else
                                fit.forecast(today), total_score.as_of),
         'signatures': rows, 'releases': releases(
-            today - datetime.timedelta(days=days), channel),
+            today - datetime.timedelta(days=days), channel, product),
         'thresholds': thresholds(),
         'data_health': data_health(now, run, [s], check_count=False),
     })
@@ -794,5 +804,6 @@ def signature_view():
         'hourly': hourly_block(product, channel, series.id, today,
                                fit.forecast(today), e_yday,
                                entry['today'].as_of),
-        'releases': releases(today - datetime.timedelta(days=days), channel),
+        'releases': releases(today - datetime.timedelta(days=days), channel,
+                             product),
     }, run, product, channel, days, granularity, signature, now=now)
