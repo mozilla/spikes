@@ -31,6 +31,11 @@ db = SQLAlchemy(app)
 cors = CORS(app)
 app.config['CORS_HEADERS'] = 'Content-Type'
 
+# Seasonality-aware dashboard (spikes/dashboard): /dashboard.html and
+# /dashboard/api/*.  Imported after db exists since its models need it.
+from spikes.dashboard.api import blueprint as dashboard_blueprint  # noqa: E402
+app.register_blueprint(dashboard_blueprint)
+
 
 @app.route('/signatures', methods=['GET'])
 @cross_origin()

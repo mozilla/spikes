@@ -1,0 +1,703 @@
+{
+ "hits": [],
+ "total": 3224,
+ "errors": [],
+ "facets": {
+  "signature": [
+   {
+    "term": "libc.so.6 | cuEGLApiInit",
+    "count": 823
+   },
+   {
+    "term": "AsyncShutdownTimeout | profile-change-teardown | ServiceWorkerShutdownBlocker: shutting down Service Workers",
+    "count": 532
+   },
+   {
+    "term": "AsyncShutdownTimeout | profile-before-change | ASRouterStorage: flush pending writes,ServiceWorkerRegistrar: Flushing data,ShieldRecipeClient: Cleaning up",
+    "count": 287
+   },
+   {
+    "term": "AsyncShutdownTimeout | profile-before-change | ServiceWorkerRegistrar: Flushing data",
+    "count": 173
+   },
+   {
+    "term": "AsyncShutdownTimeout | Places Clients shutdown | sanitize.js: Sanitize on shutdown",
+    "count": 104
+   }
+  ],
+  "histogram_date": [
+   {
+    "term": "2026-09-01T00:00:00Z",
+    "count": 20,
+    "facets": {
+     "signature": [
+      {
+       "term": "librockchip_mpp.so.1",
+       "count": 4
+      },
+      {
+       "term": "OOM | unknown | js::AutoEnterOOMUnsafeRegion::crash_impl | js::AutoEnterOOMUnsafeRegion::crash | js::gc::AllocateTenuredCellInGC",
+       "count": 3
+      },
+      {
+       "term": "<unknown in mfx_mft_h264ve_64.dll> | CServerContextActivator::CreateInstance",
+       "count": 2
+      },
+      {
+       "term": "AsyncShutdownTimeout | profile-change-teardown | ServiceWorkerShutdownBlocker: shutting down Service Workers",
+       "count": 2
+      },
+      {
+       "term": "AsyncShutdownTimeout | profile-before-change | AddonManager: shutting down.",
+       "count": 1
+      }
+     ]
+    }
+   },
+   {
+    "term": "2026-09-01T01:00:00Z",
+    "count": 36,
+    "facets": {
+     "signature": [
+      {
+       "term": "HandleGLibMessage",
+       "count": 5
+      },
+      {
+       "term": "AsyncShutdownTimeout | quit-application | RemoteSettingsExperimentLoader: disabling",
+       "count": 3
+      },
+      {
+       "term": "OOM | small",
+       "count": 3
+      },
+      {
+       "term": "OOM | unknown | js::AutoEnterOOMUnsafeRegion::crash_impl | js::AutoEnterOOMUnsafeRegion::crash | js::gc::AllocateTenuredCellInGC",
+       "count": 3
+      },
+      {
+       "term": "AsyncShutdownTimeout | profile-change-teardown | ServiceWorkerShutdownBlocker: shutting down Service Workers",
+       "count": 2
+      }
+     ]
+    }
+   },
+   {
+    "term": "2026-09-01T02:00:00Z",
+    "count": 126,
+    "facets": {
+     "signature": [
+      {
+       "term": "webrender::render_task::render_task_sanity_check",
+       "count": 85
+      },
+      {
+       "term": "AsyncShutdownTimeout | profile-change-teardown | ServiceWorkerShutdownBlocker: shutting down Service Workers",
+       "count": 8
+      },
+      {
+       "term": "AsyncShutdownTimeout | Places Clients shutdown | sanitize.js: Sanitize on shutdown",
+       "count": 3
+      },
+      {
+       "term": "memcpy | keykey.ime",
+       "count": 3
+      },
+      {
+       "term": "AsyncShutdownTimeout | profile-before-change | ServiceWorkerRegistrar: Flushing data,ShieldRecipeClient: Cleaning up",
+       "count": 2
+      }
+     ]
+    }
+   },
+   {
+    "term": "2026-09-01T03:00:00Z",
+    "count": 63,
+    "facets": {
+     "signature": [
+      {
+       "term": "AsyncShutdownTimeout | profile-change-teardown | ServiceWorkerShutdownBlocker: shutting down Service Workers",
+       "count": 13
+      },
+      {
+       "term": "AsyncShutdownTimeout | Places Clients shutdown | sanitize.js: Sanitize on shutdown",
+       "count": 6
+      },
+      {
+       "term": "Watchdog::Init",
+       "count": 3
+      },
+      {
+       "term": "mozilla::MozPromise<T>::ThenValueBase::DoResolveOrReject",
+       "count": 3
+      },
+      {
+       "term": "<unknown in igd10um64xe.dll> | CContext::TID3D11DeviceContext_Draw_<T>",
+       "count": 2
+      }
+     ]
+    }
+   },
+   {
+    "term": "2026-09-01T04:00:00Z",
+    "count": 44,
+    "facets": {
+     "signature": [
+      {
+       "term": "AsyncShutdownTimeout | profile-change-teardown | ServiceWorkerShutdownBlocker: shutting down Service Workers",
+       "count": 11
+      },
+      {
+       "term": "AsyncShutdownTimeout | profile-before-change | ASRouterStorage: flush pending writes,ServiceWorkerRegistrar: Flushing data,ShieldRecipeClient: Cleaning up",
+       "count": 8
+      },
+      {
+       "term": "mozilla::webgpu::WebGPUParent::MapCallback",
+       "count": 6
+      },
+      {
+       "term": "AsyncShutdownTimeout | profile-before-change | ServiceWorkerRegistrar: Flushing data",
+       "count": 5
+      },
+      {
+       "term": "AsyncShutdownTimeout | Places Clients shutdown | sanitize.js: Sanitize on shutdown",
+       "count": 2
+      }
+     ]
+    }
+   },
+   {
+    "term": "2026-09-01T05:00:00Z",
+    "count": 75,
+    "facets": {
+     "signature": [
+      {
+       "term": "AsyncShutdownTimeout | profile-change-teardown | ServiceWorkerShutdownBlocker: shutting down Service Workers",
+       "count": 16
+      },
+      {
+       "term": "AsyncShutdownTimeout | profile-before-change | ASRouterStorage: flush pending writes,ServiceWorkerRegistrar: Flushing data,ShieldRecipeClient: Cleaning up",
+       "count": 9
+      },
+      {
+       "term": "AsyncShutdownTimeout | profile-before-change | ServiceWorkerRegistrar: Flushing data",
+       "count": 8
+      },
+      {
+       "term": "<unknown in mfx_mft_h264ve_64.dll> | CServerContextActivator::CreateInstance",
+       "count": 7
+      },
+      {
+       "term": "OOM | unknown | nsGlobalWindowInner::ClearDocumentDependentSlots",
+       "count": 5
+      }
+     ]
+    }
+   },
+   {
+    "term": "2026-09-01T06:00:00Z",
+    "count": 69,
+    "facets": {
+     "signature": [
+      {
+       "term": "AsyncShutdownTimeout | profile-change-teardown | ServiceWorkerShutdownBlocker: shutting down Service Workers",
+       "count": 16
+      },
+      {
+       "term": "<unknown in mfx_mft_h264ve_64.dll> | CServerContextActivator::CreateInstance",
+       "count": 9
+      },
+      {
+       "term": "AsyncShutdownTimeout | profile-before-change | ASRouterStorage: flush pending writes,ServiceWorkerRegistrar: Flushing data,ShieldRecipeClient: Cleaning up",
+       "count": 9
+      },
+      {
+       "term": "AsyncShutdownTimeout | Places Clients shutdown | sanitize.js: Sanitize on shutdown",
+       "count": 5
+      },
+      {
+       "term": "mozilla::dom::TimeoutManager::RescheduleTimeout",
+       "count": 3
+      }
+     ]
+    }
+   },
+   {
+    "term": "2026-09-01T07:00:00Z",
+    "count": 135,
+    "facets": {
+     "signature": [
+      {
+       "term": "AsyncShutdownTimeout | profile-change-teardown | ServiceWorkerShutdownBlocker: shutting down Service Workers",
+       "count": 21
+      },
+      {
+       "term": "AsyncShutdownTimeout | profile-before-change | ASRouterStorage: flush pending writes,ServiceWorkerRegistrar: Flushing data,ShieldRecipeClient: Cleaning up",
+       "count": 20
+      },
+      {
+       "term": "<unknown in mfx_mft_h264ve_64.dll> | CServerContextActivator::CreateInstance",
+       "count": 10
+      },
+      {
+       "term": "webrender::render_task::render_task_sanity_check",
+       "count": 9
+      },
+      {
+       "term": "OOM | small",
+       "count": 8
+      }
+     ]
+    }
+   },
+   {
+    "term": "2026-09-01T08:00:00Z",
+    "count": 129,
+    "facets": {
+     "signature": [
+      {
+       "term": "AsyncShutdownTimeout | profile-before-change | ASRouterStorage: flush pending writes,ServiceWorkerRegistrar: Flushing data,ShieldRecipeClient: Cleaning up",
+       "count": 25
+      },
+      {
+       "term": "AsyncShutdownTimeout | profile-change-teardown | ServiceWorkerShutdownBlocker: shutting down Service Workers",
+       "count": 25
+      },
+      {
+       "term": "AsyncShutdownTimeout | profile-before-change | ServiceWorkerRegistrar: Flushing data",
+       "count": 12
+      },
+      {
+       "term": "AsyncShutdownTimeout | Places Clients shutdown | sanitize.js: Sanitize on shutdown",
+       "count": 10
+      },
+      {
+       "term": "OOM | unknown | js::AutoEnterOOMUnsafeRegion::crash_impl | js::AutoEnterOOMUnsafeRegion::crash | js::gc::AllocateTenuredCellInGC",
+       "count": 5
+      }
+     ]
+    }
+   },
+   {
+    "term": "2026-09-01T09:00:00Z",
+    "count": 127,
+    "facets": {
+     "signature": [
+      {
+       "term": "AsyncShutdownTimeout | profile-before-change | ASRouterStorage: flush pending writes,ServiceWorkerRegistrar: Flushing data,ShieldRecipeClient: Cleaning up",
+       "count": 24
+      },
+      {
+       "term": "AsyncShutdownTimeout | profile-change-teardown | ServiceWorkerShutdownBlocker: shutting down Service Workers",
+       "count": 19
+      },
+      {
+       "term": "<unknown in mfx_mft_h264ve_64.dll> | CServerContextActivator::CreateInstance",
+       "count": 15
+      },
+      {
+       "term": "AsyncShutdownTimeout | profile-before-change | ServiceWorkerRegistrar: Flushing data",
+       "count": 6
+      },
+      {
+       "term": "AsyncShutdownTimeout | profile-before-change | ASRouterStorage: flush pending writes,CamerasParent,ServiceWorkerRegistrar: Flushing data,ShieldRecipeClient: Cleaning up",
+       "count": 4
+      }
+     ]
+    }
+   },
+   {
+    "term": "2026-09-01T10:00:00Z",
+    "count": 128,
+    "facets": {
+     "signature": [
+      {
+       "term": "AsyncShutdownTimeout | profile-change-teardown | ServiceWorkerShutdownBlocker: shutting down Service Workers",
+       "count": 34
+      },
+      {
+       "term": "AsyncShutdownTimeout | profile-before-change | ASRouterStorage: flush pending writes,ServiceWorkerRegistrar: Flushing data,ShieldRecipeClient: Cleaning up",
+       "count": 19
+      },
+      {
+       "term": "AsyncShutdownTimeout | profile-before-change | ServiceWorkerRegistrar: Flushing data",
+       "count": 13
+      },
+      {
+       "term": "AsyncShutdownTimeout | Places Clients shutdown | sanitize.js: Sanitize on shutdown",
+       "count": 11
+      },
+      {
+       "term": "OOM | small",
+       "count": 5
+      }
+     ]
+    }
+   },
+   {
+    "term": "2026-09-01T11:00:00Z",
+    "count": 110,
+    "facets": {
+     "signature": [
+      {
+       "term": "AsyncShutdownTimeout | profile-change-teardown | ServiceWorkerShutdownBlocker: shutting down Service Workers",
+       "count": 36
+      },
+      {
+       "term": "AsyncShutdownTimeout | profile-before-change | ASRouterStorage: flush pending writes,ServiceWorkerRegistrar: Flushing data,ShieldRecipeClient: Cleaning up",
+       "count": 21
+      },
+      {
+       "term": "AsyncShutdownTimeout | profile-before-change | ServiceWorkerRegistrar: Flushing data",
+       "count": 8
+      },
+      {
+       "term": "AsyncShutdownTimeout | quit-application | RemoteSettingsExperimentLoader: disabling",
+       "count": 6
+      },
+      {
+       "term": "<unknown in mfx_mft_h264ve_64.dll> | CServerContextActivator::CreateInstance",
+       "count": 3
+      }
+     ]
+    }
+   },
+   {
+    "term": "2026-09-01T12:00:00Z",
+    "count": 200,
+    "facets": {
+     "signature": [
+      {
+       "term": "AsyncShutdownTimeout | profile-change-teardown | ServiceWorkerShutdownBlocker: shutting down Service Workers",
+       "count": 49
+      },
+      {
+       "term": "libvulkan_radeon.so",
+       "count": 24
+      },
+      {
+       "term": "AsyncShutdownTimeout | profile-before-change | ASRouterStorage: flush pending writes,ServiceWorkerRegistrar: Flushing data,ShieldRecipeClient: Cleaning up",
+       "count": 23
+      },
+      {
+       "term": "AsyncShutdownTimeout | profile-before-change | ServiceWorkerRegistrar: Flushing data",
+       "count": 12
+      },
+      {
+       "term": "OOM | small",
+       "count": 11
+      }
+     ]
+    }
+   },
+   {
+    "term": "2026-09-01T13:00:00Z",
+    "count": 978,
+    "facets": {
+     "signature": [
+      {
+       "term": "libc.so.6 | cuEGLApiInit",
+       "count": 782
+      },
+      {
+       "term": "AsyncShutdownTimeout | profile-change-teardown | ServiceWorkerShutdownBlocker: shutting down Service Workers",
+       "count": 54
+      },
+      {
+       "term": "AsyncShutdownTimeout | profile-before-change | ASRouterStorage: flush pending writes,ServiceWorkerRegistrar: Flushing data,ShieldRecipeClient: Cleaning up",
+       "count": 33
+      },
+      {
+       "term": "AsyncShutdownTimeout | profile-before-change | ServiceWorkerRegistrar: Flushing data",
+       "count": 19
+      },
+      {
+       "term": "AsyncShutdownTimeout | Places Clients shutdown | sanitize.js: Sanitize on shutdown",
+       "count": 11
+      }
+     ]
+    }
+   },
+   {
+    "term": "2026-09-01T14:00:00Z",
+    "count": 179,
+    "facets": {
+     "signature": [
+      {
+       "term": "AsyncShutdownTimeout | profile-change-teardown | ServiceWorkerShutdownBlocker: shutting down Service Workers",
+       "count": 39
+      },
+      {
+       "term": "AsyncShutdownTimeout | profile-before-change | ASRouterStorage: flush pending writes,ServiceWorkerRegistrar: Flushing data,ShieldRecipeClient: Cleaning up",
+       "count": 26
+      },
+      {
+       "term": "AsyncShutdownTimeout | profile-before-change | ServiceWorkerRegistrar: Flushing data",
+       "count": 20
+      },
+      {
+       "term": "AsyncShutdownTimeout | Places Clients shutdown | sanitize.js: Sanitize on shutdown",
+       "count": 9
+      },
+      {
+       "term": "InternalDeleteObject",
+       "count": 9
+      }
+     ]
+    }
+   },
+   {
+    "term": "2026-09-01T15:00:00Z",
+    "count": 162,
+    "facets": {
+     "signature": [
+      {
+       "term": "AsyncShutdownTimeout | profile-change-teardown | ServiceWorkerShutdownBlocker: shutting down Service Workers",
+       "count": 48
+      },
+      {
+       "term": "libc.so.6 | cuEGLApiInit",
+       "count": 41
+      },
+      {
+       "term": "AsyncShutdownTimeout | profile-before-change | ServiceWorkerRegistrar: Flushing data",
+       "count": 18
+      },
+      {
+       "term": "AsyncShutdownTimeout | profile-before-change | ASRouterStorage: flush pending writes,ServiceWorkerRegistrar: Flushing data,ShieldRecipeClient: Cleaning up",
+       "count": 13
+      },
+      {
+       "term": "AsyncShutdownTimeout | quit-application | RemoteSettingsExperimentLoader: disabling",
+       "count": 4
+      }
+     ]
+    }
+   },
+   {
+    "term": "2026-09-01T16:00:00Z",
+    "count": 129,
+    "facets": {
+     "signature": [
+      {
+       "term": "AsyncShutdownTimeout | profile-change-teardown | ServiceWorkerShutdownBlocker: shutting down Service Workers",
+       "count": 24
+      },
+      {
+       "term": "AsyncShutdownTimeout | profile-before-change | ASRouterStorage: flush pending writes,ServiceWorkerRegistrar: Flushing data,ShieldRecipeClient: Cleaning up",
+       "count": 12
+      },
+      {
+       "term": "AsyncShutdownTimeout | profile-before-change | ServiceWorkerRegistrar: Flushing data",
+       "count": 10
+      },
+      {
+       "term": "OOM | large | alloc::raw_vec::handle_error",
+       "count": 7
+      },
+      {
+       "term": "OOM | small",
+       "count": 7
+      }
+     ]
+    }
+   },
+   {
+    "term": "2026-09-01T17:00:00Z",
+    "count": 108,
+    "facets": {
+     "signature": [
+      {
+       "term": "AsyncShutdownTimeout | profile-change-teardown | ServiceWorkerShutdownBlocker: shutting down Service Workers",
+       "count": 26
+      },
+      {
+       "term": "arena_run_reg_dalloc | arena_t::DallocSmall | arena_dalloc | BaseAllocator::free | MozJemalloc::free | PageFree",
+       "count": 14
+      },
+      {
+       "term": "AsyncShutdownTimeout | profile-before-change | ASRouterStorage: flush pending writes,ServiceWorkerRegistrar: Flushing data,ShieldRecipeClient: Cleaning up",
+       "count": 13
+      },
+      {
+       "term": "AsyncShutdownTimeout | profile-before-change | ServiceWorkerRegistrar: Flushing data",
+       "count": 9
+      },
+      {
+       "term": "OOM | small",
+       "count": 6
+      }
+     ]
+    }
+   },
+   {
+    "term": "2026-09-01T18:00:00Z",
+    "count": 87,
+    "facets": {
+     "signature": [
+      {
+       "term": "AsyncShutdownTimeout | profile-change-teardown | ServiceWorkerShutdownBlocker: shutting down Service Workers",
+       "count": 23
+      },
+      {
+       "term": "AsyncShutdownTimeout | profile-before-change | ServiceWorkerRegistrar: Flushing data",
+       "count": 6
+      },
+      {
+       "term": "AsyncShutdownTimeout | Places Clients shutdown | sanitize.js: Sanitize on shutdown",
+       "count": 5
+      },
+      {
+       "term": "AsyncShutdownTimeout | profile-before-change | ASRouterStorage: flush pending writes,ServiceWorkerRegistrar: Flushing data,ShieldRecipeClient: Cleaning up",
+       "count": 5
+      },
+      {
+       "term": "AsyncShutdownTimeout | quit-application | RemoteSettingsExperimentLoader: disabling",
+       "count": 3
+      }
+     ]
+    }
+   },
+   {
+    "term": "2026-09-01T19:00:00Z",
+    "count": 87,
+    "facets": {
+     "signature": [
+      {
+       "term": "AsyncShutdownTimeout | profile-change-teardown | ServiceWorkerShutdownBlocker: shutting down Service Workers",
+       "count": 18
+      },
+      {
+       "term": "AsyncShutdownTimeout | profile-before-change | ASRouterStorage: flush pending writes,ServiceWorkerRegistrar: Flushing data,ShieldRecipeClient: Cleaning up",
+       "count": 10
+      },
+      {
+       "term": "AsyncShutdownTimeout | quit-application | RemoteSettingsExperimentLoader: disabling",
+       "count": 5
+      },
+      {
+       "term": "mozilla::webgpu::WebGPUParent::MapCallback",
+       "count": 5
+      },
+      {
+       "term": "AsyncShutdownTimeout | profile-before-change | ServiceWorkerRegistrar: Flushing data",
+       "count": 4
+      }
+     ]
+    }
+   },
+   {
+    "term": "2026-09-01T20:00:00Z",
+    "count": 78,
+    "facets": {
+     "signature": [
+      {
+       "term": "AsyncShutdownTimeout | profile-change-teardown | ServiceWorkerShutdownBlocker: shutting down Service Workers",
+       "count": 13
+      },
+      {
+       "term": "AsyncShutdownTimeout | quit-application | RemoteSettingsExperimentLoader: disabling",
+       "count": 7
+      },
+      {
+       "term": "OOM | unknown | js::AutoEnterOOMUnsafeRegion::crash_impl | js::AutoEnterOOMUnsafeRegion::crash | js::gc::AllocateTenuredCellInGC",
+       "count": 7
+      },
+      {
+       "term": "AsyncShutdownTimeout | profile-before-change | ASRouterStorage: flush pending writes,ServiceWorkerRegistrar: Flushing data,ShieldRecipeClient: Cleaning up",
+       "count": 6
+      },
+      {
+       "term": "OOM | unknown | js::AutoEnterOOMUnsafeRegion::crash_impl | js::AutoEnterOOMUnsafeRegion::crash | js::Nursery::maybeMoveRawBufferOnPromotion",
+       "count": 4
+      }
+     ]
+    }
+   },
+   {
+    "term": "2026-09-01T21:00:00Z",
+    "count": 57,
+    "facets": {
+     "signature": [
+      {
+       "term": "AsyncShutdownTimeout | profile-change-teardown | ServiceWorkerShutdownBlocker: shutting down Service Workers",
+       "count": 9
+      },
+      {
+       "term": "AsyncShutdownTimeout | profile-before-change | ServiceWorkerRegistrar: Flushing data",
+       "count": 5
+      },
+      {
+       "term": "libavcodec.so.60",
+       "count": 5
+      },
+      {
+       "term": "AsyncShutdownTimeout | Places Clients shutdown | sanitize.js: Sanitize on shutdown",
+       "count": 4
+      },
+      {
+       "term": "OOM | unknown | mozilla::dom::UntypedToJSVal",
+       "count": 4
+      }
+     ]
+    }
+   },
+   {
+    "term": "2026-09-01T22:00:00Z",
+    "count": 43,
+    "facets": {
+     "signature": [
+      {
+       "term": "AsyncShutdownTimeout | profile-change-teardown | ServiceWorkerShutdownBlocker: shutting down Service Workers",
+       "count": 15
+      },
+      {
+       "term": "AsyncShutdownTimeout | profile-before-change | ASRouterStorage: flush pending writes,ServiceWorkerRegistrar: Flushing data,ShieldRecipeClient: Cleaning up",
+       "count": 3
+      },
+      {
+       "term": "OOM | unknown | NS_ABORT_OOM | mozilla::dom::ContentChild::RecvConstructBrowser",
+       "count": 3
+      },
+      {
+       "term": "OOM | unknown | js::AutoEnterOOMUnsafeRegion::crash_impl | js::AutoEnterOOMUnsafeRegion::crash | js::gc::AllocateTenuredCellInGC",
+       "count": 3
+      },
+      {
+       "term": "AsyncShutdownTimeout | profile-before-change | ServiceWorkerRegistrar: Flushing data",
+       "count": 2
+      }
+     ]
+    }
+   },
+   {
+    "term": "2026-09-01T23:00:00Z",
+    "count": 54,
+    "facets": {
+     "signature": [
+      {
+       "term": "AsyncShutdownTimeout | profile-change-teardown | ServiceWorkerShutdownBlocker: shutting down Service Workers",
+       "count": 11
+      },
+      {
+       "term": "AsyncShutdownTimeout | quit-application | RemoteSettingsExperimentLoader: disabling",
+       "count": 5
+      },
+      {
+       "term": "AsyncShutdownTimeout | profile-before-change | ASRouterStorage: flush pending writes,ServiceWorkerRegistrar: Flushing data,ShieldRecipeClient: Cleaning up",
+       "count": 4
+      },
+      {
+       "term": "AsyncShutdownTimeout | profile-before-change | ServiceWorkerRegistrar: Flushing data",
+       "count": 4
+      },
+      {
+       "term": "mozilla::webgpu::WebGPUParent::MapCallback",
+       "count": 4
+      }
+     ]
+    }
+   }
+  ]
+ }
+}

@@ -1,0 +1,104 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="color-scheme" content="light dark">
+<title>Crash spikes</title>
+<link id="favicon" rel="icon" href="{{ url_for('dashboard.static', filename='favicon.png') }}">
+<link rel="stylesheet" href="{{ url_for('dashboard.static', filename='dashboard.css') }}">
+</head>
+<body>
+<div id="toolbar" class="toolbar">
+  <header class="page-header">
+    <div class="header-row">
+      <h1>Crash spikes</h1>
+      <p id="freshness" class="freshness" aria-live="polite"></p>
+    </div>
+    <p id="error-line" class="error-line" role="alert" hidden></p>
+    <div id="banner" class="banner" role="status" hidden></div>
+  </header>
+  <section id="overview" aria-labelledby="overview-title">
+    <h2 id="overview-title" class="visually-hidden">Channels</h2>
+    <div id="channel-cards" class="cards"></div>
+    <p id="empty-state" class="empty" hidden>No data yet — the first scheduler run is backfilling</p>
+  </section>
+</div>
+
+<main>
+
+  <section id="flagged" aria-labelledby="flagged-title" hidden>
+    <div class="section-head">
+      <h2 id="flagged-title">All channels <span class="sub">flagged now</span></h2>
+      <p id="flagged-meta" class="meta"></p>
+    </div>
+    <div id="alerts-table" class="table-wrap"></div>
+  </section>
+
+  <section id="detail" aria-labelledby="detail-title" hidden>
+    <div class="section-head">
+      <h2 id="detail-title"></h2>
+      <p id="detail-meta" class="meta"></p>
+    </div>
+    <div id="tiles" class="tiles"></div>
+    <p id="drivers" class="drivers" hidden></p>
+
+    <form id="range-controls" class="filter-row" aria-label="Chart range">
+      <span class="filter-label">Range</span>
+      <div class="seg" role="group" aria-label="Days of history">
+        <label><input type="radio" name="days" value="30"><span>30 d</span></label>
+        <label><input type="radio" name="days" value="90" checked><span>90 d</span></label>
+        <label><input type="radio" name="days" value="180"><span>180 d</span></label>
+        <label id="range-all" hidden><input type="radio" name="days" value="730"><span>All</span></label>
+      </div>
+      <span class="filter-label">Granularity</span>
+      <div class="seg" role="group" aria-label="Bucket size">
+        <label><input type="radio" name="granularity" value="day" checked><span>Day</span></label>
+        <label><input type="radio" name="granularity" value="week"><span>Week</span></label>
+      </div>
+    </form>
+
+    <div class="charts">
+      <div class="chart-card">
+        <h3>Today by hour <span class="sub">UTC</span></h3>
+        <div id="intraday-chart"></div>
+      </div>
+      <div class="chart-card">
+        <h3>Daily crashes <span id="daily-sub" class="sub"></span></h3>
+        <div id="daily-chart"></div>
+      </div>
+    </div>
+
+    <details id="model-details" class="model">
+      <summary>
+        <span class="summary-title">How the expectation is built</span>
+        <span id="model-summary" class="model-summary"></span>
+      </summary>
+      <div id="model-body" class="model-body"></div>
+    </details>
+
+    <div class="section-head">
+      <h3 id="signatures-title">Signatures</h3>
+      <p id="signatures-meta" class="meta"></p>
+    </div>
+    <form id="sig-filters" class="filter-row" aria-label="Signature filters">
+      <div class="chip-toggles" role="group" aria-label="Severity">
+        <label class="chip-toggle chip-major"><input type="checkbox" name="sev" value="major" checked><span>major</span></label>
+        <label class="chip-toggle chip-spike"><input type="checkbox" name="sev" value="spike" checked><span>spike</span></label>
+        <label class="chip-toggle chip-watch"><input type="checkbox" name="sev" value="watch" checked><span>watch</span></label>
+        <label class="chip-toggle chip-drop"><input type="checkbox" name="sev" value="drop" checked><span>drop</span></label>
+        <label class="chip-toggle chip-new"><input type="checkbox" name="sev" value="new" checked><span>new</span></label>
+      </div>
+      <input id="sig-search" type="search" placeholder="Filter signatures" aria-label="Filter signatures" autocomplete="off">
+      <label class="check"><input type="checkbox" id="hide-noise" checked><span>hide noise</span></label>
+      <label class="check">min crashes <input type="number" id="min-crashes" min="0" step="1" value="0" aria-label="Minimum crashes today"></label>
+      <label class="check"><input type="checkbox" id="show-storms"><span>show <span id="storm-count">0 storms</span></span></label>
+      <label class="check"><input type="checkbox" id="show-unflagged"><span>show <span id="unflagged-count">0</span> unflagged</span></label>
+    </form>
+    <div id="signature-table" class="table-wrap"></div>
+  </section>
+</main>
+
+<script type="module" src="{{ url_for('dashboard.static', filename='dashboard.js') }}"></script>
+</body>
+</html>

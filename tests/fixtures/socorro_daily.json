@@ -1,0 +1,483 @@
+{
+ "hits": [],
+ "total": 294831,
+ "errors": [],
+ "facets": {
+  "signature": [
+   {
+    "term": "OOM | small",
+    "count": 41497
+   },
+   {
+    "term": "OOM | unknown | js::AutoEnterOOMUnsafeRegion::crash_impl | js::gc::FreeSpan::allocate",
+    "count": 12624
+   },
+   {
+    "term": "OOM | unknown | js::AutoEnterOOMUnsafeRegion::crash_impl | js::AutoEnterOOMUnsafeRegion::crash | js::gc::AllocateTenuredCellInGC",
+    "count": 11609
+   },
+   {
+    "term": "EMPTY: no frame data available; EmptyMinidump",
+    "count": 10015
+   },
+   {
+    "term": "shutdownhang | RtlWaitOnAddress | WaitOnAddress",
+    "count": 7304
+   },
+   {
+    "term": "shutdownhang | RtlpWaitOnAddressWithTimeout | RtlpWaitOnAddress | RtlWaitOnAddress | WaitOnAddress",
+    "count": 7258
+   }
+  ],
+  "histogram_date": [
+   {
+    "term": "2026-08-18T00:00:00Z",
+    "count": 21458,
+    "facets": {
+     "signature": [
+      {
+       "term": "OOM | small",
+       "count": 2646
+      },
+      {
+       "term": "OOM | unknown | js::AutoEnterOOMUnsafeRegion::crash_impl | js::gc::FreeSpan::allocate",
+       "count": 1029
+      },
+      {
+       "term": "OOM | unknown | js::AutoEnterOOMUnsafeRegion::crash_impl | js::AutoEnterOOMUnsafeRegion::crash | js::gc::AllocateTenuredCellInGC",
+       "count": 961
+      },
+      {
+       "term": "shutdownhang | RtlWaitOnAddress | WaitOnAddress",
+       "count": 926
+      },
+      {
+       "term": "shutdownhang | RtlpWaitOnAddressWithTimeout | RtlpWaitOnAddress | RtlWaitOnAddress | WaitOnAddress",
+       "count": 577
+      },
+      {
+       "term": "js::gc::HeaderWord::get",
+       "count": 538
+      }
+     ]
+    }
+   },
+   {
+    "term": "2026-08-19T00:00:00Z",
+    "count": 22532,
+    "facets": {
+     "signature": [
+      {
+       "term": "OOM | small",
+       "count": 2695
+      },
+      {
+       "term": "OOM | unknown | js::AutoEnterOOMUnsafeRegion::crash_impl | js::gc::FreeSpan::allocate",
+       "count": 1071
+      },
+      {
+       "term": "OOM | unknown | js::AutoEnterOOMUnsafeRegion::crash_impl | js::AutoEnterOOMUnsafeRegion::crash | js::gc::AllocateTenuredCellInGC",
+       "count": 1023
+      },
+      {
+       "term": "shutdownhang | RtlWaitOnAddress | WaitOnAddress",
+       "count": 689
+      },
+      {
+       "term": "shutdownhang | RtlpWaitOnAddressWithTimeout | RtlpWaitOnAddress | RtlWaitOnAddress | WaitOnAddress",
+       "count": 635
+      },
+      {
+       "term": "js::gc::detail::ChunkPtrHasStoreBuffer",
+       "count": 512
+      }
+     ]
+    }
+   },
+   {
+    "term": "2026-08-20T00:00:00Z",
+    "count": 21453,
+    "facets": {
+     "signature": [
+      {
+       "term": "OOM | small",
+       "count": 2639
+      },
+      {
+       "term": "OOM | unknown | js::AutoEnterOOMUnsafeRegion::crash_impl | js::gc::FreeSpan::allocate",
+       "count": 1020
+      },
+      {
+       "term": "OOM | unknown | js::AutoEnterOOMUnsafeRegion::crash_impl | js::AutoEnterOOMUnsafeRegion::crash | js::gc::AllocateTenuredCellInGC",
+       "count": 966
+      },
+      {
+       "term": "AsyncShutdownTimeout | quit-application | newtabTrainhopAddon scheduleUpdateTrainhopAddonState shutting down",
+       "count": 677
+      },
+      {
+       "term": "shutdownhang | RtlWaitOnAddress | WaitOnAddress",
+       "count": 595
+      },
+      {
+       "term": "shutdownhang | RtlpWaitOnAddressWithTimeout | RtlpWaitOnAddress | RtlWaitOnAddress | WaitOnAddress",
+       "count": 580
+      }
+     ]
+    }
+   },
+   {
+    "term": "2026-08-21T00:00:00Z",
+    "count": 25418,
+    "facets": {
+     "signature": [
+      {
+       "term": "OOM | small",
+       "count": 3938
+      },
+      {
+       "term": "EMPTY: no frame data available; EmptyMinidump",
+       "count": 2022
+      },
+      {
+       "term": "OOM | unknown | js::AutoEnterOOMUnsafeRegion::crash_impl | js::AutoEnterOOMUnsafeRegion::crash | js::gc::AllocateTenuredCellInGC",
+       "count": 863
+      },
+      {
+       "term": "AsyncShutdownTimeout | quit-application | newtabTrainhopAddon scheduleUpdateTrainhopAddonState shutting down",
+       "count": 848
+      },
+      {
+       "term": "OOM | unknown | js::AutoEnterOOMUnsafeRegion::crash_impl | js::gc::FreeSpan::allocate",
+       "count": 834
+      },
+      {
+       "term": "IPCError-browser | GPUProcessKill",
+       "count": 772
+      }
+     ]
+    }
+   },
+   {
+    "term": "2026-08-22T00:00:00Z",
+    "count": 19192,
+    "facets": {
+     "signature": [
+      {
+       "term": "OOM | small",
+       "count": 3116
+      },
+      {
+       "term": "EMPTY: no frame data available; EmptyMinidump",
+       "count": 1707
+      },
+      {
+       "term": "IPCError-browser | GPUProcessKill",
+       "count": 685
+      },
+      {
+       "term": "OOM | unknown | js::AutoEnterOOMUnsafeRegion::crash_impl | js::gc::FreeSpan::allocate",
+       "count": 664
+      },
+      {
+       "term": "OOM | unknown | js::AutoEnterOOMUnsafeRegion::crash_impl | js::AutoEnterOOMUnsafeRegion::crash | js::gc::AllocateTenuredCellInGC",
+       "count": 571
+      },
+      {
+       "term": "AsyncShutdownTimeout | quit-application | newtabTrainhopAddon scheduleUpdateTrainhopAddonState shutting down",
+       "count": 449
+      }
+     ]
+    }
+   },
+   {
+    "term": "2026-08-23T00:00:00Z",
+    "count": 17309,
+    "facets": {
+     "signature": [
+      {
+       "term": "OOM | small",
+       "count": 2502
+      },
+      {
+       "term": "EMPTY: no frame data available; EmptyMinidump",
+       "count": 1061
+      },
+      {
+       "term": "OOM | unknown | js::AutoEnterOOMUnsafeRegion::crash_impl | js::gc::FreeSpan::allocate",
+       "count": 643
+      },
+      {
+       "term": "OOM | unknown | js::AutoEnterOOMUnsafeRegion::crash_impl | js::AutoEnterOOMUnsafeRegion::crash | js::gc::AllocateTenuredCellInGC",
+       "count": 535
+      },
+      {
+       "term": "js::gc::detail::ChunkPtrHasStoreBuffer",
+       "count": 390
+      },
+      {
+       "term": "shutdownhang | RtlpWaitOnAddressWithTimeout | RtlpWaitOnAddress | RtlWaitOnAddress | WaitOnAddress",
+       "count": 368
+      }
+     ]
+    }
+   },
+   {
+    "term": "2026-08-24T00:00:00Z",
+    "count": 24192,
+    "facets": {
+     "signature": [
+      {
+       "term": "OOM | small",
+       "count": 3245
+      },
+      {
+       "term": "EMPTY: no frame data available; EmptyMinidump",
+       "count": 1104
+      },
+      {
+       "term": "OOM | unknown | js::AutoEnterOOMUnsafeRegion::crash_impl | js::AutoEnterOOMUnsafeRegion::crash | js::gc::AllocateTenuredCellInGC",
+       "count": 1034
+      },
+      {
+       "term": "OOM | unknown | js::AutoEnterOOMUnsafeRegion::crash_impl | js::gc::FreeSpan::allocate",
+       "count": 1028
+      },
+      {
+       "term": "shutdownhang | RtlWaitOnAddress | WaitOnAddress",
+       "count": 546
+      },
+      {
+       "term": "shutdownhang | RtlpWaitOnAddressWithTimeout | RtlpWaitOnAddress | RtlWaitOnAddress | WaitOnAddress",
+       "count": 538
+      }
+     ]
+    }
+   },
+   {
+    "term": "2026-08-25T00:00:00Z",
+    "count": 20976,
+    "facets": {
+     "signature": [
+      {
+       "term": "OOM | small",
+       "count": 2701
+      },
+      {
+       "term": "OOM | unknown | js::AutoEnterOOMUnsafeRegion::crash_impl | js::gc::FreeSpan::allocate",
+       "count": 963
+      },
+      {
+       "term": "OOM | unknown | js::AutoEnterOOMUnsafeRegion::crash_impl | js::AutoEnterOOMUnsafeRegion::crash | js::gc::AllocateTenuredCellInGC",
+       "count": 892
+      },
+      {
+       "term": "shutdownhang | RtlpWaitOnAddressWithTimeout | RtlpWaitOnAddress | RtlWaitOnAddress | WaitOnAddress",
+       "count": 547
+      },
+      {
+       "term": "shutdownhang | RtlWaitOnAddress | WaitOnAddress",
+       "count": 493
+      },
+      {
+       "term": "js::gc::detail::ChunkPtrHasStoreBuffer",
+       "count": 484
+      }
+     ]
+    }
+   },
+   {
+    "term": "2026-08-26T00:00:00Z",
+    "count": 22816,
+    "facets": {
+     "signature": [
+      {
+       "term": "OOM | small",
+       "count": 3221
+      },
+      {
+       "term": "OOM | unknown | js::AutoEnterOOMUnsafeRegion::crash_impl | js::gc::FreeSpan::allocate",
+       "count": 1009
+      },
+      {
+       "term": "OOM | unknown | js::AutoEnterOOMUnsafeRegion::crash_impl | js::AutoEnterOOMUnsafeRegion::crash | js::gc::AllocateTenuredCellInGC",
+       "count": 923
+      },
+      {
+       "term": "EMPTY: no frame data available; EmptyMinidump",
+       "count": 900
+      },
+      {
+       "term": "shutdownhang | RtlpWaitOnAddressWithTimeout | RtlpWaitOnAddress | RtlWaitOnAddress | WaitOnAddress",
+       "count": 579
+      },
+      {
+       "term": "shutdownhang | RtlWaitOnAddress | WaitOnAddress",
+       "count": 561
+      }
+     ]
+    }
+   },
+   {
+    "term": "2026-08-27T00:00:00Z",
+    "count": 23228,
+    "facets": {
+     "signature": [
+      {
+       "term": "OOM | small",
+       "count": 3193
+      },
+      {
+       "term": "EMPTY: no frame data available; EmptyMinidump",
+       "count": 1008
+      },
+      {
+       "term": "OOM | unknown | js::AutoEnterOOMUnsafeRegion::crash_impl | js::gc::FreeSpan::allocate",
+       "count": 979
+      },
+      {
+       "term": "OOM | unknown | js::AutoEnterOOMUnsafeRegion::crash_impl | js::AutoEnterOOMUnsafeRegion::crash | js::gc::AllocateTenuredCellInGC",
+       "count": 869
+      },
+      {
+       "term": "AsyncShutdownTimeout | quit-application | newtabTrainhopAddon scheduleUpdateTrainhopAddonState shutting down",
+       "count": 757
+      },
+      {
+       "term": "shutdownhang | RtlpWaitOnAddressWithTimeout | RtlpWaitOnAddress | RtlWaitOnAddress | WaitOnAddress",
+       "count": 594
+      }
+     ]
+    }
+   },
+   {
+    "term": "2026-08-28T00:00:00Z",
+    "count": 21194,
+    "facets": {
+     "signature": [
+      {
+       "term": "OOM | small",
+       "count": 3083
+      },
+      {
+       "term": "OOM | unknown | js::AutoEnterOOMUnsafeRegion::crash_impl | js::gc::FreeSpan::allocate",
+       "count": 895
+      },
+      {
+       "term": "AsyncShutdownTimeout | quit-application | newtabTrainhopAddon scheduleUpdateTrainhopAddonState shutting down",
+       "count": 804
+      },
+      {
+       "term": "OOM | unknown | js::AutoEnterOOMUnsafeRegion::crash_impl | js::AutoEnterOOMUnsafeRegion::crash | js::gc::AllocateTenuredCellInGC",
+       "count": 778
+      },
+      {
+       "term": "EMPTY: no frame data available; EmptyMinidump",
+       "count": 666
+      },
+      {
+       "term": "AsyncShutdownTimeout | quit-application | RemoteSettingsExperimentLoader: disabling",
+       "count": 505
+      }
+     ]
+    }
+   },
+   {
+    "term": "2026-08-29T00:00:00Z",
+    "count": 16216,
+    "facets": {
+     "signature": [
+      {
+       "term": "OOM | small",
+       "count": 2413
+      },
+      {
+       "term": "OOM | unknown | js::AutoEnterOOMUnsafeRegion::crash_impl | js::gc::FreeSpan::allocate",
+       "count": 689
+      },
+      {
+       "term": "OOM | unknown | js::AutoEnterOOMUnsafeRegion::crash_impl | js::AutoEnterOOMUnsafeRegion::crash | js::gc::AllocateTenuredCellInGC",
+       "count": 602
+      },
+      {
+       "term": "AsyncShutdownTimeout | quit-application | RemoteSettingsExperimentLoader: disabling",
+       "count": 418
+      },
+      {
+       "term": "shutdownhang | RtlpWaitOnAddressWithTimeout | RtlpWaitOnAddress | RtlWaitOnAddress | WaitOnAddress",
+       "count": 396
+      },
+      {
+       "term": "AsyncShutdownTimeout | quit-application | newtabTrainhopAddon scheduleUpdateTrainhopAddonState shutting down",
+       "count": 386
+      }
+     ]
+    }
+   },
+   {
+    "term": "2026-08-30T00:00:00Z",
+    "count": 15614,
+    "facets": {
+     "signature": [
+      {
+       "term": "OOM | small",
+       "count": 2463
+      },
+      {
+       "term": "OOM | unknown | js::AutoEnterOOMUnsafeRegion::crash_impl | js::gc::FreeSpan::allocate",
+       "count": 661
+      },
+      {
+       "term": "OOM | unknown | js::AutoEnterOOMUnsafeRegion::crash_impl | js::AutoEnterOOMUnsafeRegion::crash | js::gc::AllocateTenuredCellInGC",
+       "count": 578
+      },
+      {
+       "term": "AsyncShutdownTimeout | quit-application | RemoteSettingsExperimentLoader: disabling",
+       "count": 434
+      },
+      {
+       "term": "shutdownhang | RtlpWaitOnAddressWithTimeout | RtlpWaitOnAddress | RtlWaitOnAddress | WaitOnAddress",
+       "count": 388
+      },
+      {
+       "term": "js::gc::detail::ChunkPtrHasStoreBuffer",
+       "count": 360
+      }
+     ]
+    }
+   },
+   {
+    "term": "2026-08-31T00:00:00Z",
+    "count": 23233,
+    "facets": {
+     "signature": [
+      {
+       "term": "OOM | small",
+       "count": 3642
+      },
+      {
+       "term": "OOM | unknown | js::AutoEnterOOMUnsafeRegion::crash_impl | js::gc::FreeSpan::allocate",
+       "count": 1139
+      },
+      {
+       "term": "OOM | unknown | js::AutoEnterOOMUnsafeRegion::crash_impl | js::AutoEnterOOMUnsafeRegion::crash | js::gc::AllocateTenuredCellInGC",
+       "count": 1014
+      },
+      {
+       "term": "AsyncShutdownTimeout | quit-application | RemoteSettingsExperimentLoader: disabling",
+       "count": 595
+      },
+      {
+       "term": "shutdownhang | RtlWaitOnAddress | WaitOnAddress",
+       "count": 553
+      },
+      {
+       "term": "shutdownhang | RtlpWaitOnAddressWithTimeout | RtlpWaitOnAddress | RtlWaitOnAddress | WaitOnAddress",
+       "count": 549
+      }
+     ]
+    }
+   }
+  ]
+ }
+}

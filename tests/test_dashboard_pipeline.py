@@ -1,0 +1,712 @@
+# This Source Code Form is subject to the terms of the Mozilla Public
+# License, v. 2.0. If a copy of the MPL was not distributed with this file,
+# You can obtain one at http://mozilla.org/MPL/2.0/.
+
+"""End-to-end tests of the dashboard pipeline on an in-memory SQLite DB.
+
+The Socorro responses are fixtures or synthetic; nothing touches the
+network.
+"""
+
+import datetime
+import json
+import os
+import unittest
+from unittest import mock
+
+import numpy as np
+
+from spikes import app, db
+from spikes.dashboard import api, collect, models, scoring, update
+from spikes.dashboard import socorro
+
+
+FIXTURES = os.path.join(os.path.dirname(__file__), 'fixtures')
+TODAY = datetime.date(2026, 9, 2)
+NOW = datetime.datetime(2026, 9, 2, 12, 0, 0)
+WEEKLY = np.array([1.15, 1.1, 1.1, 1.05, 1.0, 0.8, 0.8])
+
+
+def load(name):
+    with open(os.path.join(FIXTURES, name)) as In:
+        return json.load(In)
+
+
+class FakeFetcher:
+    """Serves canned responses per query kind."""
+
+    def __init__(self, responses):
+        self.responses = responses
+        self.count = 0
+        self.failures = 0
+
+    def remaining(self):
+        return 1000
+
+    def can_run(self, n=1):
+        return True
+
+    @staticmethod
+    def kind_of(params):
+        hist = params.get('_histogram.date')
+        if '_aggs.product' in params:
+            return 'day' if hist else 'installs'
+        if params.get('_histogram_interval.date') == '1d':
+            return 'daily'
+        if hist == 'product':
+            return 'hourly_total'
+        return 'recent'
+
+    def run(self, jobs):
+        for params, cb in jobs:
+            kind = self.kind_of(params)
+            self.count += 1
+            if self.responses.get(kind) is None:
+                self.failures += 1
+                continue
+            cb(self.responses[kind])
+        return len(jobs), len(jobs)
+
+
+class DBTestCase(unittest.TestCase):
+    """Tests that drop and recreate the dashboard tables.
+
+    They refuse to run against a configured database (``DATABASE_URL``)
+    unless ``DASHBOARD_TEST_ALLOW_DB=1`` is set, to protect real data.
+    """
+
+    def setUp(self):
+        if os.environ.get('DATABASE_URL') and \
+                not os.environ.get('DASHBOARD_TEST_ALLOW_DB'):
+            self.skipTest('DATABASE_URL is set; refusing to drop its tables'
+                          ' (set DASHBOARD_TEST_ALLOW_DB=1 to allow)')
+        self.ctx = app.app_context()
+        self.ctx.push()
+        models.drop_all()
+        models.create_all()
+
+    def tearDown(self):
+        db.session.rollback()
+        models.drop_all()
+        self.ctx.pop()
+
+
+class ConfigTest(unittest.TestCase):
+
+    def test_channels_per_product(self):
+        from spikes.dashboard import config
+        previous = config.override(
+            products=['Firefox', 'Fenix'],
+            channels={'Firefox': ['nightly', 'release', 'esr'],
+                      'Fenix': ['nightly', 'release']})
+        try:
+            self.assertEqual(config.channels('Firefox'),
+                             ['nightly', 'release', 'esr'])
+            self.assertEqual(config.channels('Fenix'), ['nightly', 'release'])
+            self.assertEqual(config.channels(), ['nightly', 'release', 'esr'])
+            self.assertEqual(config.pairs(), [
+                ('Firefox', 'nightly'), ('Firefox', 'release'),
+                ('Firefox', 'esr'), ('Fenix', 'nightly'),
+                ('Fenix', 'release')])
+            config.override(channels=['nightly', 'beta'])
+            self.assertEqual(config.channels('Fenix'), ['nightly', 'beta'])
+            self.assertEqual(len(config.pairs()), 4)
+        finally:
+            config.restore(previous)
+
+
+class CollectTest(DBTestCase):
+
+    def test_plan_today_incremental(self):
+        # today already fetched in full: an incremental window + installs
+        as_of = datetime.datetime(2026, 9, 2, 11, 40)
+        models.upsert_day('Firefox', 'nightly', TODAY, complete=True,
+                          as_of=as_of, installs_as_of=as_of, crashes=10)
+        db.session.commit()
+        now = datetime.datetime(2026, 9, 2, 11, 45)
+        units = collect.plan('Firefox', 'nightly', TODAY, history_days=0,
+                             recent_days=0, now=now)
+        self.assertEqual([u.kind for u in units], ['recent'])
+        self.assertEqual(units[0].start, datetime.datetime(2026, 9, 2, 10))
+        self.assertEqual(units[0].end, now)
+        self.assertEqual(units[0].day, TODAY)
+        p = units[0].params()
+        self.assertEqual(p['date'], ['>=2026-09-02T10:00:00',
+                                     '<2026-09-02T11:45:00'])
+        self.assertNotIn('_aggs.product', p)
+        # a full refresh (installs + late-indexed hours) once old enough
+        now = datetime.datetime(2026, 9, 2, 12, 15)
+        units = collect.plan('Firefox', 'nightly', TODAY, history_days=0,
+                             recent_days=0, now=now)
+        self.assertEqual([u.kind for u in units], ['day'])
+        # the window never starts before the day does
+        models.upsert_day('Firefox', 'nightly', TODAY,
+                          as_of=datetime.datetime(2026, 9, 2, 0, 20))
+        db.session.commit()
+        units = collect.plan('Firefox', 'nightly', TODAY, history_days=0,
+                             recent_days=0,
+                             now=datetime.datetime(2026, 9, 2, 0, 25))
+        self.assertEqual(units[0].start, datetime.datetime(2026, 9, 2, 0))
+
+    def test_write_recent_replaces_hours(self):
+        # full fetch of the day first
+        day = datetime.date(2026, 9, 1)
+        unit = collect.Unit('day', 'Firefox', 'nightly', day,
+                            day + datetime.timedelta(days=1))
+        collect.write_day(unit, socorro.parse_day(load('socorro_day.json')),
+                          datetime.datetime(2026, 9, 1, 14, 5), day)
+        db.session.commit()
+        s = models.get_series('Firefox', 'nightly',
+                              'libc.so.6 | cuEGLApiInit')
+        total_id = models.total_series('Firefox', 'nightly')
+        before = models.load_hourly([s.id, total_id], [day])
+        old_total = list(before[total_id][day])
+        old_sig = list(before[s.id][day])
+        # an incremental window 13:00 -> 14:30 says: hour 13 had 5 crashes
+        # of a new signature only, hour 14 had 2 of cuEGLApiInit
+        response = {'errors': [], 'total': 7, 'facets': {
+            'signature': [{'term': 'brand new', 'count': 5, 'facets': {
+                               'cardinality_install_time': {'value': 1}}},
+                          {'term': 'libc.so.6 | cuEGLApiInit', 'count': 2,
+                           'facets': {'cardinality_install_time':
+                                      {'value': 2}}}],
+            'histogram_date': [
+                {'term': '2026-09-01T13:00:00Z', 'count': 5, 'facets': {
+                    'cardinality_install_time': {'value': 1},
+                    'signature': [{'term': 'brand new', 'count': 5}]}},
+                {'term': '2026-09-01T14:00:00Z', 'count': 2, 'facets': {
+                    'cardinality_install_time': {'value': 2},
+                    'signature': [{'term': 'libc.so.6 | cuEGLApiInit',
+                                   'count': 2}]}}]}}
+        unit = collect.Unit('recent', 'Firefox', 'nightly',
+                            datetime.datetime(2026, 9, 1, 13),
+                            datetime.datetime(2026, 9, 1, 14, 30))
+        collect.write_recent(unit, socorro.parse_recent(response),
+                             datetime.datetime(2026, 9, 1, 14, 30), day)
+        db.session.commit()
+        after = models.load_hourly([s.id, total_id], [day])
+        sig = after[s.id][day]
+        total = after[total_id][day]
+        # hours outside the window untouched, inside replaced
+        self.assertEqual(sig[:13], old_sig[:13])
+        self.assertEqual(total[:13], old_total[:13])
+        self.assertEqual(sig[13], 0)
+        self.assertEqual(sig[14], 2)
+        self.assertEqual(total[13], 5)
+        self.assertEqual(total[14], 2)
+        self.assertEqual(total[15:], old_total[15:])
+        new = models.get_series('Firefox', 'nightly', 'brand new')
+        self.assertEqual(after and models.load_hourly([new.id], [day])[
+            new.id][day][13], 5)
+        # day counts are the sums of the hourly arrays
+        daily = models.load_daily([s.id, total_id, new.id], day, day)
+        self.assertEqual(daily[s.id][day][0], sum(sig))
+        self.assertEqual(daily[total_id][day][0], sum(total))
+        self.assertEqual(daily[new.id][day][0], 5)
+        # a signature new to the day gets the window's distinct installs;
+        # a known one keeps the installs of the last full refresh
+        self.assertEqual(daily[new.id][day][1], 1)
+        self.assertEqual(daily[s.id][day][1], 9)
+        row = models.get_day('Firefox', 'nightly', day)
+        self.assertEqual(row.crashes, sum(total))
+        self.assertEqual(row.as_of, datetime.datetime(2026, 9, 1, 14, 30))
+        # hourly installs of the total replaced in the window
+        inst = models.load_hourly([total_id], [day], installs=True)
+        self.assertEqual(inst[total_id][day][13:15], [1, 2])
+        # installs refresh
+        response = {'errors': [], 'total': 3100, 'facets': {
+            'product': [{'term': 'Firefox', 'count': 3100, 'facets': {
+                'cardinality_install_time': {'value': 1500}}}],
+            'signature': [
+                {'term': 'libc.so.6 | cuEGLApiInit', 'count': 825,
+                 'facets': {'cardinality_install_time': {'value': 11}}}]}}
+        unit = collect.Unit('installs', 'Firefox', 'nightly', day,
+                            day + datetime.timedelta(days=1))
+        collect.write_installs(unit, socorro.parse_installs(response),
+                               datetime.datetime(2026, 9, 1, 14, 31), day)
+        db.session.commit()
+        daily = models.load_daily([s.id, total_id], day, day)
+        self.assertEqual(daily[s.id][day][1], 11)
+        self.assertEqual(daily[s.id][day][0], sum(sig))  # counts kept
+        self.assertEqual(daily[s.id][day][2], 825)  # matched crash count
+        self.assertEqual(daily[total_id][day][1], 1500)
+        row = models.get_day('Firefox', 'nightly', day)
+        self.assertEqual(row.installs_as_of,
+                         datetime.datetime(2026, 9, 1, 14, 31))
+
+    def test_plan_fresh_channel(self):
+        units = collect.plan('Firefox', 'nightly', TODAY, history_days=30,
+                             recent_days=7, chunk_days=14)
+        kinds = [u.kind for u in units]
+        self.assertEqual(kinds[:8], ['day'] * 8)
+        self.assertEqual(units[0].start, TODAY)
+        self.assertEqual(units[7].start, TODAY - datetime.timedelta(days=7))
+        # 30 - 7 = 23 missing history days -> 2 chunks x 2 queries
+        self.assertEqual(kinds[8:], ['daily', 'hourly_total'] * 2)
+        self.assertEqual(units[8].start, TODAY - datetime.timedelta(days=30))
+        self.assertEqual((units[8].end - units[8].start).days, 14)
+
+    def test_plan_skips_final_days(self):
+        old = TODAY - datetime.timedelta(days=3)
+        models.upsert_day('Firefox', 'nightly', old, final=True,
+                          complete=True, as_of=NOW)
+        models.upsert_day('Firefox', 'nightly',
+                          TODAY - datetime.timedelta(days=2), final=True,
+                          complete=False, as_of=NOW)
+        db.session.commit()
+        units = collect.plan('Firefox', 'nightly', TODAY, history_days=8,
+                             recent_days=7)
+        starts = [u.start for u in units if u.kind == 'day']
+        self.assertNotIn(old, starts)
+        # final but fetched without the hourly split: fetched again
+        self.assertIn(TODAY - datetime.timedelta(days=2), starts)
+        self.assertIn(TODAY, starts)
+
+    def test_is_final(self):
+        day = TODAY - datetime.timedelta(days=1)
+        early = datetime.datetime(2026, 9, 2, 3, 0)
+        late = datetime.datetime(2026, 9, 2, 7, 0)
+        self.assertFalse(collect.is_final(day, early, 10, 10, TODAY, 6, 7))
+        self.assertFalse(collect.is_final(day, late, 10, 9, TODAY, 6, 7))
+        self.assertFalse(collect.is_final(day, late, 10, None, TODAY, 6, 7))
+        self.assertTrue(collect.is_final(day, late, 10, 10, TODAY, 6, 7))
+        old = TODAY - datetime.timedelta(days=20)
+        self.assertTrue(collect.is_final(old, late, 10, None, TODAY, 6, 7))
+
+    def test_execute_and_write(self):
+        responses = {'day': load('socorro_day.json'),
+                     'daily': load('socorro_daily.json'),
+                     'hourly_total': load('socorro_hourly.json')}
+        today = datetime.date(2026, 9, 2)
+        units = [collect.Unit('day', 'Firefox', 'nightly',
+                              datetime.date(2026, 9, 1),
+                              datetime.date(2026, 9, 2)),
+                 collect.Unit('daily', 'Firefox', 'nightly',
+                              datetime.date(2026, 8, 18),
+                              datetime.date(2026, 9, 1)),
+                 collect.Unit('hourly_total', 'Firefox', 'nightly',
+                              datetime.date(2026, 9, 1),
+                              datetime.date(2026, 9, 2))]
+        now = datetime.datetime(2026, 9, 2, 12, 0)
+        written, failed, skipped = collect.execute(
+            units, FakeFetcher(responses), today, now)
+        self.assertEqual((written, failed, skipped), (3, 0, 0))
+        day = models.get_day('Firefox', 'nightly', datetime.date(2026, 9, 1))
+        self.assertTrue(day.complete)
+        self.assertEqual(day.crashes, responses['day']['total'])
+        self.assertFalse(day.final)  # first fetch: no previous total
+        total_id = models.total_series('Firefox', 'nightly')
+        daily = models.load_daily([total_id], datetime.date(2026, 8, 18))
+        self.assertEqual(len(daily[total_id]), 15)
+        s = models.get_series('Firefox', 'nightly',
+                              'libc.so.6 | cuEGLApiInit')
+        self.assertIsNotNone(s)
+        self.assertEqual(s.first_seen, datetime.date(2026, 9, 1))
+        rows = models.load_daily([s.id], datetime.date(2026, 9, 1))
+        crashes, installs, _ = rows[s.id][datetime.date(2026, 9, 1)]
+        self.assertEqual(crashes, 823)
+        self.assertEqual(installs, 9)
+        hourly = models.load_hourly([s.id, total_id],
+                                    [datetime.date(2026, 9, 1)])
+        self.assertEqual(sum(hourly[s.id][datetime.date(2026, 9, 1)]), 823)
+        self.assertEqual(hourly[total_id][datetime.date(2026, 9, 1)][13],
+                         978)
+        # a second fetch with the same total after the grace period is final
+        collect.execute(units[:1], FakeFetcher(responses), today, now)
+        day = models.get_day('Firefox', 'nightly', datetime.date(2026, 9, 1))
+        self.assertTrue(day.final)
+        # nothing left to fetch for 2026-09-01 (final); the history days
+        # written by the daily chunk still lack the total's hourly split
+        units = collect.plan('Firefox', 'nightly', today, history_days=15,
+                             recent_days=7)
+        kinds = [u.kind for u in units]
+        self.assertNotIn('daily', kinds)
+        self.assertEqual(kinds.count('hourly_total'), 1)
+        hourly = [u for u in units if u.kind == 'hourly_total'][0]
+        self.assertEqual(hourly.start, datetime.date(2026, 8, 18))
+        starts = [u.start for u in units if u.kind == 'day']
+        self.assertIn(today, starts)
+        self.assertNotIn(datetime.date(2026, 9, 1), starts)
+
+    def test_write_marks_noise(self):
+        data = load('socorro_day.json')
+        data['facets']['signature'].append(
+            {'term': 'IPCError-browser | ShutDownKill', 'count': 50,
+             'facets': {'cardinality_install_time': {'value': 40}}})
+        unit = collect.Unit('day', 'Firefox', 'nightly',
+                            datetime.date(2026, 9, 1),
+                            datetime.date(2026, 9, 2))
+        collect.write_day(unit, socorro.parse_day(data), NOW, TODAY)
+        db.session.commit()
+        s = models.get_series('Firefox', 'nightly',
+                              'IPCError-browser | ShutDownKill')
+        self.assertTrue(s.noise)
+        s = models.get_series('Firefox', 'nightly',
+                              'libc.so.6 | cuEGLApiInit')
+        self.assertFalse(s.noise)
+
+
+def seed_channel(product, channel, today, now, ndays=60, base=10000.0,
+                 seed=0, hour_now=12):
+    """Create a synthetic channel: total + a few signatures with stories.
+
+    Returns the signature -> daily mean mapping.
+    """
+    rng = np.random.default_rng(seed)
+    days = [today - datetime.timedelta(days=i) for i in range(ndays, -1, -1)]
+    profile = np.ones(24) / 24.0
+    total_id = models.total_series(product, channel)
+    stories = {
+        'stable': dict(mean=100.0, today=1.0),
+        'spiking': dict(mean=100.0, today=4.0),
+        'brand new': dict(mean=0.0, today=None, new=60),
+        # a couple of machines crashing in a loop
+        'storm | 0x1': dict(mean=50.0, today=6.0, installs=2),
+        # one machine with a thousand crashes of a normally quiet signature
+        'one machine': dict(mean=5.0, today=200.0, installs=1),
+        # crashes x3 but from the usual number of machines: not a spike
+        'loop only': dict(mean=100.0, today=3.0, installs_share=0.3),
+        'IPCError-browser | ShutDownKill': dict(mean=200.0, today=5.0),
+        'dropping': dict(mean=300.0, today=0.1),
+        'tiny': dict(mean=1.0, today=1.0),
+    }
+    ids = models.series_ids(product, channel, stories.keys(),
+                            noise=lambda s: s.startswith('IPCError'))
+    daily, hourly = [], []
+    for d in days:
+        partial = d == today
+        w = WEEKLY[d.weekday()]
+        total = 0
+        total_hours = np.zeros(24)
+        for sgn, st in stories.items():
+            if partial and st['today'] is None:
+                mean = st['new']
+            elif partial:
+                mean = st['mean'] * st['today']
+            else:
+                mean = st['mean']
+            mu = mean * w
+            hours = rng.poisson(mu * profile) if mu > 0 else np.zeros(24)
+            hours = hours.astype(float)
+            if partial:
+                hours[hour_now:] = 0
+                hours[hour_now - 1] *= 0.5
+            crashes = int(hours.sum())
+            installs = st.get('installs', None)
+            if installs is None:
+                share = 0.9
+                if 'installs_share' in st:
+                    # today's extra crashes come from the usual installs
+                    share = st['installs_share'] if partial else 0.9
+                installs = max(1, int(crashes * share)) if crashes else 0
+            if crashes > 0 or partial:
+                daily.append({'series_id': ids[sgn], 'day': d,
+                              'crashes': crashes, 'installs': installs})
+                hourly.append({'series_id': ids[sgn], 'day': d,
+                               'hourly': [int(x) for x in hours]})
+                if crashes > 0:
+                    models.update_seen([ids[sgn]], d)
+            total += crashes
+            total_hours += hours
+        # the rest of the channel (hours after now are zeroed below)
+        rest = rng.poisson(base * w * profile)
+        if partial:
+            rest[hour_now:] = 0
+        total += int(rest.sum())
+        total_hours += rest
+        daily.append({'series_id': total_id, 'day': d, 'crashes': total,
+                      'installs': int(total * 0.85)})
+        hourly.append({'series_id': total_id, 'day': d,
+                       'hourly': [int(x) for x in total_hours],
+                       'installs': [int(x * 0.85) for x in total_hours]})
+        as_of = now if partial else datetime.datetime(
+            d.year, d.month, d.day) + datetime.timedelta(hours=30)
+        models.upsert_day(product, channel, d, crashes=total, cutoff=None,
+                          as_of=as_of, final=not partial, complete=True)
+    models.upsert(models.Daily, daily, ['series_id', 'day'])
+    models.upsert(models.Hourly, hourly, ['series_id', 'day'])
+    db.session.commit()
+    return ids
+
+
+class ScoringTest(DBTestCase):
+
+    def setUp(self):
+        super().setUp()
+        self.ids = seed_channel('Firefox', 'release', TODAY, NOW)
+
+    def scores(self):
+        res = {}
+        for score, series in models.load_scores('Firefox', 'release',
+                                                [TODAY]):
+            res[series.signature] = score
+        return res
+
+    def test_score_channel(self):
+        summary = scoring.score_channel('Firefox', 'release', TODAY, NOW)
+        db.session.commit()
+        self.assertEqual(summary['product'], 'Firefox')
+        self.assertGreaterEqual(summary['scored'], 5)
+        s = self.scores()
+        self.assertIn('', s)  # the total
+        total = s['']
+        self.assertTrue(total.partial)
+        self.assertAlmostEqual(total.elapsed, 0.5, delta=0.05)
+        self.assertEqual(total.severity, 'ok')
+        self.assertEqual(s['stable'].severity, 'ok')
+        self.assertLess(abs(s['stable'].z), 3)
+        self.assertIn(s['spiking'].severity, ('spike', 'major'))
+        self.assertGreater(s['spiking'].ratio, 3)
+        self.assertIsNotNone(s['spiking'].first_flagged_at)
+        self.assertEqual(s['spiking'].peak_severity,
+                         s['spiking'].severity)
+        self.assertTrue(s['brand new'].is_new)
+        self.assertIn(s['brand new'].severity, ('spike', 'major'))
+        # installs are first class: storms and loops are badges, not alerts
+        self.assertTrue(s['storm | 0x1'].storm)
+        self.assertEqual(s['storm | 0x1'].severity, 'ok')
+        self.assertTrue(s['one machine'].storm)
+        self.assertEqual(s['one machine'].severity, 'ok')
+        self.assertEqual(s['one machine'].installs, 1)
+        # crashes alone would have said major
+        self.assertGreater(s['one machine'].z, 8)
+        self.assertEqual(s['loop only'].severity, 'ok')
+        self.assertLess(s['loop only'].z_installs, 3)
+        self.assertGreater(s['spiking'].z_installs, 5)
+        self.assertIsNotNone(s['spiking'].expected_installs)
+        self.assertEqual(s['dropping'].severity, 'drop')
+        self.assertIsNotNone(total.expected_installs)
+        # the channel's crash excess comes mostly from the crash loops:
+        # explained as storm-driven, not reported as a spike
+        self.assertTrue(total.details.get('storm_driven'))
+        self.assertGreaterEqual(total.details['storm_share'], 0.5)
+        self.assertEqual(total.severity, 'ok')
+        # noise is scored but counted apart
+        self.assertIn('IPCError-browser | ShutDownKill', s)
+        self.assertEqual(summary['counts']['noise'], 1)
+        self.assertGreaterEqual(summary['counts']['spike'] +
+                                summary['counts']['major'], 2)
+        self.assertEqual(summary['counts']['storm'], 2)
+        # recent window available for the total
+        self.assertIsNotNone(total.z_recent)
+        self.assertEqual(total.recent_hours, 3)
+        # drivers explain the total's deviation
+        drivers = total.details['drivers']
+        names = [d['signature'] for d in drivers]
+        self.assertIn('spiking', names)
+        # noise signatures are listed as drivers but flagged as such
+        noisy = [d for d in drivers if d['noise']]
+        self.assertEqual([d['signature'] for d in noisy],
+                         ['IPCError-browser | ShutDownKill'])
+        self.assertTrue(all(0 < d['share'] <= 1 for d in drivers))
+        # yesterday scored as a complete day
+        yesterday = TODAY - datetime.timedelta(days=1)
+        ys = {series.signature: score for score, series in
+              models.load_scores('Firefox', 'release', [yesterday])}
+        self.assertFalse(ys[''].partial)
+        self.assertEqual(ys['stable'].severity, 'ok')
+        # models cached
+        cached = models.load_models([self.ids['stable']])
+        self.assertIn(self.ids['stable'], cached)
+        self.assertGreater(cached[self.ids['stable']].level, 50)
+        # second run reuses the cache and keeps peaks / first_flagged_at
+        first = s['spiking'].first_flagged_at
+        summary2 = scoring.score_channel('Firefox', 'release', TODAY,
+                                         NOW + datetime.timedelta(minutes=10))
+        db.session.commit()
+        self.assertEqual(summary2['fits'], 0)
+        self.assertEqual(self.scores()['spiking'].first_flagged_at, first)
+
+    def test_lag_guard(self):
+        def summaries(nsuspicious):
+            ok = {'ratio': 1.0, 'expected': 100, 'z_recent': 0}
+            bad = {'ratio': 0.5, 'expected': 100, 'z_recent': -5}
+            return [{'total': bad if i < nsuspicious else ok}
+                    for i in range(6)]
+        self.assertTrue(update.lag_guard(summaries(6), TODAY))
+        self.assertTrue(update.lag_guard(summaries(4), TODAY))
+        self.assertFalse(update.lag_guard(summaries(3), TODAY))
+        # fewer scored channels than the threshold: all of them must drop
+        self.assertTrue(update.lag_guard(summaries(6)[:2], TODAY))
+
+    def test_history_chunk_replanned_when_hourly_fails(self):
+        responses = {'day': load('socorro_day.json'),
+                     'daily': load('socorro_daily.json'),
+                     'hourly_total': None}
+        units = [collect.Unit('daily', 'Firefox', 'nightly',
+                              datetime.date(2026, 8, 18),
+                              datetime.date(2026, 9, 1)),
+                 collect.Unit('hourly_total', 'Firefox', 'nightly',
+                              datetime.date(2026, 8, 18),
+                              datetime.date(2026, 9, 1))]
+        written, failed, skipped = collect.execute(
+            units, FakeFetcher(responses), TODAY, NOW)
+        self.assertEqual((written, failed), (1, 1))
+        # the day rows exist but the total has no hourly split: the
+        # planner asks for the hourly chunk again (and not for daily)
+        units = collect.plan('Firefox', 'nightly', TODAY, history_days=15,
+                             recent_days=1)
+        kinds = [(u.kind, u.start) for u in units if u.kind != 'day']
+        self.assertEqual(kinds, [('hourly_total',
+                                  datetime.date(2026, 8, 18))])
+
+    def test_stale_non_final_day_is_refetched(self):
+        old = TODAY - datetime.timedelta(days=12)
+        models.upsert_day('Firefox', 'nightly', old, final=False,
+                          complete=True, as_of=NOW, crashes=10)
+        db.session.commit()
+        units = collect.plan('Firefox', 'nightly', TODAY, history_days=15,
+                             recent_days=7)
+        self.assertIn(old, [u.start for u in units if u.kind == 'day'])
+
+
+class ApiTest(DBTestCase):
+
+    def setUp(self):
+        super().setUp()
+        seed_channel('Firefox', 'release', TODAY, NOW)
+        scoring.score_channel('Firefox', 'release', TODAY, NOW)
+        run = models.start_run()
+        run.status = 'ok'
+        run.finished = NOW
+        run.message = json.dumps({'pending_units': 0})
+        db.session.commit()
+        self.client = app.test_client()
+        self.patches = [mock.patch.object(api, 'today_utc',
+                                         return_value=TODAY),
+                        mock.patch.object(models, 'utcnow',
+                                          return_value=NOW),
+                        mock.patch.object(api, 'releases',
+                                          return_value=[]),
+                        mock.patch.object(api.config, 'pairs',
+                                          return_value=[('Firefox',
+                                                         'release')])]
+        for p in self.patches:
+            p.start()
+
+    def tearDown(self):
+        for p in self.patches:
+            p.stop()
+        super().tearDown()
+
+    def test_summary(self):
+        r = self.client.get('/dashboard/api/summary')
+        self.assertEqual(r.status_code, 200)
+        d = r.get_json()
+        self.assertEqual(d['data_health']['status'], 'ok')
+        self.assertEqual(d['last_run']['status'], 'ok')
+        self.assertEqual(len(d['channels']), 1)
+        ch = d['channels'][0]
+        self.assertEqual((ch['product'], ch['channel']),
+                         ('Firefox', 'release'))
+        self.assertEqual(ch['total']['severity'], 'ok')
+        self.assertIn('drivers', ch['total'])
+        self.assertIn('counts', ch)
+        sigs = [a['signature'] for a in d['alerts']]
+        self.assertIn('spiking', sigs)
+        self.assertIn('brand new', sigs)
+        self.assertNotIn('IPCError-browser | ShutDownKill', sigs)
+        self.assertIn('thresholds', d)
+        self.assertNotIn('one machine', sigs)
+        self.assertEqual(ch['counts']['storm'], 2)
+        self.assertIn('storm_driven', ch['total'])
+        row = d['alerts'][0]
+        for key in ('socorro_url', 'spark', 'bugs', 'confidence', 'since',
+                    'yesterday', 'excess', 'ratio', 'z_installs',
+                    'expected_installs'):
+            self.assertIn(key, row)
+        self.assertEqual(len(row['spark']['dates']), 28)
+
+    def test_channel(self):
+        r = self.client.get('/dashboard/api/channel?product=Firefox'
+                            '&channel=release&days=30')
+        self.assertEqual(r.status_code, 200)
+        d = r.get_json()
+        self.assertEqual(d['daily']['granularity'], 'day')
+        self.assertEqual(len(d['daily']['start']), 30)
+        self.assertTrue(d['daily']['partial'][-1])
+        self.assertFalse(d['daily']['partial'][-2])
+        for key in ('observed', 'expected', 'lo3', 'hi3', 'lo5', 'hi5', 'z',
+                    'severity', 'projected'):
+            self.assertEqual(len(d['daily'][key]), 30)
+        self.assertEqual(len(d['hourly']['today']), 24)
+        self.assertEqual(d['hourly']['in_progress_hour'], 12)
+        self.assertIsNone(d['hourly']['today'][13])
+        self.assertEqual(len(d['hourly']['expected_today']), 24)
+        self.assertIn('weekly', d['model']['factors'])
+        self.assertIn('today_factors', d['model'])
+        sigs = {s['signature']: s for s in d['signatures']}
+        self.assertIn('spiking', sigs)
+        self.assertEqual(d['signatures'][0]['severity'],
+                         max((s['severity'] for s in d['signatures']),
+                             key=lambda x: scoring.RANK[x]))
+        r = self.client.get('/dashboard/api/channel?product=Firefox'
+                            '&channel=release&days=60&granularity=week')
+        d = r.get_json()
+        self.assertEqual(d['daily']['granularity'], 'week')
+        self.assertTrue(d['daily']['partial'][-1])
+        self.assertGreater(len(d['daily']['start']), 7)
+
+    def test_signature_and_errors(self):
+        r = self.client.get('/dashboard/api/signature?product=Firefox'
+                            '&channel=release&signature=spiking&days=30')
+        self.assertEqual(r.status_code, 200)
+        d = r.get_json()
+        self.assertEqual(d['row']['signature'], 'spiking')
+        self.assertIn(d['row']['severity'], ('spike', 'major'))
+        self.assertEqual(len(d['daily']['start']), 30)
+        self.assertIn('borrowed', d['model'])
+        self.assertIsNotNone(d['hourly']['today'])
+        r = self.client.get('/dashboard/api/signature?product=Firefox'
+                            '&channel=release&signature=nope')
+        self.assertEqual(r.status_code, 404)
+        r = self.client.get('/dashboard/api/channel?product=Nope')
+        self.assertEqual(r.status_code, 400)
+        r = self.client.get('/dashboard/api/channel?product=Firefox'
+                            '&channel=beta')
+        self.assertEqual(r.status_code, 404)
+
+    def test_html(self):
+        r = self.client.get('/dashboard.html')
+        self.assertEqual(r.status_code, 200)
+
+    def test_conditional_and_gzip(self):
+        r = self.client.get('/dashboard/api/summary')
+        etag = r.headers.get('ETag')
+        self.assertTrue(etag)
+        self.assertTrue(r.get_json()['data_version'])
+        r2 = self.client.get('/dashboard/api/summary',
+                             headers={'If-None-Match': etag})
+        self.assertEqual(r2.status_code, 304)
+        r3 = self.client.get('/dashboard/api/channel?product=Firefox'
+                             '&channel=release&days=30',
+                             headers={'Accept-Encoding': 'gzip'})
+        self.assertEqual(r3.headers.get('Content-Encoding'), 'gzip')
+        import gzip
+        d = json.loads(gzip.decompress(r3.data))
+        self.assertEqual(d['product'], 'Firefox')
+        self.assertLess(len(r3.data), len(json.dumps(d)) / 3)
+        # a different view has a different tag
+        r4 = self.client.get('/dashboard/api/channel?product=Firefox'
+                             '&channel=release&days=90',
+                             headers={'If-None-Match': r3.headers['ETag']})
+        self.assertEqual(r4.status_code, 200)
+        # request strings never reach the header: a quoted signature works
+        r5 = self.client.get('/dashboard/api/signature', query_string={
+            'product': 'Firefox', 'channel': 'release',
+            'signature': 'storm | 0x1'})
+        self.assertEqual(r5.status_code, 200)
+        self.assertNotIn('"0x', r5.headers['ETag'][1:-1])
+        # the version flips when the data goes stale, so the banner shows
+        with mock.patch.object(models, 'utcnow',
+                               return_value=NOW + datetime.timedelta(
+                                   hours=2)):
+            r6 = self.client.get('/dashboard/api/summary',
+                                 headers={'If-None-Match': etag})
+            self.assertEqual(r6.status_code, 200)
+            self.assertEqual(r6.get_json()['data_health']['status'],
+                             'stale_local')
+
+
+if __name__ == '__main__':
+    unittest.main()

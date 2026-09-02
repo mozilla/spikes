@@ -1,0 +1,704 @@
+{
+ "hits": [],
+ "total": 3059,
+ "errors": [],
+ "facets": {
+  "signature": [
+   {
+    "term": "libc.so.6 | cuEGLApiInit",
+    "count": 823,
+    "facets": {
+     "cardinality_install_time": {
+      "value": 9
+     }
+    }
+   },
+   {
+    "term": "AsyncShutdownTimeout | profile-change-teardown | ServiceWorkerShutdownBlocker: shutting down Service Workers",
+    "count": 525,
+    "facets": {
+     "cardinality_install_time": {
+      "value": 425
+     }
+    }
+   },
+   {
+    "term": "AsyncShutdownTimeout | profile-before-change | ASRouterStorage: flush pending writes,ServiceWorkerRegistrar: Flushing data,ShieldRecipeClient: Cleaning up",
+    "count": 270,
+    "facets": {
+     "cardinality_install_time": {
+      "value": 221
+     }
+    }
+   },
+   {
+    "term": "AsyncShutdownTimeout | profile-before-change | ServiceWorkerRegistrar: Flushing data",
+    "count": 170,
+    "facets": {
+     "cardinality_install_time": {
+      "value": 156
+     }
+    }
+   },
+   {
+    "term": "AsyncShutdownTimeout | Places Clients shutdown | sanitize.js: Sanitize on shutdown",
+    "count": 102,
+    "facets": {
+     "cardinality_install_time": {
+      "value": 76
+     }
+    }
+   },
+   {
+    "term": "webrender::render_task::render_task_sanity_check",
+    "count": 94,
+    "facets": {
+     "cardinality_install_time": {
+      "value": 1
+     }
+    }
+   }
+  ],
+  "product": [
+   {
+    "term": "Firefox",
+    "count": 3059,
+    "facets": {
+     "cardinality_install_time": {
+      "value": 1420
+     }
+    }
+   }
+  ],
+  "histogram_date": [
+   {
+    "term": "2026-09-01T00:00:00Z",
+    "count": 19,
+    "facets": {
+     "cardinality_install_time": {
+      "value": 12
+     },
+     "signature": [
+      {
+       "term": "AsyncShutdownTimeout | profile-change-teardown | ServiceWorkerShutdownBlocker: shutting down Service Workers",
+       "count": 2
+      }
+     ]
+    }
+   },
+   {
+    "term": "2026-09-01T01:00:00Z",
+    "count": 29,
+    "facets": {
+     "cardinality_install_time": {
+      "value": 23
+     },
+     "signature": [
+      {
+       "term": "AsyncShutdownTimeout | profile-change-teardown | ServiceWorkerShutdownBlocker: shutting down Service Workers",
+       "count": 2
+      }
+     ]
+    }
+   },
+   {
+    "term": "2026-09-01T02:00:00Z",
+    "count": 125,
+    "facets": {
+     "cardinality_install_time": {
+      "value": 36
+     },
+     "signature": [
+      {
+       "term": "webrender::render_task::render_task_sanity_check",
+       "count": 85
+      },
+      {
+       "term": "AsyncShutdownTimeout | profile-change-teardown | ServiceWorkerShutdownBlocker: shutting down Service Workers",
+       "count": 8
+      },
+      {
+       "term": "AsyncShutdownTimeout | Places Clients shutdown | sanitize.js: Sanitize on shutdown",
+       "count": 3
+      }
+     ]
+    }
+   },
+   {
+    "term": "2026-09-01T03:00:00Z",
+    "count": 62,
+    "facets": {
+     "cardinality_install_time": {
+      "value": 44
+     },
+     "signature": [
+      {
+       "term": "AsyncShutdownTimeout | profile-change-teardown | ServiceWorkerShutdownBlocker: shutting down Service Workers",
+       "count": 13
+      },
+      {
+       "term": "AsyncShutdownTimeout | Places Clients shutdown | sanitize.js: Sanitize on shutdown",
+       "count": 6
+      },
+      {
+       "term": "AsyncShutdownTimeout | profile-before-change | ASRouterStorage: flush pending writes,ServiceWorkerRegistrar: Flushing data,ShieldRecipeClient: Cleaning up",
+       "count": 2
+      },
+      {
+       "term": "AsyncShutdownTimeout | profile-before-change | ServiceWorkerRegistrar: Flushing data",
+       "count": 2
+      }
+     ]
+    }
+   },
+   {
+    "term": "2026-09-01T04:00:00Z",
+    "count": 40,
+    "facets": {
+     "cardinality_install_time": {
+      "value": 36
+     },
+     "signature": [
+      {
+       "term": "AsyncShutdownTimeout | profile-change-teardown | ServiceWorkerShutdownBlocker: shutting down Service Workers",
+       "count": 11
+      },
+      {
+       "term": "AsyncShutdownTimeout | profile-before-change | ASRouterStorage: flush pending writes,ServiceWorkerRegistrar: Flushing data,ShieldRecipeClient: Cleaning up",
+       "count": 7
+      },
+      {
+       "term": "AsyncShutdownTimeout | profile-before-change | ServiceWorkerRegistrar: Flushing data",
+       "count": 5
+      },
+      {
+       "term": "AsyncShutdownTimeout | Places Clients shutdown | sanitize.js: Sanitize on shutdown",
+       "count": 2
+      }
+     ]
+    }
+   },
+   {
+    "term": "2026-09-01T05:00:00Z",
+    "count": 67,
+    "facets": {
+     "cardinality_install_time": {
+      "value": 54
+     },
+     "signature": [
+      {
+       "term": "AsyncShutdownTimeout | profile-change-teardown | ServiceWorkerShutdownBlocker: shutting down Service Workers",
+       "count": 16
+      },
+      {
+       "term": "AsyncShutdownTimeout | profile-before-change | ASRouterStorage: flush pending writes,ServiceWorkerRegistrar: Flushing data,ShieldRecipeClient: Cleaning up",
+       "count": 9
+      },
+      {
+       "term": "AsyncShutdownTimeout | profile-before-change | ServiceWorkerRegistrar: Flushing data",
+       "count": 8
+      },
+      {
+       "term": "AsyncShutdownTimeout | Places Clients shutdown | sanitize.js: Sanitize on shutdown",
+       "count": 4
+      }
+     ]
+    }
+   },
+   {
+    "term": "2026-09-01T06:00:00Z",
+    "count": 65,
+    "facets": {
+     "cardinality_install_time": {
+      "value": 49
+     },
+     "signature": [
+      {
+       "term": "AsyncShutdownTimeout | profile-change-teardown | ServiceWorkerShutdownBlocker: shutting down Service Workers",
+       "count": 16
+      },
+      {
+       "term": "AsyncShutdownTimeout | profile-before-change | ASRouterStorage: flush pending writes,ServiceWorkerRegistrar: Flushing data,ShieldRecipeClient: Cleaning up",
+       "count": 9
+      },
+      {
+       "term": "AsyncShutdownTimeout | Places Clients shutdown | sanitize.js: Sanitize on shutdown",
+       "count": 5
+      },
+      {
+       "term": "AsyncShutdownTimeout | profile-before-change | ServiceWorkerRegistrar: Flushing data",
+       "count": 2
+      }
+     ]
+    }
+   },
+   {
+    "term": "2026-09-01T07:00:00Z",
+    "count": 113,
+    "facets": {
+     "cardinality_install_time": {
+      "value": 76
+     },
+     "signature": [
+      {
+       "term": "AsyncShutdownTimeout | profile-change-teardown | ServiceWorkerShutdownBlocker: shutting down Service Workers",
+       "count": 20
+      },
+      {
+       "term": "AsyncShutdownTimeout | profile-before-change | ASRouterStorage: flush pending writes,ServiceWorkerRegistrar: Flushing data,ShieldRecipeClient: Cleaning up",
+       "count": 16
+      },
+      {
+       "term": "webrender::render_task::render_task_sanity_check",
+       "count": 9
+      },
+      {
+       "term": "AsyncShutdownTimeout | Places Clients shutdown | sanitize.js: Sanitize on shutdown",
+       "count": 6
+      },
+      {
+       "term": "AsyncShutdownTimeout | profile-before-change | ServiceWorkerRegistrar: Flushing data",
+       "count": 6
+      }
+     ]
+    }
+   },
+   {
+    "term": "2026-09-01T08:00:00Z",
+    "count": 128,
+    "facets": {
+     "cardinality_install_time": {
+      "value": 107
+     },
+     "signature": [
+      {
+       "term": "AsyncShutdownTimeout | profile-before-change | ASRouterStorage: flush pending writes,ServiceWorkerRegistrar: Flushing data,ShieldRecipeClient: Cleaning up",
+       "count": 25
+      },
+      {
+       "term": "AsyncShutdownTimeout | profile-change-teardown | ServiceWorkerShutdownBlocker: shutting down Service Workers",
+       "count": 25
+      },
+      {
+       "term": "AsyncShutdownTimeout | profile-before-change | ServiceWorkerRegistrar: Flushing data",
+       "count": 12
+      },
+      {
+       "term": "AsyncShutdownTimeout | Places Clients shutdown | sanitize.js: Sanitize on shutdown",
+       "count": 10
+      }
+     ]
+    }
+   },
+   {
+    "term": "2026-09-01T09:00:00Z",
+    "count": 121,
+    "facets": {
+     "cardinality_install_time": {
+      "value": 85
+     },
+     "signature": [
+      {
+       "term": "AsyncShutdownTimeout | profile-before-change | ASRouterStorage: flush pending writes,ServiceWorkerRegistrar: Flushing data,ShieldRecipeClient: Cleaning up",
+       "count": 24
+      },
+      {
+       "term": "AsyncShutdownTimeout | profile-change-teardown | ServiceWorkerShutdownBlocker: shutting down Service Workers",
+       "count": 19
+      },
+      {
+       "term": "AsyncShutdownTimeout | profile-before-change | ServiceWorkerRegistrar: Flushing data",
+       "count": 6
+      },
+      {
+       "term": "AsyncShutdownTimeout | Places Clients shutdown | sanitize.js: Sanitize on shutdown",
+       "count": 3
+      }
+     ]
+    }
+   },
+   {
+    "term": "2026-09-01T10:00:00Z",
+    "count": 114,
+    "facets": {
+     "cardinality_install_time": {
+      "value": 96
+     },
+     "signature": [
+      {
+       "term": "AsyncShutdownTimeout | profile-change-teardown | ServiceWorkerShutdownBlocker: shutting down Service Workers",
+       "count": 34
+      },
+      {
+       "term": "AsyncShutdownTimeout | profile-before-change | ServiceWorkerRegistrar: Flushing data",
+       "count": 13
+      },
+      {
+       "term": "AsyncShutdownTimeout | Places Clients shutdown | sanitize.js: Sanitize on shutdown",
+       "count": 11
+      },
+      {
+       "term": "AsyncShutdownTimeout | profile-before-change | ASRouterStorage: flush pending writes,ServiceWorkerRegistrar: Flushing data,ShieldRecipeClient: Cleaning up",
+       "count": 11
+      }
+     ]
+    }
+   },
+   {
+    "term": "2026-09-01T11:00:00Z",
+    "count": 102,
+    "facets": {
+     "cardinality_install_time": {
+      "value": 97
+     },
+     "signature": [
+      {
+       "term": "AsyncShutdownTimeout | profile-change-teardown | ServiceWorkerShutdownBlocker: shutting down Service Workers",
+       "count": 35
+      },
+      {
+       "term": "AsyncShutdownTimeout | profile-before-change | ASRouterStorage: flush pending writes,ServiceWorkerRegistrar: Flushing data,ShieldRecipeClient: Cleaning up",
+       "count": 21
+      },
+      {
+       "term": "AsyncShutdownTimeout | profile-before-change | ServiceWorkerRegistrar: Flushing data",
+       "count": 8
+      },
+      {
+       "term": "AsyncShutdownTimeout | Places Clients shutdown | sanitize.js: Sanitize on shutdown",
+       "count": 3
+      }
+     ]
+    }
+   },
+   {
+    "term": "2026-09-01T12:00:00Z",
+    "count": 193,
+    "facets": {
+     "cardinality_install_time": {
+      "value": 141
+     },
+     "signature": [
+      {
+       "term": "AsyncShutdownTimeout | profile-change-teardown | ServiceWorkerShutdownBlocker: shutting down Service Workers",
+       "count": 48
+      },
+      {
+       "term": "AsyncShutdownTimeout | profile-before-change | ASRouterStorage: flush pending writes,ServiceWorkerRegistrar: Flushing data,ShieldRecipeClient: Cleaning up",
+       "count": 23
+      },
+      {
+       "term": "AsyncShutdownTimeout | profile-before-change | ServiceWorkerRegistrar: Flushing data",
+       "count": 12
+      },
+      {
+       "term": "AsyncShutdownTimeout | Places Clients shutdown | sanitize.js: Sanitize on shutdown",
+       "count": 3
+      }
+     ]
+    }
+   },
+   {
+    "term": "2026-09-01T13:00:00Z",
+    "count": 970,
+    "facets": {
+     "cardinality_install_time": {
+      "value": 180
+     },
+     "signature": [
+      {
+       "term": "libc.so.6 | cuEGLApiInit",
+       "count": 782
+      },
+      {
+       "term": "AsyncShutdownTimeout | profile-change-teardown | ServiceWorkerShutdownBlocker: shutting down Service Workers",
+       "count": 54
+      },
+      {
+       "term": "AsyncShutdownTimeout | profile-before-change | ASRouterStorage: flush pending writes,ServiceWorkerRegistrar: Flushing data,ShieldRecipeClient: Cleaning up",
+       "count": 31
+      },
+      {
+       "term": "AsyncShutdownTimeout | profile-before-change | ServiceWorkerRegistrar: Flushing data",
+       "count": 19
+      },
+      {
+       "term": "AsyncShutdownTimeout | Places Clients shutdown | sanitize.js: Sanitize on shutdown",
+       "count": 10
+      }
+     ]
+    }
+   },
+   {
+    "term": "2026-09-01T14:00:00Z",
+    "count": 171,
+    "facets": {
+     "cardinality_install_time": {
+      "value": 145
+     },
+     "signature": [
+      {
+       "term": "AsyncShutdownTimeout | profile-change-teardown | ServiceWorkerShutdownBlocker: shutting down Service Workers",
+       "count": 38
+      },
+      {
+       "term": "AsyncShutdownTimeout | profile-before-change | ASRouterStorage: flush pending writes,ServiceWorkerRegistrar: Flushing data,ShieldRecipeClient: Cleaning up",
+       "count": 26
+      },
+      {
+       "term": "AsyncShutdownTimeout | profile-before-change | ServiceWorkerRegistrar: Flushing data",
+       "count": 20
+      },
+      {
+       "term": "AsyncShutdownTimeout | Places Clients shutdown | sanitize.js: Sanitize on shutdown",
+       "count": 9
+      }
+     ]
+    }
+   },
+   {
+    "term": "2026-09-01T15:00:00Z",
+    "count": 158,
+    "facets": {
+     "cardinality_install_time": {
+      "value": 112
+     },
+     "signature": [
+      {
+       "term": "AsyncShutdownTimeout | profile-change-teardown | ServiceWorkerShutdownBlocker: shutting down Service Workers",
+       "count": 46
+      },
+      {
+       "term": "libc.so.6 | cuEGLApiInit",
+       "count": 41
+      },
+      {
+       "term": "AsyncShutdownTimeout | profile-before-change | ServiceWorkerRegistrar: Flushing data",
+       "count": 17
+      },
+      {
+       "term": "AsyncShutdownTimeout | profile-before-change | ASRouterStorage: flush pending writes,ServiceWorkerRegistrar: Flushing data,ShieldRecipeClient: Cleaning up",
+       "count": 13
+      },
+      {
+       "term": "AsyncShutdownTimeout | Places Clients shutdown | sanitize.js: Sanitize on shutdown",
+       "count": 3
+      }
+     ]
+    }
+   },
+   {
+    "term": "2026-09-01T16:00:00Z",
+    "count": 121,
+    "facets": {
+     "cardinality_install_time": {
+      "value": 95
+     },
+     "signature": [
+      {
+       "term": "AsyncShutdownTimeout | profile-change-teardown | ServiceWorkerShutdownBlocker: shutting down Service Workers",
+       "count": 24
+      },
+      {
+       "term": "AsyncShutdownTimeout | profile-before-change | ASRouterStorage: flush pending writes,ServiceWorkerRegistrar: Flushing data,ShieldRecipeClient: Cleaning up",
+       "count": 12
+      },
+      {
+       "term": "AsyncShutdownTimeout | profile-before-change | ServiceWorkerRegistrar: Flushing data",
+       "count": 10
+      },
+      {
+       "term": "AsyncShutdownTimeout | Places Clients shutdown | sanitize.js: Sanitize on shutdown",
+       "count": 6
+      }
+     ]
+    }
+   },
+   {
+    "term": "2026-09-01T17:00:00Z",
+    "count": 79,
+    "facets": {
+     "cardinality_install_time": {
+      "value": 71
+     },
+     "signature": [
+      {
+       "term": "AsyncShutdownTimeout | profile-change-teardown | ServiceWorkerShutdownBlocker: shutting down Service Workers",
+       "count": 25
+      },
+      {
+       "term": "AsyncShutdownTimeout | profile-before-change | ASRouterStorage: flush pending writes,ServiceWorkerRegistrar: Flushing data,ShieldRecipeClient: Cleaning up",
+       "count": 12
+      },
+      {
+       "term": "AsyncShutdownTimeout | profile-before-change | ServiceWorkerRegistrar: Flushing data",
+       "count": 7
+      },
+      {
+       "term": "AsyncShutdownTimeout | Places Clients shutdown | sanitize.js: Sanitize on shutdown",
+       "count": 5
+      }
+     ]
+    }
+   },
+   {
+    "term": "2026-09-01T18:00:00Z",
+    "count": 84,
+    "facets": {
+     "cardinality_install_time": {
+      "value": 75
+     },
+     "signature": [
+      {
+       "term": "AsyncShutdownTimeout | profile-change-teardown | ServiceWorkerShutdownBlocker: shutting down Service Workers",
+       "count": 23
+      },
+      {
+       "term": "AsyncShutdownTimeout | profile-before-change | ServiceWorkerRegistrar: Flushing data",
+       "count": 6
+      },
+      {
+       "term": "AsyncShutdownTimeout | Places Clients shutdown | sanitize.js: Sanitize on shutdown",
+       "count": 5
+      },
+      {
+       "term": "AsyncShutdownTimeout | profile-before-change | ASRouterStorage: flush pending writes,ServiceWorkerRegistrar: Flushing data,ShieldRecipeClient: Cleaning up",
+       "count": 5
+      }
+     ]
+    }
+   },
+   {
+    "term": "2026-09-01T19:00:00Z",
+    "count": 84,
+    "facets": {
+     "cardinality_install_time": {
+      "value": 67
+     },
+     "signature": [
+      {
+       "term": "AsyncShutdownTimeout | profile-change-teardown | ServiceWorkerShutdownBlocker: shutting down Service Workers",
+       "count": 18
+      },
+      {
+       "term": "AsyncShutdownTimeout | profile-before-change | ASRouterStorage: flush pending writes,ServiceWorkerRegistrar: Flushing data,ShieldRecipeClient: Cleaning up",
+       "count": 10
+      },
+      {
+       "term": "AsyncShutdownTimeout | profile-before-change | ServiceWorkerRegistrar: Flushing data",
+       "count": 4
+      },
+      {
+       "term": "AsyncShutdownTimeout | Places Clients shutdown | sanitize.js: Sanitize on shutdown",
+       "count": 2
+      }
+     ]
+    }
+   },
+   {
+    "term": "2026-09-01T20:00:00Z",
+    "count": 78,
+    "facets": {
+     "cardinality_install_time": {
+      "value": 57
+     },
+     "signature": [
+      {
+       "term": "AsyncShutdownTimeout | profile-change-teardown | ServiceWorkerShutdownBlocker: shutting down Service Workers",
+       "count": 13
+      },
+      {
+       "term": "AsyncShutdownTimeout | profile-before-change | ASRouterStorage: flush pending writes,ServiceWorkerRegistrar: Flushing data,ShieldRecipeClient: Cleaning up",
+       "count": 6
+      },
+      {
+       "term": "AsyncShutdownTimeout | profile-before-change | ServiceWorkerRegistrar: Flushing data",
+       "count": 2
+      }
+     ]
+    }
+   },
+   {
+    "term": "2026-09-01T21:00:00Z",
+    "count": 45,
+    "facets": {
+     "cardinality_install_time": {
+      "value": 41
+     },
+     "signature": [
+      {
+       "term": "AsyncShutdownTimeout | profile-change-teardown | ServiceWorkerShutdownBlocker: shutting down Service Workers",
+       "count": 9
+      },
+      {
+       "term": "AsyncShutdownTimeout | profile-before-change | ServiceWorkerRegistrar: Flushing data",
+       "count": 5
+      },
+      {
+       "term": "AsyncShutdownTimeout | Places Clients shutdown | sanitize.js: Sanitize on shutdown",
+       "count": 4
+      },
+      {
+       "term": "AsyncShutdownTimeout | profile-before-change | ASRouterStorage: flush pending writes,ServiceWorkerRegistrar: Flushing data,ShieldRecipeClient: Cleaning up",
+       "count": 2
+      }
+     ]
+    }
+   },
+   {
+    "term": "2026-09-01T22:00:00Z",
+    "count": 43,
+    "facets": {
+     "cardinality_install_time": {
+      "value": 33
+     },
+     "signature": [
+      {
+       "term": "AsyncShutdownTimeout | profile-change-teardown | ServiceWorkerShutdownBlocker: shutting down Service Workers",
+       "count": 15
+      },
+      {
+       "term": "AsyncShutdownTimeout | profile-before-change | ASRouterStorage: flush pending writes,ServiceWorkerRegistrar: Flushing data,ShieldRecipeClient: Cleaning up",
+       "count": 3
+      },
+      {
+       "term": "AsyncShutdownTimeout | profile-before-change | ServiceWorkerRegistrar: Flushing data",
+       "count": 2
+      },
+      {
+       "term": "AsyncShutdownTimeout | Places Clients shutdown | sanitize.js: Sanitize on shutdown",
+       "count": 1
+      }
+     ]
+    }
+   },
+   {
+    "term": "2026-09-01T23:00:00Z",
+    "count": 48,
+    "facets": {
+     "cardinality_install_time": {
+      "value": 42
+     },
+     "signature": [
+      {
+       "term": "AsyncShutdownTimeout | profile-change-teardown | ServiceWorkerShutdownBlocker: shutting down Service Workers",
+       "count": 11
+      },
+      {
+       "term": "AsyncShutdownTimeout | profile-before-change | ServiceWorkerRegistrar: Flushing data",
+       "count": 4
+      },
+      {
+       "term": "AsyncShutdownTimeout | profile-before-change | ASRouterStorage: flush pending writes,ServiceWorkerRegistrar: Flushing data,ShieldRecipeClient: Cleaning up",
+       "count": 3
+      },
+      {
+       "term": "AsyncShutdownTimeout | Places Clients shutdown | sanitize.js: Sanitize on shutdown",
+       "count": 1
+      }
+     ]
+    }
+   }
+  ]
+ }
+}
