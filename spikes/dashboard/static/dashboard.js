@@ -1,7 +1,7 @@
 // dashboard.js — crash-spikes dashboard: fetch, state, rendering, interactions.
 import {
   lineChart, barChart, sparkline, miniFactors, el,
-  fmtInt, fmtCompact, fmtSigned, fmtRatio, fmtZ, parseDay,
+  fmtInt, fmtCompact, fmtSigned, fmtRatio, fmtZ, parseDay, zoneLabel,
 } from './charts.js';
 
 const API = '/dashboard/api';
@@ -713,7 +713,14 @@ function dailySpec(data, extra = {}) {
 }
 
 function hourlySpec(data, extra = {}) {
-  return { ...(data.hourly || { hours: [] }), height: CHART_HEIGHT, ...extra };
+  // the day lets the chart translate UTC hour buckets into local time
+  return { ...(data.hourly || { hours: [] }), day: data.day || data.row?.day || app.channel?.day, height: CHART_HEIGHT, ...extra };
+}
+
+/** Every "Today by hour" title shows the clock in use (UTC or the local zone). */
+function renderZoneLabels() {
+  const label = zoneLabel();
+  for (const n of document.querySelectorAll('.tz-label')) n.textContent = label;
 }
 
 function renderCharts(ch) {
@@ -1110,7 +1117,7 @@ function renderSignaturePanel(st) {
   st.noteEl = el('p', { class: 'detail-note full' }, notes);
   st.noteEl.hidden = !notes;
   panel.append(st.noteEl);
-  const intradayCard = el('div', { class: 'chart-card' }, el('h3', {}, 'Today by hour ', el('span', { class: 'sub' }, 'UTC')));
+  const intradayCard = el('div', { class: 'chart-card' }, el('h3', {}, 'Today by hour ', el('span', { class: 'sub tz-label' }, zoneLabel())));
   const intraday = el('div');
   intradayCard.append(intraday);
   const dailyCard = el('div', { class: 'chart-card' }, el('h3', {}, 'Daily crashes'));
@@ -1197,6 +1204,8 @@ function bindControls() {
     const same = app.selected && channelKey(h) === channelKey(app.selected);
     if (!same || h.signature) selectChannel(h.product, h.channel, h.signature || null);
   });
+  window.addEventListener('dashboard:timezone', renderZoneLabels);
+  renderZoneLabels();
   // the sticky toolbar's height offsets anchored scrolls (scroll-margin-top)
   const toolbar = $('toolbar');
   const setToolbarHeight = () => document.documentElement.style.setProperty('--toolbar-h', `${toolbar.offsetHeight}px`);

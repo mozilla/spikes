@@ -648,6 +648,43 @@ export function lineChart(container, spec) {
   };
 }
 
+// ---------------------------------------------------------------- time zone preference
+// Hour buckets are Socorro's UTC hours; the intraday charts can label them in
+// the browser's local time.  The choice is stored in localStorage and shared
+// by every intraday chart on the page (a `dashboard:timezone` event).
+const TZ_KEY = 'dashboard.timeZone';
+const TZ_EVENT = 'dashboard:timezone';
+
+export function useLocalTime() {
+  try { return localStorage.getItem(TZ_KEY) === 'local'; } catch { return false; }
+}
+
+export function setLocalTime(on) {
+  try { localStorage.setItem(TZ_KEY, on ? 'local' : 'utc'); } catch { /* storage unavailable */ }
+  window.dispatchEvent(new CustomEvent(TZ_EVENT, { detail: { local: !!on } }));
+}
+
+/** "UTC", or the local zone as e.g. "CEST (UTC+2)". */
+export function zoneLabel(local = useLocalTime()) {
+  if (!local) return 'UTC';
+  const now = new Date();
+  const short = (now.toLocaleTimeString('en-US', { timeZoneName: 'short' }).split(' ').pop() || '').replace(/^GMT/, 'UTC');
+  const off = -now.getTimezoneOffset();
+  const sign = off >= 0 ? '+' : '−';
+  const hh = Math.floor(Math.abs(off) / 60);
+  const mm = Math.abs(off) % 60;
+  const offset = `UTC${sign}${hh}${mm ? `:${String(mm).padStart(2, '0')}` : ''}`;
+  return short && short !== offset ? `${short} (${offset})` : offset;
+}
+
+/** Label of the start of UTC hour *h* of *day* ("YYYY-MM-DD"), in UTC or local time. */
+export function hourLabel(day, h, local = useLocalTime()) {
+  if (!local) return `${String(h % 24).padStart(2, '0')}:00`;
+  const ms = (day ? parseDay(day) : Date.UTC(new Date().getUTCFullYear(), new Date().getUTCMonth(), new Date().getUTCDate())) + h * 3600000;
+  const d = new Date(ms);
+  return `${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`;
+}
+
 // ---------------------------------------------------------------- bar chart (intraday)
 /** spec: { hours[], today[], yesterday[], expected_today[], in_progress_hour, height } */
 export function barChart(container, spec) {
@@ -658,12 +695,24 @@ export function barChart(container, spec) {
       { label: 'Expected', color: 'var(--expected)', kind: 'dash' },
       { label: 'Yesterday', color: 'var(--yesterday)' },
     ],
-    buttons: [{ key: 'table', label: 'Table', onToggle: (on) => f.showTable(on) }],
+    buttons: [
+      { key: 'tz', label: 'Local time', onToggle: (on) => setLocalTime(on) },
+      { key: 'table', label: 'Table', onToggle: (on) => f.showTable(on) },
+    ],
   });
+  const syncTz = () => { f.buttons.tz.setAttribute('aria-pressed', String(useLocalTime())); };
+  syncTz();
+  const onTz = () => { syncTz(); render(); };
+  window.addEventListener(TZ_EVENT, onTz);
 
   function render() {
     const hadFocus = f.plot.contains(document.activeElement) && document.activeElement.classList.contains('overlay');
     const s = state.spec;
+    const local = useLocalTime();
+    const zone = zoneLabel(local);
+    const hl = (h) => hourLabel(s.day, h, local);
+    // tick every 6 hours of the displayed clock
+    const tickAt = (h) => (local ? Number(hl(h).slice(0, 2)) % 6 === 0 && hl(h).slice(3) === '00' : h % 6 === 0);
     const width = f.container.clientWidth;
     if (width < 40) return;
     const height = s.height || 240;
@@ -690,9 +739,9 @@ export function barChart(container, spec) {
     root.append(band);
     root.append(svg('line', { class: 'baseline', x1: box.left, x2: box.right, y1: box.bottom, y2: box.bottom }));
     for (let i = 0; i < n; i++) {
-      if (hours[i] % 6 === 0) root.append(svg('text', { x: cx(i), y: box.bottom + 16, 'text-anchor': 'middle', text: `${String(hours[i]).padStart(2, '0')}:00` }));
+      if (tickAt(hours[i])) root.append(svg('text', { x: cx(i), y: box.bottom + 16, 'text-anchor': 'middle', text: hl(hours[i]) }));
     }
-    root.append(svg('text', { class: 'lbl', x: box.right, y: box.bottom + 16, 'text-anchor': 'end', text: 'UTC' }));
+    root.append(svg('text', { class: 'lbl', x: box.right, y: box.bottom + 16, 'text-anchor': 'end', text: zone }));
 
     const bars = [];
     for (let i = 0; i < n; i++) {
@@ -728,10 +777,10 @@ export function barChart(container, spec) {
         { value: fmtInt(get(s.yesterday, i)), label: 'yesterday', color: 'var(--yesterday)' },
       ];
       const anchorY = today != null ? y(today) : y(get(s.expected_today, i) || 0);
-      showTip(f, pxs[i], anchorY, `${String(hours[i]).padStart(2, '0')}:00–${String(hours[i] + 1).padStart(2, '0')}:00 UTC`, rows);
+      showTip(f, pxs[i], anchorY, `${hl(hours[i])}–${hl(hours[i] + 1)} ${zone}`, rows);
     }, undefined, (i) => {
       const today = get(s.today, i);
-      const parts = [`${String(hours[i]).padStart(2, '0')}:00 UTC`];
+      const parts = [`${hl(hours[i])} ${zone}`];
       parts.push(today == null ? 'today not yet' : `today ${fmtInt(today)}${hours[i] === s.in_progress_hour ? ' (in progress)' : ''}`);
       parts.push(`expected ${fmtInt(get(s.expected_today, i))}`);
       if (get(s.yesterday, i) != null) parts.push(`yesterday ${fmtInt(get(s.yesterday, i))}`);
@@ -743,9 +792,9 @@ export function barChart(container, spec) {
     f.plot.prepend(root);
     if (hadFocus) root.querySelector('.overlay')?.focus({ preventScroll: true });
 
-    fillTable(f, 'Crashes per hour, table view', ['Hour (UTC)', 'Today', 'Expected', 'Yesterday'],
+    fillTable(f, 'Crashes per hour, table view', [`Hour (${zone})`, 'Today', 'Expected', 'Yesterday'],
       hours.map((h, i) => [
-        `${String(h).padStart(2, '0')}:00` + (h === s.in_progress_hour ? ' (in progress)' : ''),
+        hl(h) + (h === s.in_progress_hour ? ' (in progress)' : ''),
         fmtInt(get(s.today, i)), fmtInt(get(s.expected_today, i)), fmtInt(get(s.yesterday, i)),
       ]));
   }
@@ -754,7 +803,7 @@ export function barChart(container, spec) {
   render();
   return {
     update(next) { state.spec = { ...state.spec, ...next }; render(); },
-    destroy() { f.ro?.disconnect(); container.textContent = ''; },
+    destroy() { window.removeEventListener(TZ_EVENT, onTz); f.ro?.disconnect(); container.textContent = ''; },
   };
 }
 
