@@ -104,6 +104,10 @@ class ParserTest(unittest.TestCase):
         self.assertEqual(e['detail'], 'optional non-security preview')
         self.assertEqual(evs[2]['detail'],
                          'monthly security update (Patch Tuesday)')
+        # built from the KB number: the feed's ArticleUrl is broken
+        self.assertEqual(e['url'], 'https://support.microsoft.com/help/5120998')
+        self.assertEqual(evs[2]['url'],
+                         'https://support.microsoft.com/help/5120249')
 
     def test_nvidia(self):
         self.assertEqual(events.nvidia_suffix('616.56'), '6.1656')

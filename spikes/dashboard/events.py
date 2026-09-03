@@ -103,10 +103,14 @@ def parse_windows(payload):
         title = '{} · Windows {} {}, build {}'.format(
             kb, r.get('MajorVersion') or '', r.get('WindowsVersion') or '',
             build or '?').replace('  ', ' ')
+        # the feed's ArticleUrl is a mangled relative path; Microsoft
+        # redirects /help/<number> to the KB article
+        digits = re.sub(r'\D', '', kb)
+        url = 'https://support.microsoft.com/help/{}'.format(digits) \
+            if digits else None
         out.append(event('windows', 'windows-update',
                          '{}/{}'.format(kb, build or ''), day, title,
-                         detail=WINDOWS_TYPES.get(rtype, rtype),
-                         url=r.get('ArticleUrl')))
+                         detail=WINDOWS_TYPES.get(rtype, rtype), url=url))
     return out
 
 
