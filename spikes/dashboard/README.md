@@ -286,6 +286,7 @@ events, Fenix the Android ones.
 | Apple | MacAdmins SOFA feed | macOS security releases, with the CVE count |
 | Linux | endoflife.date (kernel series, Ubuntu, Fedora), freedesktop GitLab tags (Mesa) | releases, no release candidates |
 | Android | endoflife.date (major versions); the monthly security bulletin is computed, it has no feed | published on the first Monday of the month |
+| Antivirus (one shield badge for all vendors) | Norton Community announcements RSS (the monthly "Norton Security N for Windows" posts); Chocolatey packages for Avast and Malwarebytes (published a day or two after the release); winget-pkgs commits for ESET; the Defender updates page for the Microsoft Defender platform version (dated when first seen, never moved) | Kaspersky, McAfee and Bitdefender publish nothing machine-readable and are absent |
 
 Feeds are fetched in parallel with a 15 s timeout (60 s for the GeForce
 lookup, which takes tens of seconds), every `events_refresh_hours` (6; a

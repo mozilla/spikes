@@ -115,12 +115,70 @@ DRIVERS_AMD = driver_payload(DRIVER_DAYS, {
 })
 DRIVERS_NONE = {'facets': {'histogram_date': []}}
 
+NORTON = '''<?xml version="1.0" encoding="UTF-8"?>
+<rss version="2.0"><channel><title>Announcements</title>
+<item><title>Norton Security 26.8 for Windows is now available!</title>
+<link>https://community.norton.com/t/norton-security-26-8/1</link>
+<pubDate>Tue, 18 Aug 2026 14:02:00 +0000</pubDate></item>
+<item><title>Norton Family 26.8 for Windows</title>
+<link>https://community.norton.com/t/family/2</link>
+<pubDate>Tue, 18 Aug 2026 13:00:00 +0000</pubDate></item>
+<item><title>Norton 360 26.7 for Windows - Release!</title>
+<link>https://community.norton.com/t/norton-360-26-7/3</link>
+<pubDate>Tue, 21 Jul 2026 15:00:00 +0000</pubDate></item>
+<item><title>Norton VPN 26.8 for macOS</title>
+<link>https://community.norton.com/t/vpn/4</link>
+<pubDate>Wed, 26 Aug 2026 15:00:00 +0000</pubDate></item>
+</channel></rss>'''
+
+
+def chocolatey_feed(versions):
+    """(version, published, prerelease) rows as a Chocolatey Atom feed."""
+    entries = ''.join(
+        '<entry><m:properties><d:Version>{}</d:Version>'
+        '<d:Published m:type="Edm.DateTime">{}</d:Published>'
+        '<d:IsPrerelease m:type="Edm.Boolean">{}</d:IsPrerelease>'
+        '</m:properties></entry>'.format(v, p, str(pre).lower())
+        for v, p, pre in versions)
+    return ('<?xml version="1.0" encoding="utf-8"?>'
+            '<feed xmlns="http://www.w3.org/2005/Atom" '
+            'xmlns:d="http://schemas.microsoft.com/ado/2007/08/dataservices" '
+            'xmlns:m="http://schemas.microsoft.com/ado/2007/08/dataservices/'
+            'metadata">{}</feed>'.format(entries))
+
+
+CHOCO_AVAST = chocolatey_feed([
+    ('26.8.11125', '2026-08-18T09:12:00.123', False),
+    ('26.7.11086', '2026-07-21T09:12:00.123', False),
+    ('26.9.0-beta', '2026-08-30T09:12:00.123', True)])
+CHOCO_MWB = chocolatey_feed([('5.6.4.163', '2026-08-05T20:00:00', False)])
+WINGET_ESET = [
+    {'html_url': 'https://github.com/microsoft/winget-pkgs/commit/abc',
+     'commit': {'message': 'New version: ESET.Nod32 version 19.2.10.0 '
+                           '(#425190)\n\nsigned-off',
+                'committer': {'date': '2026-08-27T10:00:00Z'}}},
+    {'html_url': 'https://github.com/microsoft/winget-pkgs/commit/def',
+     'commit': {'message': 'Remove ESET.Nod32 18.0.1 (#1)',
+                'committer': {'date': '2026-08-01T10:00:00Z'}}},
+    {'html_url': 'https://github.com/microsoft/winget-pkgs/commit/ghi',
+     'commit': {'message': 'Add version: ESET.Nod32 version 19.2.7.0 '
+                           '(#395482)',
+                'committer': {'date': '2026-07-09T10:00:00Z'}}},
+]
+DEFENDER = ('<html><body><p>Security intelligence update version: '
+            '<span>1.459.17.0</span></p><p>Engine Version: <span>1.1.26080.3'
+            '</span></p><p>Platform Version: <span>4.18.26080.3</span></p>'
+            '</body></html>')
+
 PAYLOADS = {'windows-updates': WINDOWS, 'nvidia-geforce': NVIDIA,
             'drivers-nvidia': DRIVERS_NVIDIA, 'drivers-amd': DRIVERS_AMD,
             'drivers-intel': DRIVERS_NONE,
             'macos-sofa': SOFA, 'linux-kernel': EOL_LINUX,
             'ubuntu': EOL_UBUNTU, 'fedora': EOL_FEDORA, 'mesa': MESA,
-            'android-versions': EOL_ANDROID}
+            'android-versions': EOL_ANDROID,
+            'norton': NORTON, 'avast': CHOCO_AVAST,
+            'malwarebytes': CHOCO_MWB, 'eset': WINGET_ESET,
+            'defender': DEFENDER}
 BY_URL = {(s.url(TODAY) if callable(s.url) else s.url): s.name
           for s in events.SOURCES}
 
@@ -237,6 +295,53 @@ class ParserTest(unittest.TestCase):
         self.assertIn('_histogram.date=adapter_driver_version', url)
 
 
+    def test_norton(self):
+        evs = events.parse_norton(NORTON)
+        self.assertEqual([(e['day'].isoformat(), e['title']) for e in evs],
+                         [('2026-08-18', 'Norton Security 26.8 for Windows'),
+                          ('2026-07-21', 'Norton 360 26.7 for Windows')])
+        self.assertEqual(evs[0]['source'], 'antivirus')
+        self.assertEqual(evs[0]['kind'], 'norton')
+        self.assertEqual(evs[0]['url'],
+                         'https://community.norton.com/t/norton-security-26-8/1')
+        self.assertEqual(events.parse_norton('not xml'), [])
+
+    def test_chocolatey(self):
+        parse = events.parse_chocolatey('avast', 'avastfreeantivirus',
+                                        'Avast Free Antivirus')
+        evs = parse(CHOCO_AVAST)
+        self.assertEqual([e['ref'] for e in evs],
+                         ['26.8.11125', '26.7.11086'])  # no prerelease
+        self.assertEqual(evs[0]['day'], datetime.date(2026, 8, 18))
+        self.assertEqual(evs[0]['title'], 'Avast Free Antivirus 26.8.11125')
+        self.assertEqual(evs[0]['url'], 'https://community.chocolatey.org/'
+                                        'packages/avastfreeantivirus/26.8.11125')
+        self.assertIn('$filter=Id%20eq%20%27malwarebytes%27',
+                      events.chocolatey_url('malwarebytes'))
+
+    def test_winget(self):
+        parse = events.parse_winget('eset', 'ESET.Nod32',
+                                    'ESET NOD32 Antivirus')
+        evs = parse(WINGET_ESET)
+        self.assertEqual([(e['day'].isoformat(), e['title']) for e in evs],
+                         [('2026-08-27', 'ESET NOD32 Antivirus 19.2.10.0'),
+                          ('2026-07-09', 'ESET NOD32 Antivirus 19.2.7.0')])
+        self.assertEqual(evs[0]['url'],
+                         'https://github.com/microsoft/winget-pkgs/commit/abc')
+        self.assertEqual(parse({'message': 'rate limited'}), [])
+
+    def test_defender(self):
+        evs = events.parse_defender(DEFENDER, TODAY)
+        self.assertEqual(len(evs), 1)
+        e = evs[0]
+        self.assertEqual((e['kind'], e['ref'], e['day']),
+                         ('defender-platform', '4.18.26080.3', TODAY))
+        self.assertEqual(e['title'], 'Microsoft Defender platform '
+                                     '4.18.26080.3, engine 1.1.26080.3')
+        self.assertIn('defender-platform', events.IMMUTABLE_KINDS)
+        self.assertEqual(events.parse_defender('<html></html>', TODAY), [])
+
+
 class DBTestCase(unittest.TestCase):
 
     def setUp(self):
@@ -268,6 +373,11 @@ class RefreshTest(DBTestCase):
         self.assertEqual(res['drivers-nvidia']['items'], 2)
         self.assertEqual(res['drivers-amd']['items'], 1)
         self.assertEqual(res['drivers-intel']['items'], 0)
+        self.assertEqual(res['norton']['items'], 2)
+        self.assertEqual(res['avast']['items'], 2)
+        self.assertEqual(res['malwarebytes']['items'], 1)
+        self.assertEqual(res['eset']['items'], 2)
+        self.assertEqual(res['defender']['items'], 1)
         count, latest = models.events_version()
         self.assertEqual(latest, NOW)
         # idempotent
@@ -285,6 +395,13 @@ class RefreshTest(DBTestCase):
         self.assertEqual(len(by_key[('2026-08-17', 'apple')]['items']), 2)
         self.assertEqual(by_key[('2026-09-02', 'linux')]['items'][0]['title'],
                          'Mesa 26.2.2')
+        # one antivirus badge for the day: Norton and Avast both on Aug 18
+        av = by_key[('2026-08-18', 'antivirus')]
+        self.assertEqual(av['platform'], 'windows')
+        self.assertEqual(sorted(it['kind'] for it in av['items']),
+                         ['avast', 'norton'])
+        self.assertEqual(by_key[(TODAY.isoformat(), 'antivirus')]['items'][0]
+                         ['kind'], 'defender-platform')
         self.assertEqual([g['day'] for g in groups],
                          sorted(g['day'] for g in groups))
         # the computed Android bulletin of August (first Monday, the 3rd)
@@ -337,6 +454,27 @@ class RefreshTest(DBTestCase):
         # untouched by the second refresh (feed events are updated in place)
         self.assertEqual({r.updated_at for r in rows}, {NOW})
 
+    def test_defender_platform_dated_first_seen(self):
+        events.refresh(NOW, fetch=fake_fetch())
+        db.session.commit()
+        # two days later the page still shows the same platform: no move
+        events.refresh(NOW + datetime.timedelta(days=2), fetch=fake_fetch())
+        db.session.commit()
+        rows = [e for e in models.load_events(TODAY)
+                if e.kind == 'defender-platform']
+        self.assertEqual([(r.ref, r.day) for r in rows],
+                         [('4.18.26080.3', TODAY)])
+        # a new platform version is a new event, dated that day
+        newer = DEFENDER.replace('4.18.26080.3', '4.18.26090.2')
+        events.refresh(NOW + datetime.timedelta(days=30),
+                       fetch=fake_fetch(override={'defender': newer}))
+        db.session.commit()
+        rows = [e for e in models.load_events(TODAY)
+                if e.kind == 'defender-platform']
+        self.assertEqual([(r.ref, r.day) for r in rows],
+                         [('4.18.26080.3', TODAY),
+                          ('4.18.26090.2', TODAY + datetime.timedelta(30))])
+
     def test_prune(self):
         events.refresh(NOW, fetch=fake_fetch())
         db.session.commit()
@@ -379,6 +517,12 @@ class ApiTest(DBTestCase):
         self.assertIn('search', nvidia[0]['items'][0])
         self.assertIn('adapter_driver_version=32.0.16.1656',
                       nvidia[2]['items'][0]['search'])
+        av = [g for g in d['events'] if g['source'] == 'antivirus']
+        self.assertEqual([g['day'] for g in av],
+                         ['2026-08-05', '2026-08-18', '2026-08-27',
+                          TODAY.isoformat()])
+        self.assertEqual(av[0]['label'], 'Antivirus')
+        self.assertEqual(len(av[1]['items']), 2)
         self.assertIn('windows-updates', d['feeds'])
         etag = r.headers['ETag']
         r2 = self.client.get('/dashboard/api/events?days=30',

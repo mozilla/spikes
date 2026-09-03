@@ -36,6 +36,13 @@ Feeds, all JSON:
   half of that the next day (an established version never qualifies, a
   one-day blip from a crash-looping machine neither).  Never moved
   afterwards.
+* **Antivirus** (one badge for all vendors): Norton from the Norton
+  Community announcements RSS (the monthly "Norton Security N for Windows"
+  posts), Avast and Malwarebytes from their Chocolatey packages (published
+  a day or two after the release), ESET from the winget-pkgs commit
+  history, Microsoft Defender from the platform version shown on the
+  Defender updates page (dated when first seen).  Kaspersky, McAfee and
+  Bitdefender publish nothing usable and are absent.
 
 Every feed is fetched in parallel with a 15 s timeout (60 s for the slow
 GeForce lookup and the Socorro queries); a failure keeps the previous
@@ -45,9 +52,11 @@ Successful feeds are refreshed every ``events_refresh_hours``.
 
 import concurrent.futures
 import datetime
+import email.utils
 import os
 import re
 import urllib.parse
+import xml.etree.ElementTree as ET
 
 import requests
 
@@ -69,14 +78,14 @@ NVIDIA_TIMEOUT = 60
 
 # source -> platform whose products the badge is shown for, and label
 PLATFORM = {'windows': 'windows', 'nvidia': 'windows', 'amd': 'windows',
-            'intel': 'windows', 'apple': 'mac', 'linux': 'linux',
-            'android': 'android'}
+            'intel': 'windows', 'antivirus': 'windows', 'apple': 'mac',
+            'linux': 'linux', 'android': 'android'}
 LABEL = {'windows': 'Windows update', 'nvidia': 'NVIDIA driver',
          'amd': 'AMD driver', 'intel': 'Intel driver',
-         'apple': 'macOS release', 'linux': 'Linux release',
-         'android': 'Android'}
+         'antivirus': 'Antivirus', 'apple': 'macOS release',
+         'linux': 'Linux release', 'android': 'Android'}
 # dated by first sighting: a later refresh must not move them
-IMMUTABLE_KINDS = {'driver-seen'}
+IMMUTABLE_KINDS = {'driver-seen', 'defender-platform'}
 WINDOWS_TYPES = {'Standard': 'monthly security update (Patch Tuesday)',
                  'Preview': 'optional non-security preview',
                  'Out-of-band': 'out-of-band update',
@@ -368,6 +377,135 @@ def parse_drivers(vendor):
 
 
 # --------------------------------------------------------------------------
+# Antivirus releases
+# --------------------------------------------------------------------------
+
+DEFENDER_URL = 'https://www.microsoft.com/en-us/wdsi/defenderupdates'
+NORTON_RSS = 'https://community.norton.com/c/announcements/1713.rss'
+ATOM_NS = {'a': 'http://www.w3.org/2005/Atom',
+           'd': 'http://schemas.microsoft.com/ado/2007/08/dataservices',
+           'm': 'http://schemas.microsoft.com/ado/2007/08/dataservices/'
+                'metadata'}
+
+
+def _xml(text):
+    try:
+        return ET.fromstring(text)
+    except ET.ParseError:
+        return None
+
+
+def parse_norton(text, today=None):
+    """Norton Community "Announcements" RSS: the monthly "Norton Security
+    26.8 for Windows is now available!" posts (Norton 360 is the same
+    product line; Family, VPN and Utilities posts are skipped)."""
+    out = []
+    root = _xml(text)
+    if root is None:
+        return out
+    for item in root.iter('item'):
+        title = (item.findtext('title') or '').strip()
+        if not re.match(r'Norton (Security|360|AntiVirus)\b.*\bWindows',
+                        title, re.I):
+            continue
+        try:
+            when = email.utils.parsedate_to_datetime(
+                item.findtext('pubDate') or '')
+        except (TypeError, ValueError):
+            when = None
+        if when is None:
+            continue
+        clean = re.sub(r'\s*(is now available!?|-?\s*Release!?)\s*$', '',
+                       title, flags=re.I).strip(' -')
+        out.append(event('antivirus', 'norton', clean, when.date(), clean,
+                         detail='Norton Community announcement',
+                         url=(item.findtext('link') or '').strip() or None))
+    return out
+
+
+def chocolatey_url(package):
+    return ('https://community.chocolatey.org/api/v2/Packages()'
+            '?$filter=Id%20eq%20%27{}%27&$orderby=Published%20desc&$top=12'
+            .format(package))
+
+
+def parse_chocolatey(kind, package, name):
+    """Chocolatey package feed (Atom): one event per version, dated its
+    publication, a day or two after the vendor's release."""
+    def parse(text, today=None):
+        out = []
+        root = _xml(text)
+        if root is None:
+            return out
+        for entry in root.findall('a:entry', ATOM_NS):
+            props = entry.find('m:properties', ATOM_NS)
+            if props is None:
+                continue
+            version = (props.findtext('d:Version', '', ATOM_NS) or '').strip()
+            day = _day(props.findtext('d:Published', '', ATOM_NS))
+            pre = (props.findtext('d:IsPrerelease', 'false', ATOM_NS) or
+                   '').strip().lower() == 'true'
+            if not version or day is None or pre:
+                continue
+            out.append(event('antivirus', kind, version, day,
+                             '{} {}'.format(name, version),
+                             detail='as published on Chocolatey, usually a '
+                                    'day or two after the release',
+                             url='https://community.chocolatey.org/packages/'
+                                 '{}/{}'.format(package, version)))
+        return out
+    return parse
+
+
+def winget_url(path):
+    return ('https://api.github.com/repos/microsoft/winget-pkgs/commits'
+            '?path=manifests/{}&per_page=30'.format(path))
+
+
+def parse_winget(kind, package, name):
+    """winget-pkgs commit history of a package: the "New version: ESET.Nod32
+    version 19.2.10.0" commits, dated when merged (within days of the
+    release)."""
+    pattern = re.compile(r'(?:New|Add) version: {} version ([0-9][0-9.]*)'
+                         .format(re.escape(package)), re.I)
+    def parse(payload, today=None):
+        out = []
+        for c in payload if isinstance(payload, list) else []:
+            commit = c.get('commit') or {}
+            m = pattern.search((commit.get('message') or '').split('\n')[0])
+            day = _day((commit.get('committer') or {}).get('date'))
+            if not m or day is None:
+                continue
+            version = m.group(1).rstrip('.')
+            out.append(event('antivirus', kind, version, day,
+                             '{} {}'.format(name, version),
+                             detail='as added to winget, usually within days '
+                                    'of the release',
+                             url=c.get('html_url')))
+        return out
+    return parse
+
+
+def parse_defender(text, today=None):
+    """Defender updates page: the current platform and engine versions; the
+    event is dated the day a new platform version is first seen."""
+    today = today or models.utctoday()
+    plain = re.sub(r'<[^>]+>', ' ', text)
+    platform = re.search(r'Platform Version:\s*([\d.]+)', plain)
+    if not platform:
+        return []
+    engine = re.search(r'Engine Version:\s*([\d.]+)', plain)
+    title = 'Microsoft Defender platform {}'.format(platform.group(1))
+    if engine:
+        title += ', engine {}'.format(engine.group(1))
+    return [event('antivirus', 'defender-platform', platform.group(1), today,
+                  title,
+                  detail='monthly Defender Antivirus platform update, dated '
+                         'when first seen on the Defender updates page',
+                  url=DEFENDER_URL)]
+
+
+# --------------------------------------------------------------------------
 # Feeds
 # --------------------------------------------------------------------------
 
@@ -413,6 +551,17 @@ SOURCES = [
     Source('android-versions', 'https://endoflife.date/api/android.json',
            parse_endoflife('android', 'android', 'android',
                            'Android {cycle} ({codename})')),
+    Source('norton', NORTON_RSS, parse_norton, fmt='text'),
+    Source('avast', chocolatey_url('avastfreeantivirus'),
+           parse_chocolatey('avast', 'avastfreeantivirus',
+                            'Avast Free Antivirus'), fmt='text'),
+    Source('malwarebytes', chocolatey_url('malwarebytes'),
+           parse_chocolatey('malwarebytes', 'malwarebytes', 'Malwarebytes'),
+           fmt='text'),
+    Source('eset', winget_url('e/ESET/Nod32'),
+           parse_winget('eset', 'ESET.Nod32', 'ESET NOD32 Antivirus'),
+           headers={'Accept': 'application/vnd.github+json'}),
+    Source('defender', DEFENDER_URL, parse_defender, fmt='text'),
 ]
 COMPUTED = 'android-bulletins'
 FEED_NAMES = [s.name for s in SOURCES] + [COMPUTED]
