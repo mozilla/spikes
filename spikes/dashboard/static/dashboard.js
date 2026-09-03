@@ -41,6 +41,7 @@ const app = {
   hideDrops: false,
   events: [], // platform events (badges on the charts), grouped per day and source
   eventsData: null,
+  account: null, // /api/me: { enabled, user: { email, name, picture } | null, domains }
 };
 
 const $ = (id) => document.getElementById(id);
@@ -74,6 +75,42 @@ async function fetchJSON(endpoint, params = {}) {
   return data;
 }
 
+// ---------------------------------------------------------------- account
+// Reading needs no account; changing the dashboard needs a Mozilla Google
+// account (auth.py).  The header shows a "Sign in" link, or who is signed in.
+async function loadAccount() {
+  try {
+    const res = await fetch(new URL('me', API), { headers: { Accept: 'application/json' }, cache: 'no-store' });
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    app.account = await res.json();
+  } catch {
+    app.account = null; // the header simply shows nothing
+  }
+  renderAccount();
+}
+
+function renderAccount() {
+  const box = $('account');
+  const a = app.account;
+  box.textContent = '';
+  box.hidden = !(a?.enabled || a?.user);
+  if (box.hidden) return;
+  const here = location.pathname + location.search + location.hash; // come back to this view
+  if (!a.user) {
+    const url = new URL('../login', API);
+    url.searchParams.set('next', here);
+    const who = (a.domains || []).map((d) => `@${d}`).join(' or ');
+    box.append(el('a', { class: 'account-link', href: url.toString(), title: `Sign in with a ${who} Google account to change the dashboard` }, 'Sign in'));
+    return;
+  }
+  if (a.user.picture) box.append(el('img', { class: 'avatar', src: a.user.picture, alt: '', width: 24, height: 24, referrerpolicy: 'no-referrer' }));
+  box.append(el('span', { class: 'account-name', title: a.user.email }, a.user.name || a.user.email));
+  const form = el('form', { class: 'account-form', method: 'post', action: new URL('../logout', API).toString() });
+  form.append(el('input', { type: 'hidden', name: 'next', value: here }));
+  form.append(el('button', { type: 'submit', class: 'chart-btn' }, 'Sign out'));
+  box.append(form);
+}
+
 function showError(msg) {
   const line = $('error-line');
   line.textContent = msg;
@@ -103,6 +140,7 @@ function restoreFocus(container, key) {
 }
 
 async function refresh({ initial = false } = {}) {
+  if (initial) loadAccount(); // independent of the data; not awaited
   try {
     const summary = await fetchJSON('summary');
     // A 304 returns the cached object, so identity is enough to avoid a redraw.
@@ -1347,6 +1385,7 @@ function bindControls() {
     timer = setTimeout(renderSignatures, delay);
   });
   window.addEventListener('hashchange', () => {
+    if (app.account) renderAccount(); // the sign-in/out "next" follows the view
     const h = parseHash();
     if (!h || !app.summary) return;
     if (isAll(h)) { if (!isAll(app.selected)) selectAll(); return; }

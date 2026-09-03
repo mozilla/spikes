@@ -1,0 +1,29 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="color-scheme" content="light dark">
+<title>{{ title }} — Crash spikes</title>
+<link rel="icon" href="{{ url_for('dashboard.static', filename='favicon.png') }}">
+<link rel="stylesheet" href="{{ url_for('dashboard.static', filename='dashboard.css') }}">
+</head>
+<body>
+<header class="page-header">
+  <div class="brand-row">
+    <a href="https://www.mozilla.org/" class="brand" aria-label="Mozilla">mozilla</a>
+    <h1><a class="dashboard-link" href="{{ dashboard_url }}">Crash spikes</a></h1>
+  </div>
+</header>
+<main class="notice">
+  <h2>{{ title }}</h2>
+  <p>{{ detail }}</p>
+  {% if domains %}
+  <p>Sign-in is restricted to
+    {% for d in domains %}<strong>@{{ d }}</strong>{% if not loop.last %}, {% endif %}{% endfor %}
+    Google accounts.</p>
+  {% endif %}
+  <p><a href="{{ dashboard_url }}">Back to the dashboard</a> · <a href="{{ login_url }}">Try again</a></p>
+</main>
+</body>
+</html>

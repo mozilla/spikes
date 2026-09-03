@@ -46,6 +46,7 @@ and the afternoon peak are not spikes.
 | `update.py` | one scheduler run; `python -m spikes.dashboard.update` |
 | `events.py` | platform events (Windows updates, drivers, OS releases) fetched by the scheduler, badges on the charts |
 | `api.py` | Flask blueprint (`/dashboard.html`, `/dashboard/api/*`) |
+| `auth.py` | sign-in with a Mozilla Google account (`/dashboard/login`, `/dashboard/logout`, `/dashboard/api/me`) and the `login_required` guard for routes that change something |
 | `API.md` | JSON contract used by the page |
 | `templates/`, `static/` | the page (vanilla JS, SVG charts, no build) |
 
@@ -333,11 +334,51 @@ and the sortable signature table (flagged rows by default, sparklines,
 expandable per-signature charts).  Data health (stale run, processing lag,
 backfill in progress) is shown in a banner.
 
+## Sign-in
+
+Reading the dashboard needs no account.  Routes that change it are wrapped
+in `auth.login_required` and only run for a signed-in user whose Google
+account has a verified address in one of `login_domains`
+(`config/dashboard.json`, `mozilla.com` by default), the same way
+hackbot.moz.tools is restricted to `@mozilla.com` accounts.  The header
+shows a **Sign in** link, or the signed-in user and a **Sign out** button.
+
+The flow is OpenID Connect against Google through Authlib (state, nonce and
+ID-token signature checks); the `hd` parameter pre-selects the Mozilla
+account in Google's chooser but the check is the `email_verified`, `email`
+and `hd` claims of the ID token, at the callback *and* on every request
+(a change of `login_domains` cuts existing sessions).  The session is the
+signed Flask cookie (`HttpOnly`, `SameSite=Lax`, `Secure` on Heroku, 7
+days): nothing is stored server-side.  Writes also refuse a request whose
+`Origin` or `Sec-Fetch-Site` header names another site.  Signed-out calls
+to a guarded route get `401 {"error": "sign-in required", "login": ...}`.
+
+Setup, once, in the Google Cloud console (APIs & Services → Credentials →
+OAuth client ID, type *Web application*; a consent screen of type
+*Internal* additionally keeps non-Mozilla accounts from even seeing it):
+authorized redirect URI `https://crash-spikes.herokuapp.com/dashboard/login/callback`
+(and `http://localhost:5000/dashboard/login/callback` for a local run).
+Then:
+
+```sh
+heroku config:set -a crash-spikes \
+  SECRET_KEY=$(openssl rand -hex 32) \
+  GOOGLE_CLIENT_ID=....apps.googleusercontent.com \
+  GOOGLE_CLIENT_SECRET=...
+```
+
+Without `GOOGLE_CLIENT_ID` / `GOOGLE_CLIENT_SECRET` the sign-in routes
+answer 503 and the page hides the link; without `SECRET_KEY` a random one
+is used and sessions end with the process.  On Heroku the app trusts one
+`X-Forwarded-Proto` hop (`ProxyFix`, only when `DYNO` is set) so the
+redirect URI and the cookie flags say https.
+
 ## Running
 
 ```sh
 export DATABASE_URL=postgresql://...      # or sqlite:////tmp/dashboard.db
 export LIBMOZDATA_CFG_SOCORRO_TOKEN=...   # optional, higher rate limit
+export SECRET_KEY=... GOOGLE_CLIENT_ID=... GOOGLE_CLIENT_SECRET=...  # optional, sign-in
 uv run python -m spikes.dashboard.update --loop   # backfill, resumable
 uv run gunicorn spikes:app                        # then open /dashboard.html
 ```

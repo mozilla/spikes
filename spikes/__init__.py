@@ -7,6 +7,7 @@ from flask_cors import CORS
 from flask_sqlalchemy import SQLAlchemy
 from libmozdata import config as lmdconfig
 from libmozdata.config import ConfigEnv
+from werkzeug.middleware.proxy_fix import ProxyFix
 import os
 
 
@@ -21,6 +22,11 @@ lmdconfig.set_config(ConfigEnv())
 lmdconfig.set_default_value('User-Agent', 'name', 'crash-clouseau')
 
 app = Flask(__name__)
+if 'DYNO' in os.environ:
+    # Heroku's router terminates TLS: trust its X-Forwarded-Proto / -For (one
+    # hop) so request.is_secure and url_for(_external=True) say https, which
+    # the sign-in redirect URI needs.
+    app.wsgi_app = ProxyFix(app.wsgi_app, x_for=1, x_proto=1)
 
 # Fall back to an in-memory SQLite database so the package can be imported
 # (e.g. by the tests) without a DATABASE_URL.
@@ -38,7 +44,11 @@ app.config['CORS_HEADERS'] = 'Content-Type'
 # Seasonality-aware dashboard (spikes/dashboard): /dashboard.html and
 # /dashboard/api/*.  Imported after db exists since its models need it.
 from spikes.dashboard.api import blueprint as dashboard_blueprint  # noqa: E402
+from spikes.dashboard import auth as dashboard_auth  # noqa: E402
 app.register_blueprint(dashboard_blueprint)
+# Sign-in with a Mozilla Google account (needed to change the dashboard):
+# /dashboard/login, /dashboard/logout, /dashboard/api/me.
+dashboard_auth.init_app(app)
 
 
 @app.route('/')

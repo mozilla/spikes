@@ -3,6 +3,7 @@
     "channels": {"Firefox": ["nightly", "beta", "release", "esr"],
                  "Fenix": ["nightly", "beta", "release"],
                  "Thunderbird": ["nightly", "beta", "release", "esr"]},
+    "login_domains": ["mozilla.com"],
 
     "history_days": 180,
     "fit_history_days": 1100,

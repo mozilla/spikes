@@ -230,6 +230,24 @@ feeds); the `ETag` only changes when a refresh wrote something.
 
 404 when the signature is unknown for that channel.
 
+### `GET /dashboard/api/me`
+
+Who the browser is signed in as (see `auth.py`); `Cache-Control: no-store`.
+`enabled` is false when the server has no Google client credentials (the
+page then hides the sign-in link); `user` is null when signed out.
+
+```jsonc
+{"enabled": true,
+ "user": {"email": "someone@mozilla.com", "name": "Someone", "picture": "https://..."},
+ "domains": ["mozilla.com"]}
+```
+
+Sign-in is `GET /dashboard/login?next=/dashboard.html%23Firefox/release`
+(redirects to Google, then back to `next`, which must be a path on this
+site); sign-out is `POST /dashboard/logout` with a `next` form field.
+
 ### Errors
 
-`400 {"error": "..."}` for invalid parameters.
+`400 {"error": "..."}` for invalid parameters.  Routes that change the
+dashboard answer `401 {"error": "sign-in required", "login": "/dashboard/login"}`
+when signed out and `403` for a cross-site request.

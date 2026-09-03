@@ -26,6 +26,7 @@ is optional and the User-Agent defaults to `crash-clouseau`:
 ```sh
 export DATABASE_URL=postgresql://user:password@localhost/spikes
 export LIBMOZDATA_CFG_BUGZILLA_TOKEN=...   # optional
+export SECRET_KEY=... GOOGLE_CLIENT_ID=... GOOGLE_CLIENT_SECRET=...  # optional: sign-in with a Mozilla Google account
 uv run gunicorn spikes:app                  # serves /dashboard.html
 PYTHONPATH=. uv run python bin/schedule.py  # collects the data every 5 minutes
 ```

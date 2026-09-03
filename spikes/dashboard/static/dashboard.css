@@ -124,6 +124,25 @@ main > section { margin-top: 28px; }
   & .bad { color: var(--danger-text); font-weight: 600; }
 }
 .error-line { margin: 8px 0 0; color: var(--danger-text); font-size: var(--font-size-control); }
+/* sign-in state (auth.py): a "Sign in" link, or avatar + name + "Sign out" */
+.account { display: flex; align-items: center; gap: 8px; color: var(--ink-2); font-size: var(--font-size-control); }
+.account-link {
+  color: var(--ink-2);
+  text-decoration: none;
+  border: var(--border-control);
+  border-radius: var(--radius-control);
+  padding: 1px 8px;
+  line-height: 18px;
+  font-size: var(--font-size-caption);
+
+  &:hover { color: var(--ink); border-color: var(--muted); }
+  &:focus-visible { outline: var(--focus-ring); outline-offset: 1px; }
+}
+.avatar { width: 24px; height: 24px; border-radius: 50%; }
+.account-name { max-width: 18ch; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.account-form { display: inline-flex; margin: 0; }
+/* the sign-in error page (login_error.html) */
+.notice { max-width: 560px; margin: 48px auto; line-height: 1.5; & h2 { margin-bottom: 12px; } }
 .banner {
   margin-top: 12px;
   padding: 10px 14px;
