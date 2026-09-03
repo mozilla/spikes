@@ -352,9 +352,20 @@ class Fit:
             comp.phase([date])[0]]), 4)
             for comp in COMPONENTS if self.active.get(comp.name)}
 
-    def forecast(self, date, horizon=1):
-        """Expected count for *date*, *horizon* days after the series."""
-        level = max(0.0, self.next_level + self.next_slope * (horizon - 1))
+    def forecast(self, date, horizon=1, damping=1.0):
+        """Expected count for *date*, *horizon* days after the series.
+
+        The slope is followed one step per day; with *damping* < 1 every
+        further step counts *damping* times the previous one (a two-week
+        forecast must not extrapolate a rollout ramp forever: with 0.8 the
+        drift converges to five steps).
+        """
+        steps = max(0, horizon - 1)
+        if damping >= 1.0 or steps == 0:
+            drift = steps
+        else:
+            drift = (1.0 - damping ** steps) / (1.0 - damping)
+        level = max(0.0, self.next_level + self.next_slope * drift)
         return level * self.seasonal_at(date)
 
     def level_change(self, days=28):
@@ -533,40 +544,53 @@ def make_series(rows, start, end, fill=np.nan):
     return dates, y
 
 
-def aggregate_weekly(dates, observed, expected, c2, z_thresholds=(3, 5)):
+def aggregate_weekly(dates, observed, expected, c2, z_thresholds=(3, 5),
+                     forecast_after=None):
     """Aggregate daily values into ISO weeks (Monday start).
 
     Returns a list of dicts with ``start``, ``observed``, ``expected``,
-    ``lo<k>``/``hi<k>`` for every *k* in *z_thresholds*, ``z`` and
-    ``ndays``.  The band uses the scale of the weekly sum:
+    ``lo<k>``/``hi<k>`` for every *k* in *z_thresholds*, ``z``, ``ndays``
+    and ``future``.  The band uses the scale of the weekly sum:
     ``Var(sum) = sum(e) + c2 sum(e^2)`` so on the Anscombe scale
     ``s = sqrt(1 + c2 sum(e^2) / sum(e))``.
+
+    A week starting after *forecast_after* with no observed day is a
+    forecast week (``future``): its expectation and band cover all its
+    days.  Without *forecast_after* (or before it) a week without data has
+    no expectation, as a gap in the history should.
     """
     weeks = {}
     for d, o, e in zip(dates, observed, expected):
         start = d - datetime.timedelta(days=d.weekday())
         w = weeks.setdefault(start, {'o': 0.0, 'e': 0.0, 'e2': 0.0,
+                                     'ef': 0.0, 'ef2': 0.0,
                                      'n': 0, 'no': 0, 'ne': 0})
         w['n'] += 1
         known = o is not None and np.isfinite(o)
         if known:
             w['o'] += float(o)
             w['no'] += 1
-        # observed, expected and band over the same (known) days
-        if known and e is not None and np.isfinite(e):
-            w['e'] += float(e)
-            w['e2'] += float(e) ** 2
-            w['ne'] += 1
+        if e is not None and np.isfinite(e):
+            # observed, expected and band over the same (known) days...
+            if known:
+                w['e'] += float(e)
+                w['e2'] += float(e) ** 2
+                w['ne'] += 1
+            # ... and the forecast of a week without any observed day
+            w['ef'] += float(e)
+            w['ef2'] += float(e) ** 2
     res = []
     for start in sorted(weeks):
         w = weeks[start]
-        e = w['e']
-        s = np.sqrt(1.0 + c2 * w['e2'] / e) if e > 0 else 1.0
+        future = w['no'] == 0 and w['ef'] > 0 and \
+            forecast_after is not None and start > forecast_after
+        e, e2 = (w['ef'], w['ef2']) if future else (w['e'], w['e2'])
+        s = np.sqrt(1.0 + c2 * e2 / e) if e > 0 else 1.0
         o = w['o'] if w['no'] else None
         # a score needs an expectation for every observed day
         scorable = o is not None and e > 0 and w['ne'] == w['no']
         item = {'start': start, 'observed': o, 'expected': e if e > 0
-                else None, 'ndays': w['n'],
+                else None, 'ndays': w['n'], 'future': future,
                 'z': float(anscombe(o, e) / s) if scorable else None}
         for k in z_thresholds:
             item['lo%d' % k] = float(anscombe_inverse(e, -k * s)) if e > 0 \

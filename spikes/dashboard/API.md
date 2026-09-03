@@ -107,9 +107,12 @@ today's own state.
   "lo3": [], "hi3": [],               // band at +-3 dispersions (watch threshold)
   "lo5": [], "hi5": [],               // band at +-5 (spike threshold)
   "z": [],
-  "partial": [false, true],           // bucket still in progress
-  "projected": [null, 22100.0],       // for partial buckets only
-  "severity": ["ok", "spike"]         // per bucket, from z (no ratio gate for history)
+  "partial": [false, true, false],    // bucket still in progress (today's)
+  "future": [false, false, true],     // forecast buckets past today, up to the next release
+                                      // (else two weeks): observed null, expected and bands
+                                      // from the model with a damped trend, redone every fit
+  "projected": [null, 22100.0, null], // for partial buckets only
+  "severity": ["ok", "spike", "ok"]   // per bucket, from z (no ratio gate for history)
 },
 "hourly": {
   "hours": [0, 1, "...", 23],
@@ -170,7 +173,11 @@ today's own state.
   "daily": SeriesBlock.daily, "hourly": SeriesBlock.hourly, "model": SeriesBlock.model,
   "signatures": [Row],                // every scored row (flagged and not)
   "counts": {...}, "thresholds": {...},
-  "releases": [...],                  // major releases; ESR point releases ("140.15.0esr") for channel esr
+  "releases": [...],                  // major releases; ESR point releases ("140.15.0esr") for channel esr;
+                                      // plus the upcoming one {"date", "version", "upcoming": true}
+  "next_release": {"date": "2026-09-15", "version": "156.0", "upcoming": true},  // or null: the end of
+                                      // the forecast (nightly: the merge day, "157 merge"); from
+                                      // whattrainisitnow, Thunderbird follows Firefox's dates
   "data_health": {...}
 }
 ```

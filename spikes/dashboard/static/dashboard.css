@@ -14,6 +14,9 @@
   --border: light-dark(rgb(11 11 11 / 10%), rgb(255 255 255 / 10%));
   --band3: light-dark(rgb(137 135 129 / 16%), rgb(137 135 129 / 22%));
   --band5: light-dark(rgb(137 135 129 / 8%), rgb(137 135 129 / 11%));
+  /* the forecast zone past today on the daily chart, and its legend key */
+  --forecast: light-dark(rgb(42 120 214 / 6%), rgb(42 120 214 / 12%));
+  --forecast-key: light-dark(rgb(42 120 214 / 25%), rgb(42 120 214 / 40%));
   --yesterday: light-dark(#1baf7a, #199e70);
   --hover: light-dark(rgb(11 11 11 / 4%), rgb(255 255 255 / 5%));
   --st-watch: #fab219;   /* warning */
@@ -488,6 +491,11 @@ svg {
   &.spark .series-expected { stroke-dasharray: none; stroke-width: 1.5; }
   & .band3 { fill: var(--band3); }
   & .band5 { fill: var(--band5); }
+  /* the forecast past today: shaded zone, fainter band and expected path */
+  & .forecast-zone { fill: var(--forecast); }
+  & .band3.future, & .band5.future { opacity: 0.75; }
+  & .series-expected.future { opacity: 0.75; stroke-dasharray: 2 4; }
+  & .rule.upcoming { stroke-dasharray: 3 3; }
   & .ring { fill: var(--surface); }
   & .hollow { fill: var(--surface); stroke-width: 2; }
   & .extension { stroke-width: 2; opacity: 0.4; stroke-linecap: round; }

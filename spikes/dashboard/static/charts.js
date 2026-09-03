@@ -510,7 +510,7 @@ function drawEventBadges(root, f, box, positions) {
  * spec: { dates[], granularity, observed[], expected[], lo3[], hi3[], lo5[], hi5[], z[],
  *         partial[], projected[], severity[], releases[{date, version}], events[], height, label }
  */
-const SLICED = ['dates', 'observed', 'expected', 'lo3', 'hi3', 'lo5', 'hi5', 'z', 'partial', 'projected', 'severity'];
+const SLICED = ['dates', 'observed', 'expected', 'lo3', 'hi3', 'lo5', 'hi5', 'z', 'partial', 'future', 'projected', 'severity'];
 
 function sliceSpec(spec, a, b) {
   const out = { ...spec };
@@ -528,6 +528,7 @@ export function lineChart(container, spec) {
       { label: '±3 band (watch)', color: 'var(--band3)', kind: 'rect' },
       { label: '±5 band (spike)', color: 'var(--band5)', kind: 'rect' },
       { label: 'Release', color: 'var(--axis)', kind: 'rule' },
+      { label: 'Forecast to the next release', color: 'var(--forecast-key)', kind: 'rect' },
     ],
     buttons: [
       { key: 'zoom', label: 'Reset zoom', hidden: true, onClick: () => setZoom(null) },
@@ -601,11 +602,22 @@ export function lineChart(container, spec) {
       root.append(svg('text', { x: px, y: box.bottom + 16, 'text-anchor': 'middle', text: t.label }));
     }
 
-    // bands (outer first)
+    // bands (outer first) and the expected path; the forecast past today is
+    // drawn as a second, fainter segment over a shaded zone
     const py = (arr) => arr.map((v) => (v == null ? null : yc(v)));
-    root.append(svg('path', { class: 'band5', d: areaPath(pxs, py(s.hi5), py(s.lo5)) }));
-    root.append(svg('path', { class: 'band3', d: areaPath(pxs, py(s.hi3), py(s.lo3)) }));
-    root.append(svg('path', { class: 'series-expected', d: pathFrom(s.expected.map((v, i) => (v == null ? null : { x: pxs[i], y: yc(v) }))) }));
+    const firstFuture = s.future ? s.future.findIndex(Boolean) : -1;
+    const segment = (arr, from, to) => (arr || []).map((v, i) => (i >= from && i <= to ? v : null));
+    const drawExpected = (from, to, cls) => {
+      root.append(svg('path', { class: `band5${cls}`, d: areaPath(pxs, py(segment(s.hi5, from, to)), py(segment(s.lo5, from, to))) }));
+      root.append(svg('path', { class: `band3${cls}`, d: areaPath(pxs, py(segment(s.hi3, from, to)), py(segment(s.lo3, from, to))) }));
+      root.append(svg('path', { class: `series-expected${cls}`, d: pathFrom(segment(s.expected, from, to).map((v, i) => (v == null ? null : { x: pxs[i], y: yc(v) }))) }));
+    };
+    if (firstFuture > 0) {
+      const edge = (pxs[firstFuture - 1] + pxs[firstFuture]) / 2;
+      root.append(svg('rect', { class: 'forecast-zone', x: edge, y: box.top, width: Math.max(0, box.right - edge), height: box.bottom - box.top }));
+      drawExpected(0, firstFuture - 1, '');
+      drawExpected(firstFuture - 1, n - 1, ' future');
+    } else drawExpected(0, n - 1, firstFuture === 0 ? ' future' : '');
 
     // release rules with collision-avoiding labels
     let lastLabelRight = -Infinity;
@@ -613,7 +625,7 @@ export function lineChart(container, spec) {
       const ms = parseDay(r.date);
       if (ms < xs[0] - (weekly ? 6 * DAY_MS : 0) || ms > xs[n - 1] + (weekly ? 6 * DAY_MS : 0)) continue;
       const px = x(Math.max(xs[0], Math.min(xs[n - 1], ms)));
-      root.append(svg('line', { class: 'rule', x1: px, x2: px, y1: box.top, y2: box.bottom }));
+      root.append(svg('line', { class: r.upcoming ? 'rule upcoming' : 'rule', x1: px, x2: px, y1: box.top, y2: box.bottom }));
       const w = r.version.length * 6 + 6;
       if (px - w / 2 > lastLabelRight) {
         root.append(svg('text', { class: 'lbl', x: px, y: box.top - 8, 'text-anchor': 'middle', text: r.version }));
@@ -679,14 +691,17 @@ export function lineChart(container, spec) {
     if (hadFocus) root.querySelector('.overlay')?.focus({ preventScroll: true });
 
     function bucketTitle(i) {
-      return weekly ? `Week of ${fmtDate(xs[i], true)}` : fmtDateLong(xs[i]);
+      const title = weekly ? `Week of ${fmtDate(xs[i], true)}` : fmtDateLong(xs[i]);
+      return s.future?.[i] ? `${title} · forecast` : title;
     }
     function tipRows(i) {
       const partial = !!s.partial?.[i];
+      const future = !!s.future?.[i];
       const sev = s.severity?.[i] || 'ok';
-      const rows = [{ value: fmtInt(get(s.observed, i)), label: partial ? 'observed so far' : 'observed', color: 'var(--ink)' }];
+      const rows = [];
+      if (!future) rows.push({ value: fmtInt(get(s.observed, i)), label: partial ? 'observed so far' : 'observed', color: 'var(--ink)' });
       if (partial && get(s.projected, i) != null) rows.push({ value: fmtInt(s.projected[i]), label: 'projected', color: 'var(--ink)', kind: 'dot' });
-      rows.push({ value: fmtInt(get(s.expected, i)), label: 'expected', color: 'var(--expected)', kind: 'dash' });
+      rows.push({ value: fmtInt(get(s.expected, i)), label: future ? 'expected (forecast)' : 'expected', color: 'var(--expected)', kind: 'dash' });
       if (get(s.lo3, i) != null) rows.push({ value: `${fmtInt(s.lo3[i])} – ${fmtInt(s.hi3[i])}`, label: '±3 band', color: 'var(--band3)', kind: 'rect' });
       if (get(s.lo5, i) != null) rows.push({ value: `${fmtInt(s.lo5[i])} – ${fmtInt(s.hi5[i])}`, label: '±5 band', color: 'var(--band5)', kind: 'rect' });
       if (get(s.z, i) != null) rows.push({ value: `z ${fmtZ(s.z[i])}`, label: sev === 'ok' ? 'within band' : sev, color: sev === 'ok' ? 'var(--axis)' : SEV_COLOR[sev], kind: 'dot' });
@@ -696,9 +711,10 @@ export function lineChart(container, spec) {
     const tableRows = [];
     for (let i = 0; i < n; i++) {
       const partial = !!s.partial?.[i];
+      const future = !!s.future?.[i];
       tableRows.push([
         bucketTitle(i) + (partial ? ' (in progress)' : ''),
-        fmtInt(get(s.observed, i)) + (partial && get(s.projected, i) != null ? ` → ${fmtInt(s.projected[i])}` : ''),
+        future ? '—' : fmtInt(get(s.observed, i)) + (partial && get(s.projected, i) != null ? ` → ${fmtInt(s.projected[i])}` : ''),
         fmtInt(get(s.expected, i)),
         get(s.lo3, i) == null ? '—' : `${fmtInt(s.lo3[i])} – ${fmtInt(s.hi3[i])}`,
         get(s.lo5, i) == null ? '—' : `${fmtInt(s.lo5[i])} – ${fmtInt(s.hi5[i])}`,

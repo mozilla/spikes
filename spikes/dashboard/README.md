@@ -306,7 +306,11 @@ cross-channel "flagged in the last 48 h" table, then for the selected channel th
 tiles (today so far, projected, yesterday), the drivers, the intraday chart
 (hourly bars vs expected, in-progress hour hollow), the daily chart (day or
 week granularity, 30-365 days, expected line and bands, severity markers,
-release markers), a collapsed explanation of how the expectation is built,
+release markers, and the forecast up to the next release: the expected
+path and its bands continue past today over a shaded zone, with a damped
+trend so a rollout ramp is not extrapolated forever, redone with every
+fit; the next release comes from whattrainisitnow, the merge day for
+nightly, two weeks when unknown), a collapsed explanation of how the expectation is built,
 and the sortable signature table (flagged rows by default, sparklines,
 expandable per-signature charts).  Data health (stale run, processing lag,
 backfill in progress) is shown in a banner.

@@ -200,5 +200,49 @@ class FitTest(unittest.TestCase):
         self.assertFalse(s['components']['yearly']['active'])
 
 
+class ForecastTest(unittest.TestCase):
+
+    def test_damped_trend(self):
+        # a 1 %/day ramp: the forecast follows it, less and less with damping
+        dates, y = simulate(ndays=90, trend=0.01, r=500)
+        fit = S.fit(dates, y)
+        self.assertGreater(fit.next_slope, 0)
+        far = dates[-1] + datetime.timedelta(days=14)
+        plain = fit.forecast(far, 14) / fit.seasonal_at(far)
+        damped = fit.forecast(far, 14, 0.8) / fit.seasonal_at(far)
+        tomorrow = fit.forecast(dates[-1] + datetime.timedelta(days=1))
+        tomorrow /= fit.seasonal_at(dates[-1] + datetime.timedelta(days=1))
+        self.assertGreater(plain, damped)
+        self.assertGreater(damped, tomorrow)
+        # 13 damped steps: (1 - 0.8^13) / (1 - 0.8) of them, converging to 5
+        self.assertAlmostEqual(damped - tomorrow,
+                               fit.next_slope * (1 - 0.8 ** 13) / 0.2,
+                               places=6)
+        # horizon 1 is unchanged by damping
+        self.assertEqual(fit.forecast(far, 1, 0.8), fit.forecast(far, 1))
+
+    def test_weekly_forecast_weeks(self):
+        dates = [START + datetime.timedelta(days=i) for i in range(21)]
+        observed = [100.0] * 10 + [None] * 11  # the last 11 days lie ahead
+        expected = [100.0] * 21
+        today = dates[9]
+        agg = S.aggregate_weekly(dates, observed, expected, 0.02,
+                                 forecast_after=today)
+        self.assertEqual([a['future'] for a in agg], [False, False, True])
+        # without a forecast boundary a week without data is a gap
+        gap = S.aggregate_weekly(dates, observed, expected, 0.02)
+        self.assertFalse(gap[2]['future'])
+        self.assertIsNone(gap[2]['expected'])
+        # the week in progress: observed and expected over its known days
+        self.assertEqual(agg[1]['observed'], 300.0)
+        self.assertEqual(agg[1]['expected'], 300.0)
+        # the forecast week: no observed, the expectation of its 7 days
+        self.assertIsNone(agg[2]['observed'])
+        self.assertEqual(agg[2]['expected'], 700.0)
+        self.assertIsNone(agg[2]['z'])
+        self.assertLess(agg[2]['lo3'], 700.0)
+        self.assertGreater(agg[2]['hi5'], 700.0)
+
+
 if __name__ == '__main__':
     unittest.main()

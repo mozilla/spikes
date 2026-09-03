@@ -276,6 +276,66 @@ def releases(since=None, channel=None, product='Firefox'):
     return data
 
 
+SCHEDULE = 'https://whattrainisitnow.com/api/release/schedule/'
+_schedule_cache = {}
+FORECAST_DAYS = 14        # forecast horizon when the next release is unknown
+FORECAST_MAX_DAYS = 45
+FORECAST_DAMPING = 0.8    # the trend's steps shrink by this factor each day
+
+
+def _schedule(train):
+    """whattrainisitnow's schedule of the current ``nightly`` or ``beta``
+    version (cached six hours)."""
+    cache = _schedule_cache.setdefault(train, {'at': 0.0, 'data': None})
+    now = time.time()
+    if now - cache['at'] > 6 * 3600:
+        try:
+            cache['data'] = _fetch_json('{}?version={}'.format(SCHEDULE,
+                                                               train))
+            cache['at'] = now
+        except Exception as ex:  # the chart falls back to a fixed horizon
+            logger.warning('Dashboard: release schedule unavailable: %s', ex)
+            cache['at'] = now - 6 * 3600 + 600
+    return cache['data']
+
+
+def next_release(product, channel, today):
+    """The next train boundary of a channel: the merge day of the nightly
+    version for nightly, the release day of the current beta for beta,
+    release and ESR (Thunderbird ships the same days as Firefox).
+    ``{'date', 'version'}`` or None when unknown or past."""
+    train, key = ('nightly', 'merge_day') if channel == 'nightly' \
+        else ('beta', 'release')
+    data = _schedule(train) or {}
+    try:
+        day = datetime.date.fromisoformat(str(data.get(key) or '')[:10])
+    except ValueError:
+        return None
+    if day <= today:
+        return None
+    major = str(data.get('version') or '').split('.')[0]
+    if not major or product == 'Thunderbird':
+        label = 'merge' if channel == 'nightly' else 'next release'
+    elif channel == 'nightly':
+        label = '{} merge'.format(major)
+    elif channel == 'esr':
+        label = 'ESR point release'  # ships the same day as the major
+    else:
+        label = '{}.0'.format(major)
+    return {'date': day, 'version': label}
+
+
+def horizon_for(product, channel, today):
+    """``(last forecast day, upcoming release marker or None)`` for the
+    daily chart: up to the next release, else two weeks."""
+    nxt = next_release(product, channel, today)
+    if nxt is None:
+        return today + datetime.timedelta(days=FORECAST_DAYS), None
+    day = min(nxt['date'], today + datetime.timedelta(days=FORECAST_MAX_DAYS))
+    return day, {'date': day_str(nxt['date']), 'version': nxt['version'],
+                 'upcoming': True}
+
+
 def last_run():
     """The latest completed run (a running one has no results yet)."""
     try:
@@ -540,12 +600,19 @@ def channel_summary(product, channel, today, now):
 # --------------------------------------------------------------------------
 
 def daily_block(product, channel, series_id, today, days, granularity,
-                score_today, prior_fit=None, history_days=None):
+                score_today, prior_fit=None, history_days=None,
+                horizon=None):
     """Recompute the fit of a series and return the ``daily`` block and
-    the fitted model (see API.md).  *history_days* is the fit window
-    (default ``history_days``; the channel total uses
-    ``config.fit_history_days()`` so its yearly component matches the
-    scheduler's)."""
+    the fitted model (see API.md).
+
+    *history_days* is the fit window (default ``history_days``; the
+    channel total uses ``config.fit_history_days()`` so its yearly
+    component matches the scheduler's).  *horizon* is the last day of the
+    forecast appended after today (the next release, see
+    :func:`horizon_for`): the expected path and its bands continue past
+    today, recomputed with every fit, so the chart shows what the model
+    expects until then.
+    """
     if history_days is None:
         history_days = config.get('history_days', 180)
     history_days = max(days, history_days)
@@ -559,30 +626,47 @@ def daily_block(product, channel, series_id, today, days, granularity,
                        own_min=config.get('own_factors_min_crashes', 10),
                        trend_min_level=config.get('trend_min_level', 50))
     c2 = fit.c2
-    # append today (partial)
-    exp_today = fit.forecast(today)
-    all_dates = dates + [today]
-    observed = list(y) + [daily.get(today, (np.nan, None))[0]]
-    expected = list(fit.expected) + [exp_today]
-    zs = list(fit.z) + [score_today.z if score_today else None]
-    cut = max(0, len(all_dates) - days)
+    # append today (partial) and the forecast (damped trend)
+    future = []
+    if horizon is not None and horizon > today:
+        future = [today + datetime.timedelta(days=i)
+                  for i in range(1, (horizon - today).days + 1)]
+    all_dates = dates + [today] + future
+    observed = list(y) + [daily.get(today, (np.nan, None))[0]] + \
+        [np.nan] * len(future)
+    expected = list(fit.expected) + [fit.forecast(today)] + \
+        [fit.forecast(d, (d - yesterday).days, FORECAST_DAMPING)
+         for d in future]
+    zs = list(fit.z) + [score_today.z if score_today else None] + \
+        [None] * len(future)
+    cut = max(0, len(dates) + 1 - days)  # `days` of history + the forecast
     all_dates, observed, expected, zs = (all_dates[cut:], observed[cut:],
                                          expected[cut:], zs[cut:])
+    ti = all_dates.index(today)
     rules = thresholds()
     if granularity == 'week':
-        agg = seasonal.aggregate_weekly(all_dates, observed, expected, c2)
+        agg = seasonal.aggregate_weekly(all_dates, observed, expected, c2,
+                                        forecast_after=today)
+
+        def current(agg):
+            """Index of the week containing today."""
+            return next((i for i, a in enumerate(agg) if a['start'] <= today
+                         <= a['start'] + datetime.timedelta(days=6)), None)
         # the in-progress week: its expectation and band stay full-day
         # (consistent with `projected`), but its score compares today's
         # count so far with today's expectation so far
+        cur = current(agg)
         if score_today is not None and score_today.expected is not None \
-                and agg and all_dates[-1] >= today:
+                and cur is not None:
             sofar = list(expected)
-            sofar[-1] = score_today.expected
-            agg[-1]['z'] = seasonal.aggregate_weekly(
-                all_dates, observed, sofar, c2)[-1]['z']
+            sofar[ti] = score_today.expected
+            agg[cur]['z'] = seasonal.aggregate_weekly(
+                all_dates, observed, sofar, c2,
+                forecast_after=today)[cur]['z']
         # a leading week cut by the requested range is not a full week
         while len(agg) > 1 and agg[0]['ndays'] < 7:
             agg.pop(0)
+        cur = current(agg)
         block = {'granularity': 'week',
                  'start': [day_str(a['start']) for a in agg],
                  'observed': [num(a['observed']) for a in agg],
@@ -592,18 +676,17 @@ def daily_block(product, channel, series_id, today, days, granularity,
                  'lo5': [num(a['lo5'], 1) for a in agg],
                  'hi5': [num(a['hi5'], 1) for a in agg],
                  'z': [num(a['z'], 2) for a in agg],
-                 'partial': [a['start'] + datetime.timedelta(days=6) >= today
-                             for a in agg],
+                 'partial': [i == cur for i in range(len(agg))],
+                 'future': [bool(a['future']) for a in agg],
                  'projected': [None] * len(agg)}
         block['severity'] = [scoring.severity_of(a['z'], None, rules)
                              if a['z'] is not None else 'ok' for a in agg]
-        if block['partial'] and block['partial'][-1] and score_today and agg:
-            block['severity'][-1] = score_today.severity
+        if cur is not None and score_today:
+            block['severity'][cur] = score_today.severity
             if score_today.projected is not None:
-                last = agg[-1]
-                done = (last['observed'] or 0) - \
+                done = (agg[cur]['observed'] or 0) - \
                     (daily.get(today, (0,))[0] or 0)
-                block['projected'][-1] = num(done + score_today.projected, 1)
+                block['projected'][cur] = num(done + score_today.projected, 1)
     else:
         e = np.array([np.nan if v is None else v for v in expected],
                      dtype=np.float64)
@@ -618,13 +701,14 @@ def daily_block(product, channel, series_id, today, days, granularity,
                  'lo5': [num(v, 1) for v in lo5],
                  'hi5': [num(v, 1) for v in hi5],
                  'z': [num(v, 2) for v in zs],
-                 'partial': [d >= today for d in all_dates],
+                 'partial': [d == today for d in all_dates],
+                 'future': [d > today for d in all_dates],
                  'projected': [None] * len(all_dates)}
         block['severity'] = [scoring.severity_of(z, None, rules)
                              if z is not None else 'ok' for z in block['z']]
         if score_today is not None:
-            block['projected'][-1] = num(score_today.projected, 1)
-            block['severity'][-1] = score_today.severity
+            block['projected'][ti] = num(score_today.projected, 1)
+            block['severity'][ti] = score_today.severity
     return block, fit
 
 
@@ -822,9 +906,12 @@ def channel_view():
     total_id = models.total_series(product, channel, create=False)
     by_series = channel_scores(product, channel, today)
     total_score = by_series[total_id]['today']
+    horizon, upcoming = horizon_for(product, channel, today)
     daily, fit = daily_block(product, channel, total_id, today, days,
                              granularity, total_score,
-                             history_days=config.fit_history_days())
+                             history_days=config.fit_history_days(),
+                             horizon=horizon)
+    marks = releases(today - datetime.timedelta(days=days), channel, product)
     s.update({
         'daily': daily,
         'model': model_block(fit, today),
@@ -833,8 +920,9 @@ def channel_view():
                                float(fit.expected[-1]) if fit.ndays and
                                np.isfinite(fit.expected[-1]) else
                                fit.forecast(today), total_score.as_of),
-        'signatures': rows, 'releases': releases(
-            today - datetime.timedelta(days=days), channel, product),
+        'signatures': rows,
+        'releases': marks + ([upcoming] if upcoming else []),
+        'next_release': upcoming,
         'thresholds': thresholds(),
         'data_health': data_health(now, run, [s], check_count=False),
     })
@@ -889,23 +977,26 @@ def signature_view():
     if entry is None or 'today' not in entry:
         return jsonify({'error': 'signature not scored today'}), 404
     total_id = models.total_series(product, channel, create=False)
+    horizon, upcoming = horizon_for(product, channel, today)
     _, prior = daily_block(product, channel, total_id, today, days, 'day',
                            by_series.get(total_id, {}).get('today'),
                            history_days=config.fit_history_days())
     daily, fit = daily_block(product, channel, series.id, today, days,
-                             granularity, entry['today'], prior_fit=prior)
+                             granularity, entry['today'], prior_fit=prior,
+                             horizon=horizon)
     yesterday = today - datetime.timedelta(days=1)
     rows = rows_json(product, channel, by_series, today,
                      day_final(product, channel, yesterday), now,
                      only_ids={series.id})
     e_yday = float(fit.expected[-1]) if fit.ndays and \
         np.isfinite(fit.expected[-1]) else fit.forecast(today)
+    marks = releases(today - datetime.timedelta(days=days), channel, product)
     return versioned({
         'row': rows[0] if rows else None,
         'daily': daily, 'model': model_block(fit, today),
         'hourly': hourly_block(product, channel, series.id, today,
                                fit.forecast(today), e_yday,
                                entry['today'].as_of),
-        'releases': releases(today - datetime.timedelta(days=days), channel,
-                             product),
+        'releases': marks + ([upcoming] if upcoming else []),
+        'next_release': upcoming,
     }, run, product, channel, days, granularity, signature, now=now)

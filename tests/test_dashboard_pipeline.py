@@ -705,6 +705,11 @@ class ApiTest(DBTestCase):
                                           return_value=NOW),
                         mock.patch.object(api, 'releases',
                                           return_value=[]),
+                        mock.patch.object(api, 'next_release',
+                                          return_value={
+                                              'date': TODAY +
+                                              datetime.timedelta(days=12),
+                                              'version': '156.0'}),
                         mock.patch.object(api.config, 'pairs',
                                           return_value=[('Firefox',
                                                          'release')])]
@@ -750,12 +755,27 @@ class ApiTest(DBTestCase):
         self.assertEqual(r.status_code, 200)
         d = r.get_json()
         self.assertEqual(d['daily']['granularity'], 'day')
-        self.assertEqual(len(d['daily']['start']), 30)
-        self.assertTrue(d['daily']['partial'][-1])
-        self.assertFalse(d['daily']['partial'][-2])
+        # 30 days of history plus the 12-day forecast to the next release
+        self.assertEqual(len(d['daily']['start']), 42)
+        self.assertEqual(d['daily']['partial'].index(True), 29)
+        self.assertEqual(d['daily']['partial'].count(True), 1)
+        self.assertEqual(d['daily']['future'][:30], [False] * 30)
+        self.assertEqual(d['daily']['future'][30:], [True] * 12)
+        self.assertEqual(d['daily']['start'][-1],
+                         (TODAY + datetime.timedelta(days=12)).isoformat())
+        self.assertIsNone(d['daily']['observed'][-1])
+        self.assertIsNotNone(d['daily']['expected'][-1])
+        self.assertLess(d['daily']['lo3'][-1], d['daily']['expected'][-1])
+        self.assertIsNone(d['daily']['z'][-1])
+        self.assertEqual(d['daily']['severity'][-1], 'ok')
+        self.assertIsNotNone(d['daily']['projected'][29])
+        self.assertEqual(d['next_release'],
+                         {'date': (TODAY + datetime.timedelta(days=12))
+                          .isoformat(), 'version': '156.0', 'upcoming': True})
+        self.assertEqual(d['releases'][-1], d['next_release'])
         for key in ('observed', 'expected', 'lo3', 'hi3', 'lo5', 'hi5', 'z',
-                    'severity', 'projected'):
-            self.assertEqual(len(d['daily'][key]), 30)
+                    'severity', 'projected', 'future'):
+            self.assertEqual(len(d['daily'][key]), 42)
         self.assertEqual(len(d['hourly']['today']), 24)
         self.assertEqual(d['hourly']['in_progress_hour'], 12)
         self.assertIsNone(d['hourly']['today'][13])
@@ -771,7 +791,15 @@ class ApiTest(DBTestCase):
                             '&channel=release&days=60&granularity=week')
         d = r.get_json()
         self.assertEqual(d['daily']['granularity'], 'week')
-        self.assertTrue(d['daily']['partial'][-1])
+        # one week in progress (today's), then the forecast weeks
+        self.assertEqual(d['daily']['partial'].count(True), 1)
+        cur = d['daily']['partial'].index(True)
+        self.assertEqual(d['daily']['future'][cur], False)
+        self.assertTrue(all(d['daily']['future'][cur + 1:]))
+        self.assertGreaterEqual(len(d['daily']['future']) - cur - 1, 1)
+        self.assertIsNone(d['daily']['observed'][-1])
+        self.assertIsNotNone(d['daily']['expected'][-1])
+        self.assertIsNotNone(d['daily']['projected'][cur])
         self.assertGreater(len(d['daily']['start']), 7)
 
     def test_signature_and_errors(self):
@@ -781,7 +809,9 @@ class ApiTest(DBTestCase):
         d = r.get_json()
         self.assertEqual(d['row']['signature'], 'spiking')
         self.assertIn(d['row']['severity'], ('spike', 'major'))
-        self.assertEqual(len(d['daily']['start']), 30)
+        self.assertEqual(len(d['daily']['start']), 42)  # + 12 forecast days
+        self.assertTrue(d['daily']['future'][-1])
+        self.assertEqual(d['next_release']['version'], '156.0')
         self.assertIn('borrowed', d['model'])
         self.assertIsNotNone(d['hourly']['today'])
         r = self.client.get('/dashboard/api/signature?product=Firefox'
