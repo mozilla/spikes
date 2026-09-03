@@ -20,6 +20,11 @@ credentials the sign-in routes answer 503 and the page hides the button.
 
 Routes: ``GET /dashboard/login?next=``, ``GET /dashboard/login/callback``,
 ``POST /dashboard/logout``, ``GET /dashboard/api/me``.
+
+Local development: ``DASHBOARD_DEV_USER=<address>`` makes *Sign in* sign
+the browser in as that address without Google.  It is ignored as soon as
+Google credentials are configured or on Heroku (``DYNO`` set), and the
+address still has to be in an allowed domain.
 """
 
 import datetime
@@ -83,9 +88,24 @@ def domains():
     return [d.lower() for d in config.get('login_domains', ['mozilla.com'])]
 
 
-def enabled():
+def google_configured():
     return bool(current_app.config.get('GOOGLE_CLIENT_ID') and
                 current_app.config.get('GOOGLE_CLIENT_SECRET'))
+
+
+def dev_user():
+    """The user *Sign in* signs in as on a local run with
+    ``DASHBOARD_DEV_USER`` set (see the module docstring), else None."""
+    email = (os.getenv('DASHBOARD_DEV_USER') or '').strip().lower()
+    if not email or 'DYNO' in os.environ or google_configured() or \
+            not allowed_email(email):
+        return None
+    return {'email': email, 'name': 'Dev user ({})'.format(email),
+            'picture': None}
+
+
+def enabled():
+    return google_configured() or dev_user() is not None
 
 
 def allowed_email(email):
@@ -185,6 +205,11 @@ def login():
     if current_app.config['SESSION_COOKIE_SECURE'] and not request.is_secure:
         # the cookie holding the OAuth state is Secure: start over https
         return redirect(request.url.replace('http://', 'https://', 1))
+    dev = dev_user()
+    if dev is not None:  # local development, no Google round trip
+        session[SESSION_KEY] = dev
+        session.permanent = True
+        return redirect(safe_next(request.args.get('next')))
     session[NEXT_KEY] = safe_next(request.args.get('next'))
     allowed = domains()
     # hd pre-selects the Workspace account in Google's chooser ('*' = any
@@ -196,7 +221,7 @@ def login():
 
 @blueprint.route('/dashboard/login/callback')
 def callback():
-    if not enabled():
+    if not google_configured():
         return problem(503, 'Sign-in is not configured', '')
     try:
         token = oauth.google.authorize_access_token()

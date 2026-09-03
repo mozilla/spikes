@@ -186,6 +186,33 @@ class RoutesTest(unittest.TestCase):
         self.assertEqual(self.client.get('/dashboard/logout').status_code,
                          405)
 
+    def test_dev_user(self):
+        """DASHBOARD_DEV_USER signs in without Google on a local run only."""
+        app.config.update(GOOGLE_CLIENT_ID=None, GOOGLE_CLIENT_SECRET=None)
+        with mock.patch.dict('os.environ',
+                             {'DASHBOARD_DEV_USER': 'Dev@mozilla.com'}):
+            self.assertTrue(self.me()['enabled'])
+            r = self.client.get('/dashboard/login?next=/dashboard.html%23all')
+            self.assertEqual(r.status_code, 302)
+            self.assertEqual(r.headers['Location'], '/dashboard.html#all')
+            self.assertEqual(self.me()['user']['email'], 'dev@mozilla.com')
+            self.assertEqual(self.google.redirects, [])
+            # Google's callback stays off
+            self.assertEqual(self.client.get(
+                '/dashboard/login/callback?code=c').status_code, 503)
+        with mock.patch.dict('os.environ',
+                             {'DASHBOARD_DEV_USER': 'x@example.com'}):
+            self.assertFalse(self.me()['enabled'])  # domain still applies
+        with mock.patch.dict('os.environ', {'DYNO': 'web.1',
+                                            'DASHBOARD_DEV_USER':
+                                            'dev@mozilla.com'}):
+            self.assertFalse(self.me()['enabled'])  # never on Heroku
+        app.config.update(GOOGLE_CLIENT_ID='id', GOOGLE_CLIENT_SECRET='s')
+        with mock.patch.dict('os.environ',
+                             {'DASHBOARD_DEV_USER': 'dev@mozilla.com'}):
+            self.client.get('/dashboard/login')  # Google wins when configured
+            self.assertEqual(len(self.google.redirects), 1)
+
     def test_disabled_without_credentials(self):
         app.config.update(GOOGLE_CLIENT_ID=None, GOOGLE_CLIENT_SECRET=None)
         self.assertEqual(self.me()['enabled'], False)

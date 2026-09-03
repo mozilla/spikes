@@ -88,13 +88,22 @@ A `Score` plus:
     "observed": 430, "expected": 98.0,            // 00:00 UTC); the numbers are that day's
     "z": 12.0, "excess": 332,
     "peak": null                                  // {"severity", "z", "excess", "at"} when the
-  }                                               // day stepped down from a higher severity
+  },                                              // day stepped down from a higher severity
+  "done": {"at": "2026-09-01T14:02:00Z",          // a signed-in user marked the spike as
+           "by": "someone@mozilla.com",           // handled (POST /dashboard/api/done), or
+           "severity": "spike"}                   // null; see below for how long it holds
 }
 ```
 
 Lists, counts and sort orders use `flag` (a row whose `flag.day` is not
 `day` carries yesterday's spike into today); `severity` and `is_new` stay
 today's own state.
+
+`done` is shown while the mark covers the current *episode*: the run of
+consecutive flagged days ending on `flag.day` (followed 7 days back), and
+only up to the severity the mark was made for.  A new spike after a gap
+starts undone, and a watch marked done does not hide the major it turns
+into.  The page hides done rows unless the `done` filter chip is on.
 
 ### Series block (charts)
 
@@ -229,6 +238,26 @@ feeds); the `ETag` only changes when a refresh wrote something.
 ```
 
 404 when the signature is unknown for that channel.
+
+### `POST /dashboard/api/done`
+
+Signed-in Mozilla users only (`401` otherwise, `403` for a cross-site
+request; see `auth.py`).  JSON body:
+
+```jsonc
+{"product": "Firefox", "channel": "release", "signature": "...", "done": true}
+```
+
+Marks a flagged signature as done (`400` when it is not flagged), or
+removes the mark with `"done": false`.  Every call adds a row to
+`dashboard_marks` (who, when, at which severity); the latest wins.  The
+response is the row's new `done` block and the new `data_version`: marks
+are part of the version, so the page's cached channel and summary are
+stale and it refetches them.
+
+```jsonc
+{"done": {"at": "...", "by": "someone@mozilla.com", "severity": "spike"} , "data_version": "..."}
+```
 
 ### `GET /dashboard/api/me`
 

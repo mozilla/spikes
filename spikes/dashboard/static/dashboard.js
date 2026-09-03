@@ -87,6 +87,43 @@ async function loadAccount() {
     app.account = null; // the header simply shows nothing
   }
   renderAccount();
+  if (app.channel) renderSignatures(); // the "mark done" buttons depend on it
+}
+
+function signedIn() {
+  return !!app.account?.user;
+}
+
+/** Mark (or unmark) a flagged signature as done, then refetch: the mark is part
+ * of the data version, so the cached channel and summary are stale. */
+async function markDone(row, done) {
+  const url = new URL('done', API);
+  let res;
+  try {
+    res = await fetch(url, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
+      body: JSON.stringify({ product: row.product || app.selected?.product, channel: row.channel || app.selected?.channel, signature: row.signature, done }),
+    });
+  } catch (e) {
+    showError(`Could not mark the signature (${e.message})`);
+    return;
+  }
+  if (res.status === 401) {
+    app.account = { ...(app.account || { enabled: true, domains: [] }), user: null }; // the session ended
+    renderAccount();
+    renderSignatures();
+    showError('Your session has ended: sign in again to mark signatures');
+    return;
+  }
+  if (!res.ok) {
+    let msg = `HTTP ${res.status}`;
+    try { msg += `: ${(await res.json()).error}`; } catch { /* body not JSON */ }
+    showError(`Could not mark the signature (${msg})`);
+    return;
+  }
+  announce(done ? 'Marked done' : 'Mark removed');
+  await refresh();
 }
 
 function renderAccount() {
@@ -254,6 +291,14 @@ function flagAge(row) {
   return Math.round((parseDay(row.day) - parseDay(row.flag.day)) / DAY_MS);
 }
 
+/** "done by someone@mozilla.com on 3 Sep 2026 14:02 (was a spike)". */
+function doneTitle(row) {
+  const d = row.done;
+  if (!d) return '';
+  const was = d.severity && d.severity !== 'ok' ? ` (was a ${d.severity})` : '';
+  return `Marked done by ${d.by || 'someone'} on ${fmtTime(d.at)}${was}`;
+}
+
 function flagWhen(row) {
   const age = flagAge(row);
   return age === 1 ? 'yesterday' : age > 1 ? `${age} days ago` : '';
@@ -298,6 +343,7 @@ function chipHelp(kind) {
     case 'new': return 'New: not seen above the reporting cut on any of the previous 14 days.';
     case 'storm': case 'crash-loop': return 'Storm / crash loop: many crashes from a handful of installs (few machines crashing repeatedly), or 20+ crashes per install. Not a regression across users, so it is never an alert.';
     case 'noise': return 'Noise: a signature listed in the skiplist (processing artefacts such as shutdown kills or empty dumps). Shown, never alerted on.';
+    case 'done': return 'Done: a signed-in Mozillian marked this spike as handled (bug filed, cause known). Hidden by default. The mark ends with the spike, or when it reaches a higher severity.';
     case 'ok': return 'OK: within the range the seasonal pattern predicts for this weekday and time of day.';
     default: return '';
   }
@@ -899,6 +945,7 @@ function readFilters() {
 }
 
 function rowCategory(row) {
+  if (row.done) return 'done';
   if (sevOf(row) !== 'ok' || isNew(row)) return 'flagged';
   return row.storm ? 'storm' : 'unflagged';
 }
@@ -914,17 +961,20 @@ function visibleRows() {
   const shown = [];
   let unflaggedCount = 0;
   let stormCount = 0;
+  let doneCount = 0;
   for (const row of rows) {
     if ((filters.hideNoise && row.noise) || (row.observed || 0) < filters.minCrashes ||
         (filters.text && !row.signature.toLowerCase().includes(filters.text))) continue;
     const category = rowCategory(row);
     if (category === 'storm') stormCount += 1;
     else if (category === 'unflagged') unflaggedCount += 1;
+    else if (category === 'done') doneCount += 1;
     if ((category === 'flagged' && matchesSeverityFilter(row, filters.severities)) ||
+        (category === 'done' && filters.severities.has('done')) ||
         (category === 'storm' && filters.showStorms) ||
         (category === 'unflagged' && filters.showUnflagged)) shown.push(row);
   }
-  return { shown, unflaggedCount, stormCount, total: rows.length };
+  return { shown, unflaggedCount, stormCount, doneCount, showDone: filters.severities.has('done'), total: rows.length };
 }
 
 const SORTERS = {
@@ -958,11 +1008,12 @@ function sortRows(rows) {
 }
 
 function renderSignatures() {
-  const { shown, unflaggedCount, stormCount, total } = visibleRows();
+  const { shown, unflaggedCount, stormCount, doneCount, showDone, total } = visibleRows();
   $('unflagged-count').textContent = String(unflaggedCount);
   $('storm-count').textContent = plural(stormCount, 'storm');
+  const hiddenDone = doneCount && !showDone ? ` · ${doneCount} done hidden` : '';
   const metaText = total
-    ? `${shown.length} of ${total} scored signatures shown${shown.length ? '' : ' — no signature matches the current filters'}`
+    ? `${shown.length} of ${total} scored signatures shown${shown.length ? '' : ' — no signature matches the current filters'}${hiddenDone}`
     : 'No scored signatures yet';
   const meta = $('signatures-meta');
   if (meta.textContent !== metaText) meta.textContent = metaText; // role=status: announce changes only
@@ -1044,6 +1095,7 @@ function buildRow(row, withChannel, onRow) {
   // severity + badges
   const badges = el('div', { class: 'badge-set' });
   const fresh = isNew(row);
+  if (row.done) badges.append(el('span', { class: 'chip chip-done', title: doneTitle(row) }, 'done'));
   if (sev !== 'ok' || !fresh) badges.append(chip(sev));
   if (fresh) badges.append(chip('new'));
   // a flag carried over from a previous day (scores are per UTC day; the flag
@@ -1051,6 +1103,13 @@ function buildRow(row, withChannel, onRow) {
   if (row.flag && flagAge(row) > 0 && (sev !== 'ok' || fresh)) badges.append(el('span', { class: 'flag-when', title: flagTitle(row) }, flagWhen(row)));
   if (row.storm) badges.append(badge('storm'));
   if (row.noise) badges.append(badge('noise'));
+  // signed-in users mark a flagged spike as handled (POST /api/done)
+  if (!withChannel && signedIn() && (row.done || row.flag)) {
+    const btn = el('button', { type: 'button', class: 'chart-btn done-btn', 'data-focus': `done:${row.signature}`,
+      title: row.done ? 'Remove the done mark' : chipHelp('done') }, row.done ? 'undo' : 'mark done');
+    btn.addEventListener('click', (e) => { e.stopPropagation(); btn.disabled = true; markDone(row, !row.done); });
+    badges.append(btn);
+  }
   tr.append(el('td', {}, badges));
   if (withChannel) {
     const open = el('button', { type: 'button', class: 'chip chip-neutral chip-btn', 'data-focus': `open:${row.signature}`,
@@ -1275,6 +1334,7 @@ function focusSignature(sig) {
   if (row.noise && filters.hideNoise) { $('hide-noise').checked = false; changed = true; }
   if (category === 'storm' && !filters.showStorms) { $('show-storms').checked = true; changed = true; }
   else if (category === 'unflagged' && !filters.showUnflagged) { $('show-unflagged').checked = true; changed = true; }
+  else if (category === 'done' && !filters.severities.has('done')) { document.querySelector('#sig-filters input[value="done"]').checked = true; changed = true; }
   if (filters.text && !sig.toLowerCase().includes(filters.text)) { $('sig-search').value = ''; changed = true; }
   if ((row.observed || 0) < filters.minCrashes) { $('min-crashes').value = '0'; changed = true; }
   if (category === 'flagged' && !matchesSeverityFilter(row, filters.severities)) {

@@ -12,10 +12,11 @@ import time
 
 import numpy as np
 import requests
-from flask import Blueprint, Response, jsonify, render_template, request
+from flask import (Blueprint, Response, g, jsonify, render_template,
+                   request)
 
 from spikes.logger import logger
-from . import (calibration, config, events, intraday, models, scoring,
+from . import (auth, calibration, config, events, intraday, models, scoring,
                seasonal, socorro)
 
 
@@ -138,7 +139,7 @@ def score_json(score, series, final=None):
 
 
 def row_json(score, series, product, channel, spark=None, yesterday=None,
-             flagged_days=0, flag=None):
+             flagged_days=0, flag=None, done=None):
     res = score_json(score, series)
     res.update({
         'signature': series.signature, 'product': product,
@@ -148,7 +149,7 @@ def row_json(score, series, product, channel, spark=None, yesterday=None,
         'bugs': {'open': series.bug_open, 'closed': series.bug_closed},
         'first_seen': day_str(series.first_seen),
         'flagged_days': flagged_days,
-        'yesterday': yesterday, 'spark': spark, 'flag': flag,
+        'yesterday': yesterday, 'spark': spark, 'flag': flag, 'done': done,
     })
     return res
 
@@ -494,27 +495,69 @@ def sparks(product, channel, series_ids, today, cached_models, ndays=28):
     return res
 
 
-def flagged_days_map(series_ids, today, ndays=7):
-    """Consecutive previous days (back from yesterday) flagged >= watch."""
+EPISODE_DAYS = 7  # how far back a run of flagged days is followed
+
+
+def flag_history(series_ids, today, ndays=EPISODE_DAYS):
+    """Previous days (before *today*, at most *ndays* back) each series was
+    flagged on: ``sid -> {'up': days with a peak >= watch, 'any': days with
+    any flag (upward peak, drop or new)}``."""
     since = today - datetime.timedelta(days=ndays)
     import sqlalchemy as sa
     from spikes import db
-    q = sa.select(models.Score.series_id, models.Score.day).where(
-        models.Score.series_id.in_(list(series_ids)),
-        models.Score.day >= since, models.Score.day < today,
-        models.Score.peak_severity.in_(list(scoring.UPWARD)))
-    flagged = {}
-    for sid, day in db.session.execute(q):
-        flagged.setdefault(sid, set()).add(day)
+    S = models.Score
+    q = sa.select(S.series_id, S.day, S.peak_severity).where(
+        S.series_id.in_(list(series_ids)), S.day >= since, S.day < today,
+        sa.or_(S.peak_severity.in_(list(scoring.UPWARD)),
+               S.severity != 'ok', S.is_new.is_(True)))
     res = {}
-    for sid, days in flagged.items():
-        n = 0
-        d = today - datetime.timedelta(days=1)
-        while d in days:
-            n += 1
-            d -= datetime.timedelta(days=1)
-        res[sid] = n
+    for sid, day, peak in db.session.execute(q):
+        h = res.setdefault(sid, {'up': set(), 'any': set()})
+        h['any'].add(day)
+        if peak in scoring.UPWARD:
+            h['up'].add(day)
     return res
+
+
+def consecutive_before(days, day):
+    """Number of consecutive days in *days* just before *day*."""
+    n = 0
+    d = day - datetime.timedelta(days=1)
+    while d in days:
+        n += 1
+        d -= datetime.timedelta(days=1)
+    return n
+
+
+def episode_start(history, flag_day):
+    """First day of the run of consecutive flagged days ending on
+    *flag_day* (the spike as the reader sees it, across UTC midnights)."""
+    days = history['any'] if history else set()
+    return flag_day - datetime.timedelta(days=consecutive_before(days,
+                                                                 flag_day))
+
+
+def done_json(mark, flag, start):
+    """The "done" shown on a flagged row, or None.
+
+    The latest mark on the series has to be a *done* made during this
+    episode (on or after *start*, the first day of the current run of
+    flagged days) for a severity at least as high as the one shown now: a
+    watch marked done does not hide the major it turns into, and a new
+    spike weeks later starts undone.
+    """
+    if mark is None or not mark.done or flag is None:
+        return None
+    if mark.at < datetime.datetime.combine(start, datetime.time()):
+        return None
+    if scoring.RANK.get(flag['severity'], 0) > \
+            scoring.RANK.get(mark.severity, 0):
+        return None
+    return {'at': ts(mark.at), 'by': mark.by, 'severity': mark.severity}
+
+
+def flag_day(flag):
+    return datetime.date.fromisoformat(flag['day'])
 
 
 def yesterday_json(score, final):
@@ -533,16 +576,23 @@ def rows_json(product, channel, by_series, today, with_yesterday_final,
     cached = {sid: scoring.Cached.from_row(m)
               for sid, m in models.load_models(ids).items()}
     spark = sparks(product, channel, ids, today, cached)
-    flagged = flagged_days_map(ids, today)
+    history = flag_history(ids, today)
+    marks = models.load_marks(ids)
     rows = []
     for sid in ids:
         e = by_series[sid]
+        flag = flag_of(e, now)
+        done = None
+        if flag is not None and sid in marks:
+            done = done_json(marks[sid], flag,
+                             episode_start(history.get(sid), flag_day(flag)))
+        up = history[sid]['up'] if sid in history else set()
         rows.append(row_json(e['today'], e['series'], product, channel,
                              spark=spark.get(sid),
                              yesterday=yesterday_json(e.get('yesterday'),
                                                       with_yesterday_final),
-                             flagged_days=flagged.get(sid, 0),
-                             flag=flag_of(e, now)))
+                             flagged_days=consecutive_before(up, today),
+                             flag=flag, done=done))
     return rows
 
 
@@ -786,13 +836,17 @@ def run_is_stale(now, run):
 
 
 def data_version(run, now=None):
-    """Token that changes whenever a run has produced new scores, or the
-    data went stale (so the client re-renders its health banner)."""
+    """Token that changes whenever a run has produced new scores, the data
+    went stale (so the client re-renders its health banner), or a user
+    marked something (the marks are shown on the rows)."""
     if run is None:
         return None
     now = now or models.utcnow()
-    return '{}-{}-{}'.format(run.id, ts(run.finished or run.started),
-                             'stale' if run_is_stale(now, run) else 'ok')
+    if 'marks_version' not in g:
+        g.marks_version = models.marks_version()
+    return '{}-{}-{}-m{}'.format(run.id, ts(run.finished or run.started),
+                                 'stale' if run_is_stale(now, run) else 'ok',
+                                 g.marks_version)
 
 
 def etag_for(run, parts, now=None):
@@ -967,6 +1021,44 @@ def events_view():
     response.set_etag(etag)
     response.headers['Cache-Control'] = 'no-cache, private'
     return response
+
+
+@blueprint.route('/dashboard/api/done', methods=['POST'])
+@auth.login_required
+def mark_done():
+    """Mark a flagged signature as done (``done: false`` undoes it).  JSON
+    body: ``product``, ``channel``, ``signature``, ``done``.  Signed-in
+    Mozilla users only (auth.py); the response carries the new data
+    version so the page knows to refetch."""
+    body = request.get_json(silent=True) or {}
+    product, channel, _, _ = parse_args(body)
+    signature = body.get('signature')
+    if not signature:
+        raise BadRequest('signature is required')
+    done = body.get('done', True)
+    if not isinstance(done, bool):
+        raise BadRequest('done must be a boolean')
+    series = models.get_series(product, channel, signature)
+    if series is None or series.is_total:
+        return jsonify({'error': 'unknown signature'}), 404
+    now = models.utcnow()
+    today = channel_day(product, channel, today_utc())
+    entry = channel_scores(product, channel, today).get(series.id)
+    flag = flag_of(entry, now) if entry else None
+    if done and flag is None:
+        raise BadRequest('the signature is not flagged')
+    severity = flag['severity'] if flag else 'ok'
+    user = auth.current_user()
+    mark = models.add_mark(series.id, done, severity, user['email'], now)
+    logger.info('Dashboard: %s marked %s/%s %s %s', user['email'], product,
+                channel, signature, 'done' if done else 'undone')
+    g.pop('marks_version', None)
+    shown = None
+    if flag is not None:
+        history = flag_history([series.id], today).get(series.id)
+        shown = done_json(mark, flag, episode_start(history, flag_day(flag)))
+    return jsonify({'done': shown, 'data_version': data_version(last_run(),
+                                                                now)})
 
 
 @blueprint.route('/dashboard/api/signature')

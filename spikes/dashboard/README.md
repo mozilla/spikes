@@ -124,6 +124,7 @@ day's `cutoff`, and a missing (series, day) value is treated as censored
 | `dashboard_models` | series → cached fit | level, trend, dispersion, `c2`, factors, borrowed components |
 | `dashboard_scores` | (series, day) → live score | updated in place; keeps `first_flagged_at` and the day's peak |
 | `dashboard_runs` | one per run | status (`ok`, `partial`, `failed`, `aborted`), queries, message (pending work, errors) |
+| `dashboard_marks` | one per user action | "done" marks: series, done/undone, severity at the time, who, when; the latest per series wins and the highest id versions the API responses |
 
 `models.create_all()` (called by every run and by the web process before
 its first request) creates missing tables and adds columns that were added
@@ -334,10 +335,24 @@ and the sortable signature table (flagged rows by default, sparklines,
 expandable per-signature charts).  Data health (stale run, processing lag,
 backfill in progress) is shown in a banner.
 
+**Done marks.**  A signed-in user (see *Sign-in*) gets a *mark done* button
+on every flagged row of the signature table; the row then wears a green
+✓ `done` badge (also in the cross-channel table) and is hidden unless the
+`done` filter chip, off by default, is on (the meta line says how many are
+hidden).  The mark is meant for the spike, not the signature: it covers the
+run of consecutive flagged days it was made in (`api.episode_start`,
+followed up to 7 days back across UTC midnights) and only up to the
+severity it was made for, so a spike weeks later starts undone and a
+watch marked done does not hide the major it becomes.  *undo* removes it.
+Every action is a row in `dashboard_marks` (who, when, at which severity);
+the highest id is part of the API data version, so a mark invalidates the
+page's cached responses without waiting for a scheduler run.
+
 ## Sign-in
 
-Reading the dashboard needs no account.  Routes that change it are wrapped
-in `auth.login_required` and only run for a signed-in user whose Google
+Reading the dashboard needs no account.  Routes that change it (today:
+marking a spike as done, `POST /dashboard/api/done`) are wrapped in
+`auth.login_required` and only run for a signed-in user whose Google
 account has a verified address in one of `login_domains`
 (`config/dashboard.json`, `mozilla.com` by default), the same way
 hackbot.moz.tools is restricted to `@mozilla.com` accounts.  The header
@@ -372,6 +387,11 @@ answer 503 and the page hides the link; without `SECRET_KEY` a random one
 is used and sessions end with the process.  On Heroku the app trusts one
 `X-Forwarded-Proto` hop (`ProxyFix`, only when `DYNO` is set) so the
 redirect URI and the cookie flags say https.
+
+For a local run without a Google client, `DASHBOARD_DEV_USER=you@mozilla.com`
+makes **Sign in** sign the browser in as that address at once (no Google
+round trip).  It is ignored when Google credentials are set or on Heroku,
+and the address still has to be in `login_domains`.
 
 ## Running
 

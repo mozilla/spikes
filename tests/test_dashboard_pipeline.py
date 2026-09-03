@@ -823,6 +823,115 @@ class ApiTest(DBTestCase):
                             '&channel=beta')
         self.assertEqual(r.status_code, 404)
 
+    def sign_in(self, email='someone@mozilla.com'):
+        from spikes.dashboard import auth
+        with self.client.session_transaction() as sess:
+            sess[auth.SESSION_KEY] = {'email': email, 'name': 'Someone',
+                                      'picture': None}
+
+    def channel_rows(self):
+        r = self.client.get('/dashboard/api/channel?product=Firefox'
+                            '&channel=release&days=30')
+        self.assertEqual(r.status_code, 200)
+        return {s['signature']: s for s in r.get_json()['signatures']}, \
+            r.headers['ETag']
+
+    def test_mark_done(self):
+        """A signed-in user marks a flagged spike as done: the row carries
+        the mark, the data version changes (the cached page refetches), and
+        the mark can be undone."""
+        body = {'product': 'Firefox', 'channel': 'release',
+                'signature': 'spiking', 'done': True}
+        r = self.client.post('/dashboard/api/done', json=body)
+        self.assertEqual(r.status_code, 401)
+        self.assertEqual(r.get_json()['login'], '/dashboard/login')
+        rows, etag = self.channel_rows()
+        self.assertIsNotNone(rows['spiking']['flag'])
+        self.assertIsNone(rows['spiking']['done'])
+        self.sign_in()
+        r = self.client.post('/dashboard/api/done', json=body)
+        self.assertEqual(r.status_code, 200)
+        done = r.get_json()['done']
+        self.assertEqual(done['by'], 'someone@mozilla.com')
+        self.assertEqual(done['severity'], rows['spiking']['flag']['severity'])
+        self.assertEqual(done['at'], api.ts(NOW))
+        rows, etag2 = self.channel_rows()
+        self.assertEqual(rows['spiking']['done'], done)
+        self.assertNotEqual(etag, etag2)
+        self.assertIsNone(rows['stable']['done'])
+        summary = self.client.get('/dashboard/api/summary').get_json()
+        alert = [a for a in summary['alerts'] if a['signature'] == 'spiking']
+        self.assertEqual(alert[0]['done'], done)
+        # a stale ETag is not honoured
+        r = self.client.get('/dashboard/api/channel?product=Firefox'
+                            '&channel=release&days=30',
+                            headers={'If-None-Match': etag})
+        self.assertEqual(r.status_code, 200)
+        # undo
+        r = self.client.post('/dashboard/api/done', json=dict(body,
+                                                              done=False))
+        self.assertEqual(r.status_code, 200)
+        self.assertIsNone(r.get_json()['done'])
+        rows, etag3 = self.channel_rows()
+        self.assertIsNone(rows['spiking']['done'])
+        self.assertNotEqual(etag2, etag3)
+        marks = models.load_marks([rows['spiking']['series_id']])
+        self.assertEqual(len(marks), 1)
+        self.assertFalse(marks[rows['spiking']['series_id']].done)
+        # only flagged rows can be marked; bad input is refused
+        r = self.client.post('/dashboard/api/done', json=dict(body,
+                                                              signature='stable'))
+        self.assertEqual(r.status_code, 400)
+        r = self.client.post('/dashboard/api/done', json=dict(body,
+                                                              signature='nope'))
+        self.assertEqual(r.status_code, 404)
+        r = self.client.post('/dashboard/api/done', json=dict(body,
+                                                              done='yes'))
+        self.assertEqual(r.status_code, 400)
+        r = self.client.post('/dashboard/api/done', json=dict(body,
+                                                              channel='nope'))
+        self.assertEqual(r.status_code, 400)
+        # a cross-site POST is refused even when signed in
+        r = self.client.post('/dashboard/api/done', json=body,
+                             headers={'Origin': 'https://evil.example'})
+        self.assertEqual(r.status_code, 403)
+
+    def test_done_follows_the_episode(self):
+        """The mark covers the run of consecutive flagged days it was made
+        in, at the severity it was made for."""
+        sid = 7
+        mark = models.Mark(series_id=sid, done=True, severity='watch',
+                           by='x@mozilla.com',
+                           at=datetime.datetime(2026, 9, 1, 10, 0))
+        d = datetime.date
+        history = {'up': {d(2026, 8, 31), d(2026, 9, 1)},
+                   'any': {d(2026, 8, 31), d(2026, 9, 1)}}
+        # flagged on Aug 31, Sep 1 and today (Sep 2): one episode from Aug 31
+        self.assertEqual(api.episode_start(history, d(2026, 9, 2)),
+                         d(2026, 8, 31))
+        self.assertEqual(api.consecutive_before(history['up'], d(2026, 9, 2)),
+                         2)
+        flag = {'severity': 'watch', 'day': '2026-09-02'}
+        start = api.episode_start(history, d(2026, 9, 2))
+        self.assertIsNotNone(api.done_json(mark, flag, start))
+        # the same flag a week later, after a gap: a new episode, undone
+        self.assertIsNone(api.done_json(mark, flag, d(2026, 9, 8)))
+        # escalation: a watch marked done does not hide a major
+        self.assertIsNone(api.done_json(mark, dict(flag, severity='major'),
+                                        start))
+        # a lower severity, or only "new", stays covered
+        self.assertIsNotNone(api.done_json(mark, dict(flag, severity='ok'),
+                                           start))
+        # an undo, or no flag, shows nothing
+        self.assertIsNone(api.done_json(
+            models.Mark(series_id=sid, done=False, severity='watch',
+                        by='x', at=mark.at), flag, start))
+        self.assertIsNone(api.done_json(mark, None, start))
+        self.assertIsNone(api.done_json(None, flag, start))
+        # no history: the episode is the flag's day
+        self.assertEqual(api.episode_start(None, d(2026, 9, 2)),
+                         d(2026, 9, 2))
+
     def test_flag_window(self):
         """Yesterday's flags stay listed for 48 h (scores are per UTC day:
         without this the page is empty in the European morning)."""

@@ -239,9 +239,31 @@ class Feed(db.Model):
     message = db.Column(db.String(200))
 
 
+class Mark(db.Model):
+    """A signed-in user's mark on a series: "done", the spike is handled.
+
+    Every change is a new row (the latest per series wins), so the table
+    is also the audit trail, and its highest id versions the API responses
+    (a mark changes what the page shows without a scheduler run).
+    """
+    __tablename__ = 'dashboard_marks'
+
+    id = db.Column(db.Integer, primary_key=True, autoincrement=True)
+    series_id = db.Column(db.Integer,
+                          db.ForeignKey('dashboard_series.id',
+                                        ondelete='CASCADE'),
+                          nullable=False, index=True)
+    done = db.Column(db.Boolean, nullable=False, default=True)
+    # the severity the row was flagged with when marked ('ok' for a row
+    # that was only new): a mark does not cover a later, higher severity
+    severity = db.Column(db.String(8), nullable=False, default='ok')
+    by = db.Column(db.String(255), nullable=False)
+    at = db.Column(db.DateTime, nullable=False)
+
+
 TABLES = [Series.__table__, Daily.__table__, Hourly.__table__,
           Day.__table__, Model.__table__, Score.__table__, Run.__table__,
-          Event.__table__, Feed.__table__]
+          Event.__table__, Feed.__table__, Mark.__table__]
 
 
 def create_all():
@@ -624,3 +646,34 @@ def load_feeds():
 
 def prune_events(before):
     db.session.execute(sa.delete(Event).where(Event.day < before))
+
+
+# --------------------------------------------------------------------------
+# Marks (done)
+# --------------------------------------------------------------------------
+
+def add_mark(series_id, done, severity, by, at=None):
+    mark = Mark(series_id=series_id, done=bool(done), severity=severity,
+                by=by, at=at or utcnow())
+    db.session.add(mark)
+    db.session.commit()
+    return mark
+
+
+def load_marks(series_ids):
+    """``series_id -> latest Mark`` for the series that have one."""
+    res = {}
+    ids = list(series_ids)
+    for chunk in _chunks(ids):
+        latest = sa.select(sa.func.max(Mark.id)).where(
+            Mark.series_id.in_(chunk)).group_by(Mark.series_id)
+        for m in db.session.execute(
+                sa.select(Mark).where(Mark.id.in_(latest))).scalars():
+            res[m.series_id] = m
+    return res
+
+
+def marks_version():
+    """Highest mark id (0 when none): part of the API data version."""
+    return int(db.session.execute(sa.select(sa.func.max(Mark.id))).scalar()
+               or 0)
