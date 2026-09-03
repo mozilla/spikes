@@ -514,7 +514,6 @@ svg {
     &:focus-visible .hit { stroke: var(--focus); stroke-width: 1.5; }
     &.is-dim { opacity: 0.55; }
   }
-  & .event-dot { fill: var(--ink-2); }
   & .event-rule { stroke: var(--axis); stroke-width: 1; stroke-dasharray: 2 3; shape-rendering: crispEdges; }
   & .series-observed, & .series-expected, & .series-yesterday {
     stroke-width: 2;

@@ -462,39 +462,79 @@ function bucketEvents(events, xs, weekly) {
   return map;
 }
 
+const MAX_ROWS = 5;
+
 /**
- * Badges in the strip above the plot.  positions: [{ px, title, groups, dim, rule, withDay }]
- * sorted by px.  When a badge would overlap the previous one it collapses to a dot;
- * its tooltip (hover or focus) still lists everything, and the hover on the plot
- * shows the day's events too.  A click opens the crash-stats search or the release
- * notes of the first item.
+ * Lay out the badges: one column per day, its sources stacked vertically.  Days
+ * closer than one icon width are merged into one column showing each source once.
+ * positions: [{ px, title, groups, dim, rule, withDay }] sorted by px.
+ * Returns clusters [{ members, sources, x0 }].
  */
-function drawEventBadges(root, f, box, positions) {
-  let lastRight = -Infinity;
-  const y0 = 3;
-  for (const p of positions) {
-    const sources = [...new Set(p.groups.map((g) => g.source))]
-      .sort((a, b) => SOURCE_ORDER.indexOf(a) - SOURCE_ORDER.indexOf(b)).slice(0, 4);
-    const w = sources.length * BADGE + (sources.length - 1) * BADGE_GAP;
-    const x0 = Math.max(box.left, Math.min(box.right - w, p.px - w / 2));
-    const compact = x0 < lastRight + 3;
-    const g = svg('g', { class: `event-badge${p.dim ? ' is-dim' : ''}`, tabindex: 0, role: 'img', 'aria-label': `${p.title}: ${eventText(p.groups)}` });
-    if (compact) {
-      g.append(svg('circle', { class: 'event-dot', cx: p.px, cy: y0 + BADGE / 2, r: 2.5 }));
-      lastRight = Math.max(lastRight, p.px + 3);
-    } else {
-      g.append(svg('rect', { class: 'hit', x: x0 - 2, y: y0 - 2, width: w + 4, height: BADGE + 4, rx: 3 }));
-      sources.forEach((src, k) => g.append(iconNode(src, BADGE, x0 + k * (BADGE + BADGE_GAP), y0)));
-      lastRight = x0 + w;
+function layoutEventBadges(left, right, positions) {
+  const place = (c) => {
+    c.sources = [...new Set(c.members.flatMap((p) => p.groups.map((g) => g.source)))]
+      .sort((a, b) => SOURCE_ORDER.indexOf(a) - SOURCE_ORDER.indexOf(b)).slice(0, MAX_ROWS);
+    const mid = (c.members[0].px + c.members[c.members.length - 1].px) / 2;
+    c.x0 = Math.max(left, Math.min(right - BADGE, mid - BADGE / 2));
+  };
+  let clusters = positions.map((p) => ({ members: [p] }));
+  clusters.forEach(place);
+  // merge overlapping neighbours until stable (a merged column moves and may
+  // now touch the next one)
+  let merged = true;
+  while (merged && clusters.length > 1) {
+    merged = false;
+    const next = [clusters[0]];
+    for (let i = 1; i < clusters.length; i++) {
+      const prev = next[next.length - 1];
+      const c = clusters[i];
+      if (c.x0 < prev.x0 + BADGE + 3) {
+        prev.members.push(...c.members);
+        place(prev);
+        merged = true;
+      } else next.push(c);
+    }
+    clusters = next;
+  }
+  return clusters;
+}
+
+/** Height of the badge strip for the tallest column (0 without badges). */
+function stripHeight(clusters) {
+  const rows = clusters.reduce((m, c) => Math.max(m, c.sources.length), 0);
+  return rows ? rows * (BADGE + BADGE_GAP) + 6 : 0;
+}
+
+/**
+ * Draw the laid-out badges in the strip above the plot, one dashed rule per day.  The
+ * tooltip (hover or focus) lists every event, with its day for merged columns; a click
+ * opens the crash-stats search or the release notes of the first item.
+ */
+function drawEventBadges(root, f, box, clusters) {
+  // the columns stand on the bottom of the strip, next to the plot
+  const floor = stripHeight(clusters) - 3;
+  for (const c of clusters) {
+    const groups = c.members.flatMap((p) => p.groups);
+    const multi = c.members.length > 1;
+    const days = groups.map((g) => parseDay(g.day));
+    const title = multi ? `${fmtDate(Math.min(...days))} – ${fmtDate(Math.max(...days), true)}` : c.members[0].title;
+    const withDay = multi || c.members.some((p) => p.withDay);
+    const dim = c.members.every((p) => p.dim);
+    const h = c.sources.length * (BADGE + BADGE_GAP) - BADGE_GAP;
+    const y0 = floor - h;
+    const g = svg('g', { class: `event-badge${dim ? ' is-dim' : ''}`, tabindex: 0, role: 'img', 'aria-label': `${title}: ${eventText(groups)}` });
+    g.append(svg('rect', { class: 'hit', x: c.x0 - 2, y: y0 - 2, width: BADGE + 4, height: h + 4, rx: 3 }));
+    c.sources.forEach((src, k) => g.append(iconNode(src, BADGE, c.x0, y0 + k * (BADGE + BADGE_GAP))));
+    for (const p of c.members) {
       if (p.rule !== false) root.append(svg('line', { class: 'event-rule', x1: p.px, x2: p.px, y1: box.top, y2: box.bottom }));
     }
-    const show = () => showTip(f, p.px, box.top + 12, p.title, eventRows(p.groups, !!p.withDay));
+    const show = () => showTip(f, c.x0 + BADGE / 2, box.top + 12, title, eventRows(groups, withDay));
     const hide = () => { f.tip.hidden = true; };
     g.addEventListener('pointerenter', show);
     g.addEventListener('pointerleave', hide);
     g.addEventListener('focus', show);
     g.addEventListener('blur', hide);
-    const url = p.groups.flatMap((x) => x.items).map((it) => it.search || it.url).find(Boolean);
+    const url = groups.flatMap((x) => x.items).map((it) => it.search || it.url).find(Boolean);
     if (url) {
       g.classList.add('has-link');
       const open = () => window.open(url, '_blank', 'noopener');
@@ -583,17 +623,23 @@ export function lineChart(container, spec) {
     }
     const yTicks = state.log ? logTicks(yMin, yMax) : linearTicks(0, yMax, Math.max(3, Math.floor((height - 46) / 44)));
     const left = 10 + Math.max(...yTicks.map((t) => fmtInt(t).length)) * 6.6;
-    const top = hasEvents ? 22 + BADGE + 8 : 22; // room for the badge strip
     const right = 16;
     const bottom = 24;
-    const box = { left, right: width - right, top, bottom: height - bottom };
-    const x = makeX(xs[0], xs[n - 1], box.left + 6, box.right - 6);
+    const x = makeX(xs[0], xs[n - 1], left + 6, width - right - 6);
+    const pxs = xs.map(x);
+    // the badge strip above the plot grows with its tallest column, and the
+    // chart with it, so the plot keeps its height
+    const badgeClusters = layoutEventBadges(left, width - right, [...eventMap].sort((a, b) => a[0] - b[0])
+      .map(([i, groups]) => ({ px: pxs[i], title: bucketTitle(i), groups, withDay: weekly })));
+    const strip = hasEvents ? stripHeight(badgeClusters) : 0;
+    const top = 22 + strip;
+    const svgHeight = height + strip;
+    const box = { left, right: width - right, top, bottom: svgHeight - bottom };
     const y = makeY(yMin, yMax, box.top, box.bottom, state.log);
     const yc = (v) => Math.max(box.top, y(v));
-    const pxs = xs.map(x);
 
     // a group, not an image: it contains the keyboard-operable chart reader
-    const root = svg('svg', { width, height, role: 'group', 'aria-label': s.ariaLabel || 'Daily crashes against the expected band' });
+    const root = svg('svg', { width, height: svgHeight, role: 'group', 'aria-label': s.ariaLabel || 'Daily crashes against the expected band' });
     yAxis(root, yTicks, y, box.left, box.right, fmtInt);
     root.append(svg('line', { class: 'baseline', x1: box.left, x2: box.right, y1: box.bottom, y2: box.bottom }));
     for (const t of dateTicks(xs, box.right - box.left)) {
@@ -634,8 +680,7 @@ export function lineChart(container, spec) {
     }
 
     // platform events (Windows updates, drivers, OS releases): badges above the plot
-    drawEventBadges(root, f, box, [...eventMap].sort((a, b) => a[0] - b[0])
-      .map(([i, groups]) => ({ px: pxs[i], title: bucketTitle(i), groups, withDay: weekly })));
+    drawEventBadges(root, f, box, badgeClusters);
 
     // observed line
     root.append(svg('path', { class: 'series-observed', d: pathFrom(s.observed.map((v, i) => (v == null ? null : { x: pxs[i], y: yc(v) }))) }));
@@ -858,14 +903,23 @@ export function barChart(container, spec) {
     const ydayEvents = dayMs == null ? [] : (s.events || []).filter((g) => parseDay(g.day) === dayMs - DAY_MS);
     const hasEvents = todayEvents.length + ydayEvents.length > 0;
     const timed = todayEvents.flatMap((g) => g.items.filter((it) => it.at).map((it) => ({ g, it, hour: (Date.parse(it.at) - dayMs) / 3600000 })));
-    const box = { left, right: width - 12, top: hasEvents ? 20 + BADGE + 8 : 20, bottom: height - 24 };
+    // badge strip: today's column, then yesterday's (dimmed); the chart grows with it
+    const badgePositions = [];
+    let cursor = left;
+    if (todayEvents.length) { badgePositions.push({ px: cursor + BADGE / 2, title: `Today, ${fmtDateLong(dayMs)}`, groups: todayEvents, dim: false, rule: false }); cursor += BADGE + 26; }
+    const ydayLabelX = cursor;
+    if (ydayEvents.length) { cursor += 'yesterday'.length * 6.2 + 6; badgePositions.push({ px: cursor + BADGE / 2, title: `Yesterday, ${fmtDateLong(dayMs - DAY_MS)}`, groups: ydayEvents, dim: true, rule: false }); }
+    const badgeClusters = layoutEventBadges(left, width - 12, badgePositions);
+    const strip = hasEvents ? stripHeight(badgeClusters) : 0;
+    const svgHeight = height + strip;
+    const box = { left, right: width - 12, top: 20 + strip, bottom: svgHeight - 24 };
     const slot = (box.right - box.left) / n;
     const barW = Math.min(24, Math.max(2, slot - 2));
     const y = makeY(0, yMax, box.top, box.bottom, false);
     const cx = (i) => box.left + slot * (i + 0.5);
     const pxs = hours.map((_, i) => cx(i));
 
-    const root = svg('svg', { width, height, role: 'group', 'aria-label': s.ariaLabel || 'Crashes per hour today against the expected profile' });
+    const root = svg('svg', { width, height: svgHeight, role: 'group', 'aria-label': s.ariaLabel || 'Crashes per hour today against the expected profile' });
     yAxis(root, yTicks, y, box.left, box.right, fmtInt);
     const band = svg('rect', { class: 'hover-band', y: box.top, height: box.bottom - box.top, width: slot, visibility: 'hidden' });
     root.append(band);
@@ -898,22 +952,9 @@ export function barChart(container, spec) {
     root.append(svg('path', { class: 'series-expected', d: pathFrom((s.expected_today || []).map((v, i) => (v == null ? null : { x: cx(i), y: y(v) }))) }));
 
     if (hasEvents) {
-      // badge strip: today's events, then yesterday's (dimmed); an event with a
-      // known time also gets a rule at its hour
-      const positions = [];
-      let cursor = box.left;
-      const place = (groups, title, dim) => {
-        const w = Math.min(new Set(groups.map((g) => g.source)).size, 4) * (BADGE + BADGE_GAP) - BADGE_GAP;
-        positions.push({ px: cursor + w / 2, title, groups, dim, rule: false });
-        cursor += w + 26;
-      };
-      if (todayEvents.length) place(todayEvents, `Today, ${fmtDateLong(dayMs)}`, false);
-      if (ydayEvents.length) {
-        root.append(svg('text', { class: 'lbl', x: cursor, y: 3 + BADGE - 3, text: 'yesterday' }));
-        cursor += 'yesterday'.length * 6.2 + 6;
-        place(ydayEvents, `Yesterday, ${fmtDateLong(dayMs - DAY_MS)}`, true);
-      }
-      drawEventBadges(root, f, box, positions);
+      // an event with a known time also gets a rule at its hour
+      if (ydayEvents.length) root.append(svg('text', { class: 'lbl', x: ydayLabelX, y: stripHeight(badgeClusters) - 6, text: 'yesterday' }));
+      drawEventBadges(root, f, box, badgeClusters);
       for (const t of timed) {
         if (t.hour < 0 || t.hour > 24) continue;
         const px = box.left + slot * t.hour;
