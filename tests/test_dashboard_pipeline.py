@@ -848,6 +848,9 @@ class ApiTest(DBTestCase):
         rows, etag = self.channel_rows()
         self.assertIsNotNone(rows['spiking']['flag'])
         self.assertIsNone(rows['spiking']['done'])
+        before = self.client.get('/dashboard/api/channel?product=Firefox'
+                                 '&channel=release').get_json()['counts']
+        self.assertEqual(before['done'], 0)
         self.sign_in()
         r = self.client.post('/dashboard/api/done', json=body)
         self.assertEqual(r.status_code, 200)
@@ -859,6 +862,12 @@ class ApiTest(DBTestCase):
         self.assertEqual(rows['spiking']['done'], done)
         self.assertNotEqual(etag, etag2)
         self.assertIsNone(rows['stable']['done'])
+        # the cards count it as done, not under its severity any more
+        sev = done['severity']
+        counts = self.client.get('/dashboard/api/channel?product=Firefox'
+                                 '&channel=release').get_json()['counts']
+        self.assertEqual(counts['done'], 1)
+        self.assertEqual(counts[sev], before[sev] - 1)
         summary = self.client.get('/dashboard/api/summary').get_json()
         alert = [a for a in summary['alerts'] if a['signature'] == 'spiking']
         self.assertEqual(alert[0]['done'], done)

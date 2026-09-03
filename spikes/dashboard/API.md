@@ -166,7 +166,8 @@ into.  The page hides done rows unless the `done` filter chip is on.
      "as_of": "...", "history_days": 180,
      "total": Score, "yesterday": Score,           // yesterday may be null
      "counts": {"major": 1, "spike": 2, "watch": 5, "drop": 0, "new": 3,
-                "storm": 1, "scored": 312, "noise": 4},
+                "storm": 1, "scored": 312, "noise": 4,
+                "done": 1},                       // a noise or done row counts there only
      "thresholds": {"watch": {"z": 4.3}, "spike": {"z": 9.8}, "major": {"z": 27.1}, "drop": {"z": -6.2}},
      "calibration": {                             // how the thresholds were learned (calibration.py)
        "rules": {...},                            // == thresholds

@@ -317,6 +317,11 @@ function visibleAlerts(summary) {
   return (summary.alerts || []).filter((row) => sevOf(row) !== 'ok' || isNew(row));
 }
 
+/** The alerts still to look at: done ones are listed (with their badge) but not counted. */
+function openAlerts(summary) {
+  return visibleAlerts(summary).filter((row) => !row.done);
+}
+
 function rowRank(row) {
   const s = sevOf(row);
   if (s === 'ok' && isNew(row)) return SEV_RANK.new;
@@ -392,6 +397,7 @@ function countBadges(counts = {}) {
     if (counts[kind]) wrap.append(countChip(kind, counts[kind]));
   }
   if (counts.storm) wrap.append(badge('storm', plural(counts.storm, 'storm')));
+  if (counts.done) wrap.append(countChip('done', counts.done));
   return wrap;
 }
 
@@ -525,7 +531,7 @@ let lastTabColor = null;
 baseIcon.addEventListener('load', () => { if (lastTabColor) drawFavicon(lastTabColor); });
 
 function overallHealth(s) {
-  const rows = visibleAlerts(s);
+  const rows = openAlerts(s);
   const counts = {};
   for (const r of rows) { const sev = sevOf(r); if (sev !== 'ok') counts[sev] = (counts[sev] || 0) + 1; }
   const worst = ALERT_SEVERITIES.find((kind) => counts[kind]) || 'ok';
@@ -653,7 +659,7 @@ function renderCards(s) {
 
 /** Cross-channel card: what is flagged anywhere right now. */
 function allCard(s) {
-  const rows = visibleAlerts(s);
+  const rows = openAlerts(s); // done ones only count as done
   const worst = rows.map(sevOf).filter((sev) => sev in SEV_RANK && sev !== 'ok')
     .sort((a, b) => SEV_RANK[a] - SEV_RANK[b])[0] || 'ok';
   const card = el('button', { type: 'button', class: 'card card-all', 'data-key': ALL_KEY, 'data-focus': `card:${ALL_KEY}`, 'aria-pressed': 'false' });
@@ -666,7 +672,7 @@ function allCard(s) {
     el('span', { class: 'vs' }, rows.length ? `flagged in ${plural(nchan, 'channel')}` : 'nothing flagged')));
   const totals = {};
   for (const c of s.channels || []) {
-    for (const kind of COUNT_KINDS) totals[kind] = (totals[kind] || 0) + (c.counts?.[kind] || 0);
+    for (const kind of [...COUNT_KINDS, 'done']) totals[kind] = (totals[kind] || 0) + (c.counts?.[kind] || 0);
   }
   card.append(countBadges(totals));
   return card;
@@ -723,12 +729,16 @@ function renderAlerts(s) {
   const rows = visibleAlerts(s);
   const sub = document.querySelector('#flagged-title .sub');
   if (sub) sub.textContent = `flagged in the last ${flagWindowHours()} h`;
-  $('flagged-meta').textContent = rows.length ? `${rows.length} flagged ${rows.length === 1 ? 'signature' : 'signatures'} across ${new Set(rows.map(channelKey)).size} channels` : `Nothing flagged in the last ${flagWindowHours()} h`;
+  const open = rows.filter((r) => !r.done);
+  const done = rows.length - open.length;
+  $('flagged-meta').textContent = (open.length ? `${open.length} flagged ${open.length === 1 ? 'signature' : 'signatures'} across ${plural(new Set(open.map(channelKey)).size, 'channel')}` : `Nothing flagged in the last ${flagWindowHours()} h`)
+    + (done ? ` · ${done} done` : '');
   const wrap = $('alerts-table');
   const focus = focusedKey(wrap);
   wrap.textContent = '';
   if (!rows.length) return;
-  const sorted = rows.slice().sort((a, b) => rowRank(a) - rowRank(b) || Math.abs(b.excess || 0) - Math.abs(a.excess || 0));
+  // done rows are listed last, with their badge: handled, but visible to the team
+  const sorted = rows.slice().sort((a, b) => (a.done ? 1 : 0) - (b.done ? 1 : 0) || rowRank(a) - rowRank(b) || Math.abs(b.excess || 0) - Math.abs(a.excess || 0));
   wrap.append(buildTable(sorted, { withChannel: true, sortable: false, onRow: (row) => selectChannel(row.product, row.channel, row.signature) }));
   restoreFocus(wrap, focus);
 }
@@ -811,7 +821,7 @@ function renderTiles(ch) {
   const c = ch.counts || {};
   const flagged = displayedSeverities(ALERT_SEVERITIES).reduce((n, kind) => n + (c[kind] || 0), 0);
   wrap.append(tile('Flagged', [String(flagged), el('span', { class: 'vs' }, `of ${fmtInt(c.scored)} scored`)],
-    [[c.new ? `${c.new} new` : null, c.storm ? plural(c.storm, 'storm') : null, c.noise ? `${c.noise} noise` : null].filter(Boolean).join(' · ') || 'nothing unusual'],
+    [[c.new ? `${c.new} new` : null, c.storm ? plural(c.storm, 'storm') : null, c.noise ? `${c.noise} noise` : null, c.done ? `${c.done} done` : null].filter(Boolean).join(' · ') || 'nothing unusual'],
     { counts: countBadges(c) }));
 }
 

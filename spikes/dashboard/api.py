@@ -603,12 +603,17 @@ def sort_key(row):
 
 
 def counts_of(rows):
-    """Counts of the flags shown (the window's, not only today's)."""
+    """Counts of the flags shown (the window's, not only today's).  A
+    noise row counts as noise only, a done row as done only: the severity
+    counts are what is left to look at."""
     counts = {k: 0 for k in ('major', 'spike', 'watch', 'drop', 'new',
-                             'storm', 'noise')}
+                             'storm', 'noise', 'done')}
     for r in rows:
         if r['noise']:
             counts['noise'] += 1
+            continue
+        if r['done']:
+            counts['done'] += 1
             continue
         sev = flag_severity(r)
         if sev in counts:

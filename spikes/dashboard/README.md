@@ -339,7 +339,10 @@ backfill in progress) is shown in a banner.
 on every flagged row of the signature table; the row then wears a green
 ✓ `done` badge (also in the cross-channel table) and is hidden unless the
 `done` filter chip, off by default, is on (the meta line says how many are
-hidden).  The mark is meant for the spike, not the signature: it covers the
+hidden).  Like noise, a done row counts as done only: the channel cards,
+the *Flagged* tile and the tab title count what is left to look at and show
+a green `N done` chip; the cross-channel table lists done rows last, with
+their badge.  The mark is meant for the spike, not the signature: it covers the
 run of consecutive flagged days it was made in (`api.episode_start`,
 followed up to 7 days back across UTC midnights) and only up to the
 severity it was made for, so a spike weeks later starts undone and a
