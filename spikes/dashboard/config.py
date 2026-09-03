@@ -73,6 +73,20 @@ def pairs():
     return [(p, c) for p in products() for c in channels(p)]
 
 
+def fit_history_days():
+    """Days of stored history the channel totals are fitted on.
+
+    ``history_days`` (180) is how far back Socorro is backfilled (its
+    retention is ~6 months) and the window signatures are fitted on; the
+    totals keep accumulating in the database and are fitted on up to
+    ``fit_history_days`` (3 years) so the yearly component can activate
+    once two years exist.  Signatures borrow the yearly factors from their
+    channel.
+    """
+    return max(int(get('history_days', 180)),
+               int(get('fit_history_days', 1100)))
+
+
 def min_crashes(channel, product=None):
     """Minimum crashes today for a signature to be scored.
 

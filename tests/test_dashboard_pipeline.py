@@ -614,6 +614,36 @@ class ScoringTest(DBTestCase):
         # even a candidate yet
         self.assertNotIn('brand new', s)
 
+    def test_total_fitted_on_long_history(self):
+        # Socorro is backfilled 180 days back, but the database keeps the
+        # totals: once two years have accumulated the total's yearly
+        # component activates, and signatures borrow it (their own fit
+        # stays on 180 days)
+        seed_channel('Firefox', 'beta', TODAY, NOW, ndays=800, seed=2)
+        scoring.score_channel('Firefox', 'beta', TODAY, NOW)
+        db.session.commit()
+        total_id = models.total_series('Firefox', 'beta')
+        total = models.load_models([total_id])[total_id]
+        self.assertGreaterEqual(total.history_days, 795)
+        comps = total.components['components']
+        self.assertTrue(comps['yearly']['active'])
+        self.assertGreaterEqual(comps['yearly']['cycles'], 2)
+        self.assertIn('yearly', total.factors)
+        self.assertEqual(len(total.factors['yearly']), 53)
+        sid = models.get_series('Firefox', 'beta', 'stable').id
+        stable = models.load_models([sid])[sid]
+        self.assertLessEqual(stable.history_days, 181)
+        self.assertTrue(stable.components['components']['yearly']['active'])
+        self.assertIn('yearly', stable.borrowed)
+        # the chart's fit of the total uses the same window
+        with app.test_request_context():
+            block, fit = api.daily_block('Firefox', 'beta', total_id, TODAY,
+                                         30, 'day', None,
+                                         history_days=api.config.
+                                         fit_history_days())
+        self.assertTrue(fit.active['yearly'])
+        self.assertEqual(len(block['start']), 30)
+
     def test_lag_guard(self):
         def summaries(nsuspicious):
             ok = {'ratio': 1.0, 'expected': 100, 'z_recent': 0}

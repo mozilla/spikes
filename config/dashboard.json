@@ -5,6 +5,7 @@
                  "Thunderbird": ["nightly", "beta", "release", "esr"]},
 
     "history_days": 180,
+    "fit_history_days": 1100,
     "day_backfill_days": 7,
     "final_grace_hours": 6,
     "daily_chunk_days": 14,

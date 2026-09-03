@@ -540,10 +540,15 @@ def channel_summary(product, channel, today, now):
 # --------------------------------------------------------------------------
 
 def daily_block(product, channel, series_id, today, days, granularity,
-                score_today, prior_fit=None):
+                score_today, prior_fit=None, history_days=None):
     """Recompute the fit of a series and return the ``daily`` block and
-    the fitted model (see API.md)."""
-    history_days = max(days, config.get('history_days', 180))
+    the fitted model (see API.md).  *history_days* is the fit window
+    (default ``history_days``; the channel total uses
+    ``config.fit_history_days()`` so its yearly component matches the
+    scheduler's)."""
+    if history_days is None:
+        history_days = config.get('history_days', 180)
+    history_days = max(days, history_days)
     start = today - datetime.timedelta(days=history_days)
     yesterday = today - datetime.timedelta(days=1)
     day_rows = {r.day: r for r in models.load_days(product, channel, start)}
@@ -818,7 +823,8 @@ def channel_view():
     by_series = channel_scores(product, channel, today)
     total_score = by_series[total_id]['today']
     daily, fit = daily_block(product, channel, total_id, today, days,
-                             granularity, total_score)
+                             granularity, total_score,
+                             history_days=config.fit_history_days())
     s.update({
         'daily': daily,
         'model': model_block(fit, today),
@@ -857,7 +863,8 @@ def signature_view():
         return jsonify({'error': 'signature not scored today'}), 404
     total_id = models.total_series(product, channel, create=False)
     _, prior = daily_block(product, channel, total_id, today, days, 'day',
-                           by_series.get(total_id, {}).get('today'))
+                           by_series.get(total_id, {}).get('today'),
+                           history_days=config.fit_history_days())
     daily, fit = daily_block(product, channel, series.id, today, days,
                              granularity, entry['today'], prior_fit=prior)
     yesterday = today - datetime.timedelta(days=1)

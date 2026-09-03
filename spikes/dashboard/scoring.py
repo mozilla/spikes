@@ -535,8 +535,13 @@ def score_channel(product, channel, today, now, fits_budget=None,
     as_of = day_row.as_of
     history_days = config.get('history_days', 180)
     start = today - datetime.timedelta(days=history_days)
+    # the total is fitted on everything stored (up to 3 years) so the
+    # yearly component can activate; signatures borrow it (their own
+    # fit needs 180 days at most)
+    start_total = today - datetime.timedelta(days=config.fit_history_days())
     yesterday = today - datetime.timedelta(days=1)
-    day_rows = {r.day: r for r in models.load_days(product, channel, start)}
+    day_rows = {r.day: r
+                for r in models.load_days(product, channel, start_total)}
     total_id = models.total_series(product, channel)
     series_by_id = {}
     refit_after = now - datetime.timedelta(
@@ -547,7 +552,8 @@ def score_channel(product, channel, today, now, fits_budget=None,
 
     # -- channel total: fit (refresh when stale) and intraday profile
     models_by_id = models.load_models([total_id])
-    total_daily = models.load_daily([total_id], start).get(total_id, {})
+    total_daily = models.load_daily([total_id], start_total).get(total_id,
+                                                                 {})
     cached_total = None
     total_fit = None
     row = models_by_id.get(total_id)
@@ -558,7 +564,7 @@ def score_channel(product, channel, today, now, fits_budget=None,
         # the channel fit is cheap and is the prior of every signature:
         # always recompute it so borrowed factors are fresh
         total_fit, cached_total = fit_series(
-            total_daily, day_rows, start, yesterday, None,
+            total_daily, day_rows, start_total, yesterday, None,
             config.min_crashes(channel, product), now)
         models.upsert(models.Model, [cached_total.to_row(total_id)],
                       ['series_id'])

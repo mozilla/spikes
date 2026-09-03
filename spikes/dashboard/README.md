@@ -130,9 +130,12 @@ to the models since, so additive schema changes deploy without a manual
 
 Retention (`update.maybe_prune`, once a day after 03:00 UTC): daily rows
 with < 3 crashes after 120 days and < 10 crashes after 365 days are deleted,
-signature hourly splits after 60 days, scores after 30 days.  Growth is then
-a few tens of MB per year on the `essential-0` plan while the long-term
-history the yearly component needs is kept.
+signature hourly splits after 60 days, scores after 30 days.  The channel
+totals (daily and hourly), the `dashboard_days` bookkeeping (needed to
+censor missing signature days) and signature days with ≥ 10 crashes are
+kept indefinitely.  Growth is then a few tens of MB per year on the
+`essential-0` plan while the long-term history the yearly component needs
+is kept (the totals are what it is estimated on).
 
 ## Detection
 
@@ -149,9 +152,14 @@ y[t] ~ level[t] * weekly[weekday(t)] * cycle[t mod 28] * yearly[week(t)]
   phases differ no more than the noise is flattened (Fenix release has no
   weekday pattern and gets none), a strong pattern is kept.
 * Components activate with enough history: weekly ≥ 3 weeks, 28-day cycle
-  (the release train) ≥ 3 cycles, yearly ≥ 2 years.  With Socorro's 6-month
-  retention the yearly component will read "not enough history" until two
-  years of data have accumulated (~2028-09); the API reports this.
+  (the release train) ≥ 3 cycles, yearly ≥ 2 years.  Socorro only keeps 6
+  months (`history_days` = 180 is the backfill horizon), but the database
+  keeps accumulating: the channel totals are fitted on up to
+  `fit_history_days` (1100, three years) of stored history, so the yearly
+  component reads "not enough history" until two years have accumulated
+  (~2028-09) and then activates by itself; the API reports this.
+  Signatures are fitted on 180 days and borrow the yearly factors from
+  their channel.
 * `28 = 4 * 7` makes the cycle and weekday components non-identifiable, so
   the cycle factors are constrained to carry no weekday effect.
 * **Signatures borrow the channel's factors**: a signature only estimates
