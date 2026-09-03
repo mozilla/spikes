@@ -55,6 +55,9 @@
     "hysteresis": 1.0,
     "flag_window_hours": 48,
     "bugs_max_signatures": 150,
+    "events_refresh_hours": 6,
+    "events_retry_hours": 1,
+    "events_retention_days": 800,
 
     "prune_after_days": 120,
     "prune_min_crashes": 3,

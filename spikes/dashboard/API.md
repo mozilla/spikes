@@ -177,6 +177,30 @@ today's own state.
 
 `days` in 7..730 (default 90); `granularity` `day` (default) or `week`.
 
+### `GET /dashboard/api/events?days=730`
+
+Platform events of the last `days` days (1..800), grouped per day and
+source, oldest first.  Read from the database (the scheduler fetches the
+feeds); the `ETag` only changes when a refresh wrote something.
+
+```jsonc
+{
+  "since": "2024-09-03",
+  "events": [
+    {"day": "2026-08-26", "source": "nvidia",          // windows | nvidia | apple | linux | android
+     "platform": "windows",                            // windows | mac | linux | android (which products show it)
+     "label": "NVIDIA driver", "at": null,             // at: earliest known time of the day's items
+     "items": [{"kind": "nvidia-driver", "title": "GeForce Game Ready Driver 616.56",
+                "detail": "WHQL, adapter_driver_version *.6.1656 in crash reports",
+                "url": "https://www.nvidia.com/en-us/drivers/details/278153/",
+                "search": "https://crash-stats.mozilla.org/search/?...",   // may be null
+                "at": null}]}
+  ],
+  "feeds": {"windows-updates": {"fetched_at": "...", "ok": true, "items": 212, "message": null}},
+  "data_version": "events-612-2026-09-03T06:52:10Z-730"
+}
+```
+
 ### `GET /dashboard/api/signature?product=&channel=&signature=&days=90&granularity=day`
 
 ```jsonc

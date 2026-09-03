@@ -15,7 +15,7 @@ import requests
 from flask import Blueprint, Response, jsonify, render_template, request
 
 from spikes.logger import logger
-from . import config, intraday, models, scoring, seasonal, socorro
+from . import config, events, intraday, models, scoring, seasonal, socorro
 
 
 blueprint = Blueprint('dashboard', __name__, template_folder='templates',
@@ -839,6 +839,33 @@ def channel_view():
         'data_health': data_health(now, run, [s], check_count=False),
     })
     return versioned(s, run, product, channel, days, granularity, now=now)
+
+
+@blueprint.route('/dashboard/api/events')
+def events_view():
+    """Platform events (Windows updates, drivers, OS releases) of the last
+    *days* days, grouped per day and source.  Read from the database only
+    (the scheduler fetches the feeds); the ETag changes when a refresh
+    wrote something, so the page's polls cost a 304."""
+    try:
+        days = int(request.args.get('days', 730))
+    except ValueError:
+        raise BadRequest('days must be an integer')
+    days = min(max(days, 1), 800)
+    today = today_utc()
+    since = today - datetime.timedelta(days=days)
+    count, latest = models.events_version()
+    etag = 'events-{}-{}-{}'.format(count, ts(latest) or 'none', days)
+    if request.if_none_match.contains(etag):
+        response = Response(status=304)
+        response.set_etag(etag)
+        return response
+    response = jsonify({'since': day_str(since),
+                        'events': events.grouped(since),
+                        'feeds': events.feed_status(), 'data_version': etag})
+    response.set_etag(etag)
+    response.headers['Cache-Control'] = 'no-cache, private'
+    return response
 
 
 @blueprint.route('/dashboard/api/signature')

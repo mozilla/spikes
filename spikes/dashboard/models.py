@@ -205,8 +205,43 @@ class Run(db.Model):
     message = db.Column(db.Text)
 
 
+class Event(db.Model):
+    """A platform event shown as a badge on the charts (a Windows update,
+    an NVIDIA driver, a macOS release...), see ``events.py``."""
+    __tablename__ = 'dashboard_events'
+
+    id = db.Column(db.Integer, primary_key=True, autoincrement=True)
+    source = db.Column(db.String(16), nullable=False)   # windows, nvidia...
+    kind = db.Column(db.String(24), nullable=False)     # windows-update...
+    ref = db.Column(db.String(64), nullable=False)      # KB5120998/26200.9278
+    day = db.Column(db.Date, nullable=False)
+    at = db.Column(db.DateTime)                          # when known
+    title = db.Column(db.String(160), nullable=False)
+    detail = db.Column(db.String(400))
+    url = db.Column(db.String(400))
+    search = db.Column(db.String(400))                   # crash-stats link
+    updated_at = db.Column(db.DateTime, nullable=False)
+
+    __table_args__ = (
+        sa.UniqueConstraint('kind', 'ref', name='uq_dashboard_events_ref'),
+        sa.Index('ix_dashboard_events_day', 'day'),
+    )
+
+
+class Feed(db.Model):
+    """Fetch bookkeeping of one event feed."""
+    __tablename__ = 'dashboard_feeds'
+
+    name = db.Column(db.String(32), primary_key=True)
+    fetched_at = db.Column(db.DateTime, nullable=False)
+    ok = db.Column(db.Boolean, nullable=False, default=True)
+    items = db.Column(db.Integer, nullable=False, default=0)
+    message = db.Column(db.String(200))
+
+
 TABLES = [Series.__table__, Daily.__table__, Hourly.__table__,
-          Day.__table__, Model.__table__, Score.__table__, Run.__table__]
+          Day.__table__, Model.__table__, Score.__table__, Run.__table__,
+          Event.__table__, Feed.__table__]
 
 
 def create_all():
@@ -277,10 +312,11 @@ def upsert(model, rows, keys, ignore_conflicts=False):
         for chunk in _chunks(group, 200):
             stmt = insert(model.__table__).values(chunk)
             if update_cols:
+                # subscript, not getattr: a column may be named like a
+                # method of the collection (`items`)
                 stmt = stmt.on_conflict_do_update(
                     index_elements=list(keys),
-                    set_={c: getattr(stmt.excluded, c)
-                          for c in update_cols})
+                    set_={c: stmt.excluded[c] for c in update_cols})
             else:
                 stmt = stmt.on_conflict_do_nothing(index_elements=list(keys))
             db.session.execute(stmt)
@@ -560,3 +596,31 @@ def prune(today, prune_after_days, prune_min_crashes, long_after_days,
     db.session.execute(sa.delete(Score).where(Score.day < old))
     old = utcnow() - datetime.timedelta(days=runs_retention_days)
     db.session.execute(sa.delete(Run).where(Run.started < old))
+
+
+# --------------------------------------------------------------------------
+# Platform events
+# --------------------------------------------------------------------------
+
+def load_events(since, until=None):
+    q = sa.select(Event).where(Event.day >= since)
+    if until is not None:
+        q = q.where(Event.day <= until)
+    return list(db.session.execute(
+        q.order_by(Event.day, Event.source, Event.title)).scalars())
+
+
+def events_version():
+    """``(count, latest update)`` of the events: the ETag of the events
+    endpoint changes only when a refresh wrote something."""
+    n, latest = db.session.execute(sa.select(
+        sa.func.count(Event.id), sa.func.max(Event.updated_at))).one()
+    return int(n or 0), latest
+
+
+def load_feeds():
+    return {f.name: f for f in db.session.execute(sa.select(Feed)).scalars()}
+
+
+def prune_events(before):
+    db.session.execute(sa.delete(Event).where(Event.day < before))

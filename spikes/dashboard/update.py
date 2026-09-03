@@ -20,7 +20,7 @@ from libmozdata.bugzilla import Bugzilla
 
 from spikes import app, db
 from spikes.logger import logger
-from . import collect, config, models, scoring
+from . import collect, config, events, models, scoring
 from .socorro import Fetcher
 
 
@@ -128,6 +128,7 @@ def maybe_prune(today, now):
                  config.get('hourly_retention_days', 60),
                  config.get('scores_retention_days', 30),
                  config.get('runs_retention_days', 30))
+    events.prune(today)
     db.session.commit()
     return True
 
@@ -191,6 +192,13 @@ def run(now=None, budget=None, max_seconds=None):
         except Exception as ex:  # keep the run alive
             db.session.rollback()
             logger.exception('Dashboard: bug enrichment failed: %s', ex)
+        try:
+            refreshed = events.maybe_refresh(now)
+            if refreshed is not None:
+                info['events'] = refreshed
+        except Exception as ex:  # the charts work without badges
+            db.session.rollback()
+            logger.exception('Dashboard: events refresh failed: %s', ex)
         run_row.pruned = maybe_prune(today, now)
         run_row.status = 'ok' if not fetcher.failures and \
             'errors' not in info else 'partial'

@@ -2,6 +2,8 @@
 // No dependencies, no build step.  Exports lineChart(), barChart(), sparkline(),
 // miniFactors() plus the formatters shared with dashboard.js.
 
+import { iconNode, iconSvg } from './icons.js';
+
 const SVG_NS = 'http://www.w3.org/2000/svg';
 const MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
 const WDAYS = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
@@ -263,7 +265,7 @@ function showTip(f, x, y, title, rows) {
   tip.append(el('div', { class: 'tt-title' }, title));
   for (const r of rows) {
     const cls = r.kind === 'rect' ? ' tt-rect' : r.kind === 'dot' ? ' tt-dot' : r.kind === 'dash' ? ' tt-dash' : '';
-    const key = el('i', { class: `tt-key${cls}`, style: `--c:${r.color || 'transparent'}` });
+    const key = r.kind === 'icon' ? iconSvg(r.source, 12) : el('i', { class: `tt-key${cls}`, style: `--c:${r.color || 'transparent'}` });
     tip.append(el('div', { class: 'tt-row' }, key, el('span', { class: 'tt-val' }, r.value), el('span', { class: 'tt-label' }, r.label)));
   }
   tip.hidden = false;
@@ -410,10 +412,103 @@ function yAxis(root, ticks, y, left, right, format) {
   }
 }
 
+// ---------------------------------------------------------------- platform event badges
+// Events come grouped per (day, source) from /dashboard/api/events:
+// { day, source, platform, label, at, items: [{ title, detail, url, search, at }] }.
+// A badge is one day's sources side by side in the strip above the plot; its
+// tooltip lists the items and explains what happened that day.
+const BADGE = 14;
+const BADGE_GAP = 2;
+const SOURCE_ORDER = ['windows', 'nvidia', 'apple', 'linux', 'android'];
+
+function eventRows(groups, withDay = false) {
+  const rows = [];
+  for (const g of groups) {
+    for (const it of g.items) {
+      const bits = [g.label];
+      if (withDay) bits.push(fmtDate(parseDay(g.day)));
+      if (it.detail) bits.push(it.detail);
+      rows.push({ value: it.title, label: bits.join(' · '), kind: 'icon', source: g.source });
+    }
+  }
+  return rows;
+}
+
+function eventText(groups) {
+  return groups.flatMap((g) => g.items.map((it) => `${g.label}: ${it.title}`)).join('; ');
+}
+
+/** Bucket (day or week) index each event group falls in: Map index -> groups. */
+function bucketEvents(events, xs, weekly) {
+  const map = new Map();
+  if (!events?.length || !xs.length) return map;
+  const first = xs[0];
+  const last = xs[xs.length - 1] + (weekly ? 6 * DAY_MS : 0);
+  for (const g of events) {
+    const ms = parseDay(g.day);
+    if (ms < first || ms > last) continue;
+    let i;
+    if (weekly) {
+      i = xs.length - 1;
+      while (i > 0 && xs[i] > ms) i -= 1;
+    } else {
+      i = Math.round((ms - first) / DAY_MS);
+      if (xs[i] !== ms) i = xs.indexOf(ms);
+    }
+    if (i < 0) continue;
+    if (!map.has(i)) map.set(i, []);
+    map.get(i).push(g);
+  }
+  return map;
+}
+
+/**
+ * Badges in the strip above the plot.  positions: [{ px, title, groups, dim, rule, withDay }]
+ * sorted by px.  When a badge would overlap the previous one it collapses to a dot;
+ * its tooltip (hover or focus) still lists everything, and the hover on the plot
+ * shows the day's events too.  A click opens the crash-stats search or the release
+ * notes of the first item.
+ */
+function drawEventBadges(root, f, box, positions) {
+  let lastRight = -Infinity;
+  const y0 = 3;
+  for (const p of positions) {
+    const sources = [...new Set(p.groups.map((g) => g.source))]
+      .sort((a, b) => SOURCE_ORDER.indexOf(a) - SOURCE_ORDER.indexOf(b)).slice(0, 4);
+    const w = sources.length * BADGE + (sources.length - 1) * BADGE_GAP;
+    const x0 = Math.max(box.left, Math.min(box.right - w, p.px - w / 2));
+    const compact = x0 < lastRight + 3;
+    const g = svg('g', { class: `event-badge${p.dim ? ' is-dim' : ''}`, tabindex: 0, role: 'img', 'aria-label': `${p.title}: ${eventText(p.groups)}` });
+    if (compact) {
+      g.append(svg('circle', { class: 'event-dot', cx: p.px, cy: y0 + BADGE / 2, r: 2.5 }));
+      lastRight = Math.max(lastRight, p.px + 3);
+    } else {
+      g.append(svg('rect', { class: 'hit', x: x0 - 2, y: y0 - 2, width: w + 4, height: BADGE + 4, rx: 3 }));
+      sources.forEach((src, k) => g.append(iconNode(src, BADGE, x0 + k * (BADGE + BADGE_GAP), y0)));
+      lastRight = x0 + w;
+      if (p.rule !== false) root.append(svg('line', { class: 'event-rule', x1: p.px, x2: p.px, y1: box.top, y2: box.bottom }));
+    }
+    const show = () => showTip(f, p.px, box.top + 12, p.title, eventRows(p.groups, !!p.withDay));
+    const hide = () => { f.tip.hidden = true; };
+    g.addEventListener('pointerenter', show);
+    g.addEventListener('pointerleave', hide);
+    g.addEventListener('focus', show);
+    g.addEventListener('blur', hide);
+    const url = p.groups.flatMap((x) => x.items).map((it) => it.search || it.url).find(Boolean);
+    if (url) {
+      g.classList.add('has-link');
+      const open = () => window.open(url, '_blank', 'noopener');
+      g.addEventListener('click', open);
+      g.addEventListener('keydown', (e) => { if (e.key === 'Enter') open(); });
+    }
+    root.append(g);
+  }
+}
+
 // ---------------------------------------------------------------- line chart
 /**
  * spec: { dates[], granularity, observed[], expected[], lo3[], hi3[], lo5[], hi5[], z[],
- *         partial[], projected[], severity[], releases[{date, version}], height, label }
+ *         partial[], projected[], severity[], releases[{date, version}], events[], height, label }
  */
 const SLICED = ['dates', 'observed', 'expected', 'lo3', 'hi3', 'lo5', 'hi5', 'z', 'partial', 'projected', 'severity'];
 
@@ -461,6 +556,8 @@ export function lineChart(container, spec) {
     const weekly = s.granularity === 'week';
     const xs = s.dates.map(parseDay);
     const get = (arr, i) => (arr && arr[i] != null ? arr[i] : null);
+    const eventMap = bucketEvents(s.events, xs, weekly);
+    const hasEvents = eventMap.size > 0;
 
     // y domain: clamp to max(3 × band top, 1.1 × max of the non-clipped points)
     const bandTop = Math.max(1, ...s.hi5.filter((v) => v != null), ...s.expected.filter((v) => v != null));
@@ -485,7 +582,7 @@ export function lineChart(container, spec) {
     }
     const yTicks = state.log ? logTicks(yMin, yMax) : linearTicks(0, yMax, Math.max(3, Math.floor((height - 46) / 44)));
     const left = 10 + Math.max(...yTicks.map((t) => fmtInt(t).length)) * 6.6;
-    const top = 22;
+    const top = hasEvents ? 22 + BADGE + 8 : 22; // room for the badge strip
     const right = 16;
     const bottom = 24;
     const box = { left, right: width - right, top, bottom: height - bottom };
@@ -523,6 +620,10 @@ export function lineChart(container, spec) {
         lastLabelRight = px + w / 2;
       }
     }
+
+    // platform events (Windows updates, drivers, OS releases): badges above the plot
+    drawEventBadges(root, f, box, [...eventMap].sort((a, b) => a[0] - b[0])
+      .map(([i, groups]) => ({ px: pxs[i], title: bucketTitle(i), groups, withDay: weekly })));
 
     // observed line
     root.append(svg('path', { class: 'series-observed', d: pathFrom(s.observed.map((v, i) => (v == null ? null : { x: pxs[i], y: yc(v) }))) }));
@@ -589,6 +690,7 @@ export function lineChart(container, spec) {
       if (get(s.lo3, i) != null) rows.push({ value: `${fmtInt(s.lo3[i])} – ${fmtInt(s.hi3[i])}`, label: '±3 band', color: 'var(--band3)', kind: 'rect' });
       if (get(s.lo5, i) != null) rows.push({ value: `${fmtInt(s.lo5[i])} – ${fmtInt(s.hi5[i])}`, label: '±5 band', color: 'var(--band5)', kind: 'rect' });
       if (get(s.z, i) != null) rows.push({ value: `z ${fmtZ(s.z[i])}`, label: sev === 'ok' ? 'within band' : sev, color: sev === 'ok' ? 'var(--axis)' : SEV_COLOR[sev], kind: 'dot' });
+      rows.push(...eventRows(eventMap.get(i) || [], weekly));
       return rows;
     }
     const tableRows = [];
@@ -602,9 +704,10 @@ export function lineChart(container, spec) {
         get(s.lo5, i) == null ? '—' : `${fmtInt(s.lo5[i])} – ${fmtInt(s.hi5[i])}`,
         fmtZ(get(s.z, i)),
         s.severity?.[i] || 'ok',
+        eventText(eventMap.get(i) || []) || '—',
       ]);
     }
-    fillTable(f, 'Daily crashes, table view', [weekly ? 'Week' : 'Day', 'Observed', 'Expected', '±3 band', '±5 band', 'z', 'Severity'], tableRows);
+    fillTable(f, 'Daily crashes, table view', [weekly ? 'Week' : 'Day', 'Observed', 'Expected', '±3 band', '±5 band', 'z', 'Severity', 'Platform events'], tableRows);
   }
 
   /** Clipped points: an arrow at the top edge plus the value, labels laid out without overlaps. */
@@ -733,7 +836,13 @@ export function barChart(container, spec) {
     const yMax = Math.max(1, ...vals) * 1.1;
     const yTicks = linearTicks(0, yMax, Math.max(3, Math.floor((height - 46) / 44)));
     const left = 10 + Math.max(...yTicks.map((t) => fmtInt(t).length)) * 6.6;
-    const box = { left, right: width - 12, top: 20, bottom: height - 24 };
+    // platform events of the two days on the chart
+    const dayMs = s.day ? parseDay(s.day) : null;
+    const todayEvents = dayMs == null ? [] : (s.events || []).filter((g) => parseDay(g.day) === dayMs);
+    const ydayEvents = dayMs == null ? [] : (s.events || []).filter((g) => parseDay(g.day) === dayMs - DAY_MS);
+    const hasEvents = todayEvents.length + ydayEvents.length > 0;
+    const timed = todayEvents.flatMap((g) => g.items.filter((it) => it.at).map((it) => ({ g, it, hour: (Date.parse(it.at) - dayMs) / 3600000 })));
+    const box = { left, right: width - 12, top: hasEvents ? 20 + BADGE + 8 : 20, bottom: height - 24 };
     const slot = (box.right - box.left) / n;
     const barW = Math.min(24, Math.max(2, slot - 2));
     const y = makeY(0, yMax, box.top, box.bottom, false);
@@ -772,6 +881,30 @@ export function barChart(container, spec) {
     root.append(svg('path', { class: 'series-yesterday', d: pathFrom((s.yesterday || []).map((v, i) => (v == null ? null : { x: cx(i), y: y(v) }))) }));
     root.append(svg('path', { class: 'series-expected', d: pathFrom((s.expected_today || []).map((v, i) => (v == null ? null : { x: cx(i), y: y(v) }))) }));
 
+    if (hasEvents) {
+      // badge strip: today's events, then yesterday's (dimmed); an event with a
+      // known time also gets a rule at its hour
+      const positions = [];
+      let cursor = box.left;
+      const place = (groups, title, dim) => {
+        const w = Math.min(new Set(groups.map((g) => g.source)).size, 4) * (BADGE + BADGE_GAP) - BADGE_GAP;
+        positions.push({ px: cursor + w / 2, title, groups, dim, rule: false });
+        cursor += w + 26;
+      };
+      if (todayEvents.length) place(todayEvents, `Today, ${fmtDateLong(dayMs)}`, false);
+      if (ydayEvents.length) {
+        root.append(svg('text', { class: 'lbl', x: cursor, y: 3 + BADGE - 3, text: 'yesterday' }));
+        cursor += 'yesterday'.length * 6.2 + 6;
+        place(ydayEvents, `Yesterday, ${fmtDateLong(dayMs - DAY_MS)}`, true);
+      }
+      drawEventBadges(root, f, box, positions);
+      for (const t of timed) {
+        if (t.hour < 0 || t.hour > 24) continue;
+        const px = box.left + slot * t.hour;
+        root.append(svg('line', { class: 'event-rule', x1: px, x2: px, y1: box.top, y2: box.bottom }));
+      }
+    }
+
     hoverLayer(root, box, pxs, (i) => {
       bars.forEach((b) => b?.classList.remove('is-hover'));
       if (i == null) { f.tip.hidden = true; band.setAttribute('visibility', 'hidden'); return; }
@@ -785,6 +918,9 @@ export function barChart(container, spec) {
         { value: fmtInt(get(s.expected_today, i)), label: inProgress ? 'expected (full hour)' : 'expected', color: 'var(--expected)', kind: 'dash' },
         { value: fmtInt(get(s.yesterday, i)), label: 'yesterday', color: 'var(--yesterday)' },
       ];
+      for (const t of timed) {
+        if (Math.floor(t.hour) === hours[i]) rows.push({ value: t.it.title, label: t.g.label, kind: 'icon', source: t.g.source });
+      }
       const anchorY = today != null ? y(today) : y(get(s.expected_today, i) || 0);
       showTip(f, pxs[i], anchorY, `${hl(hours[i])}–${hl(hours[i] + 1)} ${zone}`, rows);
     }, undefined, (i) => {

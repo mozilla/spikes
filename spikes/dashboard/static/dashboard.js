@@ -39,6 +39,8 @@ const app = {
   lastFetch: 0,
   pendingFocus: null,
   hideDrops: false,
+  events: [], // platform events (badges on the charts), grouped per day and source
+  eventsData: null,
 };
 
 const $ = (id) => document.getElementById(id);
@@ -109,6 +111,7 @@ async function refresh({ initial = false } = {}) {
       app.summary = summary;
       renderSummary();
     } else renderFreshness(app.summary); // "N min ago" keeps counting
+    await refreshEvents();
     const target = app.selected || defaultChannel();
     if (isAll(target)) {
       if (!app.selected) selectAll();
@@ -144,6 +147,37 @@ async function loadChannel(product, channel) {
   showView(); // final layout before renderDetail() may scroll to a row
   renderDetail();
   await refreshExpanded();
+}
+
+// ---------------------------------------------------------------- platform events
+/** Badges on the charts (Windows updates, drivers, OS releases): one small payload for
+ * the whole page, refreshed with the summary; unchanged data costs a 304. */
+async function refreshEvents() {
+  let data;
+  try {
+    data = await fetchJSON('events', { days: 800 });
+  } catch {
+    return; // the charts work without badges
+  }
+  if (data === app.eventsData) return;
+  app.eventsData = data;
+  app.events = data.events || [];
+  if (app.channel && app.selected && !isAll(app.selected)) {
+    renderCharts(app.channel);
+    for (const st of app.expanded.values()) if (st.data && st.panel) renderSignaturePanel(st);
+  }
+}
+
+const DESKTOP_PLATFORMS = ['windows', 'mac', 'linux'];
+
+/** Platforms whose events matter for a product: Fenix runs on Android, the rest on desktop. */
+function platformsFor(product) {
+  return product === 'Fenix' ? ['android'] : DESKTOP_PLATFORMS;
+}
+
+function eventsFor(product) {
+  const platforms = platformsFor(product);
+  return app.events.filter((g) => platforms.includes(g.platform));
 }
 
 // ---------------------------------------------------------------- helpers
@@ -712,14 +746,18 @@ function renderDrivers(ch) {
   restoreFocus(p, focus);
 }
 
+function productOf(data) {
+  return data.product || data.row?.product || app.channel?.product;
+}
+
 function dailySpec(data, extra = {}) {
   const daily = data.daily || { start: [] };
-  return { ...daily, dates: daily.start || [], releases: data.releases || app.channel?.releases || [], height: CHART_HEIGHT, ...extra };
+  return { ...daily, dates: daily.start || [], releases: data.releases || app.channel?.releases || [], events: eventsFor(productOf(data)), height: CHART_HEIGHT, ...extra };
 }
 
 function hourlySpec(data, extra = {}) {
   // the day lets the chart translate UTC hour buckets into local time
-  return { ...(data.hourly || { hours: [] }), day: data.day || data.row?.day || app.channel?.day, height: CHART_HEIGHT, ...extra };
+  return { ...(data.hourly || { hours: [] }), day: data.day || data.row?.day || app.channel?.day, events: eventsFor(productOf(data)), height: CHART_HEIGHT, ...extra };
 }
 
 /** Every "Today by hour" title shows the clock in use (UTC or the local zone). */

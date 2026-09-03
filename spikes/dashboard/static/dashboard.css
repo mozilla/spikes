@@ -463,6 +463,19 @@ svg {
     &.is-hover { opacity: 0.8; }
   }
   & .bar-progress { fill: var(--surface); stroke: var(--ink); stroke-width: 2; }
+  /* platform event badges in the strip above the plot */
+  & .event-badge {
+    color: var(--ink-2);
+    outline: none;
+
+    & .hit { fill: transparent; }
+    &.has-link { cursor: pointer; }
+    &:hover, &:focus-visible { color: var(--ink); }
+    &:focus-visible .hit { stroke: var(--focus); stroke-width: 1.5; }
+    &.is-dim { opacity: 0.55; }
+  }
+  & .event-dot { fill: var(--ink-2); }
+  & .event-rule { stroke: var(--axis); stroke-width: 1; stroke-dasharray: 2 3; shape-rendering: crispEdges; }
   & .series-observed, & .series-expected, & .series-yesterday {
     stroke-width: 2;
     fill: none;
@@ -508,6 +521,7 @@ svg {
     &.tt-dash { width: 14px; background: repeating-linear-gradient(90deg, var(--c) 0 4px, transparent 4px 6px); }
   }
   & .tt-val { font-weight: 600; font-variant-numeric: tabular-nums; }
+  & .event-icon { flex: none; color: var(--ink-2); }
   & .tt-label { color: var(--ink-2); }
 }
 .chart-table {

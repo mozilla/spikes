@@ -44,6 +44,7 @@ and the afternoon peak are not spikes.
 | `intraday.py` | hour-of-day arrival profiles |
 | `scoring.py` | per-channel scoring (today, yesterday, drivers) |
 | `update.py` | one scheduler run; `python -m spikes.dashboard.update` |
+| `events.py` | platform events (Windows updates, drivers, OS releases) fetched by the scheduler, badges on the charts |
 | `api.py` | Flask blueprint (`/dashboard.html`, `/dashboard/api/*`) |
 | `API.md` | JSON contract used by the page |
 | `templates/`, `static/` | the page (vanilla JS, SVG charts, no build) |
@@ -266,6 +267,33 @@ than `refit_hours` (6), at most `max_fits_per_run` per run, so the
 10-minute run only recomputes the cheap score formula.  Yesterday is scored
 as a complete day; bugs (Socorro `Bugs` + Bugzilla status) are fetched for
 flagged signatures and cached on the series for 12 hours.
+
+## Platform events
+
+Crash volumes move when the platform under Firefox moves.  `events.py`
+fetches public feeds *in the scheduler* (never in a page request), stores
+them in `dashboard_events` and the page shows them as icon badges above the
+"Today by hour" and "Daily crashes" charts, with a tooltip saying what
+happened that day (hover or focus; a click opens the crash-stats search or
+the release notes).  Firefox and Thunderbird get the Windows, macOS and Linux
+events, Fenix the Android ones.
+
+| badge | source | what |
+|-------|--------|------|
+| Windows | DataForNerds' machine-readable copy of Microsoft's update-history pages | every KB with its OS build and type (Patch Tuesday, preview, out-of-band, hotpatch) |
+| NVIDIA | the GeForce download page's lookup endpoint (unofficial, unchanged for years) | Game Ready drivers with a crash-stats link on the `adapter_driver_version` string they report as (`616.56` is `*.6.1656`) |
+| Apple | MacAdmins SOFA feed | macOS security releases, with the CVE count |
+| Linux | endoflife.date (kernel series, Ubuntu, Fedora), freedesktop GitLab tags (Mesa) | releases, no release candidates |
+| Android | endoflife.date (major versions); the monthly security bulletin is computed, it has no feed | published on the first Monday of the month |
+
+Feeds are fetched in parallel with a 15 s timeout, every
+`events_refresh_hours` (6; a failed feed is retried after
+`events_retry_hours`), and the run reports them (`events` in the run
+message).  A dead feed keeps its previous rows.  `GET /dashboard/api/events`
+serves everything grouped per day and source, a few KB gzipped, with an
+ETag that only changes when a refresh wrote something: the page fetches it
+once and its polls cost a 304.  Rows older than `events_retention_days`
+(800) are pruned.
 
 ## Web
 
