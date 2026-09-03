@@ -26,15 +26,26 @@ Feeds, all JSON:
 * **Android**: major versions from endoflife.date; the monthly security
   bulletin has no feed and is computed from Google's schedule (published
   on the first Monday of the month).
+* **Graphics drivers seen in crash reports** (NVIDIA, AMD, Intel): no
+  vendor publishes a usable feed for AMD or Intel, and the drivers users
+  run also come from Windows Update and OEMs, so they are detected in
+  Socorro instead: one SuperSearch query per vendor gives the daily counts
+  of every ``adapter_driver_version``; a version becomes an event, dated
+  the day it first shows up (0.2 % of its vendor's crashes, after at least
+  five days without it), once it has reached 1 % within two weeks and held
+  half of that the next day (an established version never qualifies, a
+  one-day blip from a crash-looping machine neither).  Never moved
+  afterwards.
 
 Every feed is fetched in parallel with a 15 s timeout (60 s for the slow
-GeForce lookup); a failure keeps the previous rows, is retried after
-``events_retry_hours`` and reported in the run.  Successful feeds are
-refreshed every ``events_refresh_hours``.
+GeForce lookup and the Socorro queries); a failure keeps the previous
+rows, is retried after ``events_retry_hours`` and reported in the run.
+Successful feeds are refreshed every ``events_refresh_hours``.
 """
 
 import concurrent.futures
 import datetime
+import os
 import re
 import urllib.parse
 
@@ -57,11 +68,15 @@ NVIDIA_URL = ('https://gfwsl.geforce.com/services_toolkit/services/com/nvidia/'
 NVIDIA_TIMEOUT = 60
 
 # source -> platform whose products the badge is shown for, and label
-PLATFORM = {'windows': 'windows', 'nvidia': 'windows', 'apple': 'mac',
-            'linux': 'linux', 'android': 'android'}
+PLATFORM = {'windows': 'windows', 'nvidia': 'windows', 'amd': 'windows',
+            'intel': 'windows', 'apple': 'mac', 'linux': 'linux',
+            'android': 'android'}
 LABEL = {'windows': 'Windows update', 'nvidia': 'NVIDIA driver',
+         'amd': 'AMD driver', 'intel': 'Intel driver',
          'apple': 'macOS release', 'linux': 'Linux release',
          'android': 'Android'}
+# dated by first sighting: a later refresh must not move them
+IMMUTABLE_KINDS = {'driver-seen'}
 WINDOWS_TYPES = {'Standard': 'monthly security update (Patch Tuesday)',
                  'Preview': 'optional non-security preview',
                  'Out-of-band': 'out-of-band update',
@@ -89,7 +104,7 @@ def _day(value):
 # Parsers (pure functions of a feed payload)
 # --------------------------------------------------------------------------
 
-def parse_windows(payload):
+def parse_windows(payload, today=None):
     rows = payload.get('data', []) if isinstance(payload, dict) else payload
     out = []
     for r in rows:
@@ -123,7 +138,7 @@ def nvidia_suffix(version):
     return digits[0] + '.' + digits[1:]
 
 
-def parse_nvidia(payload):
+def parse_nvidia(payload, today=None):
     out = []
     for item in payload.get('IDS', []):
         info = item.get('downloadInfo') or {}
@@ -156,7 +171,7 @@ def parse_nvidia(payload):
     return out
 
 
-def parse_sofa(payload):
+def parse_sofa(payload, today=None):
     out = []
     for os_ in payload.get('OSVersions', []):
         for r in os_.get('SecurityReleases', []):
@@ -179,7 +194,7 @@ def parse_sofa(payload):
 
 def parse_endoflife(product, source, kind, fmt):
     """Parser for an endoflife.date product: one event per released cycle."""
-    def parse(payload):
+    def parse(payload, today=None):
         out = []
         for r in payload:
             day = _day(r.get('releaseDate'))
@@ -197,7 +212,7 @@ def parse_endoflife(product, source, kind, fmt):
     return parse
 
 
-def parse_mesa(payload):
+def parse_mesa(payload, today=None):
     out = []
     for t in payload:
         m = re.match(r'^mesa-(\d+\.\d+\.\d+)$', t.get('name', ''))
@@ -239,15 +254,136 @@ def android_bulletins(today, days):
 
 
 # --------------------------------------------------------------------------
+# Graphics drivers seen in crash reports
+# --------------------------------------------------------------------------
+
+SOCORRO = 'https://crash-stats.mozilla.org/api/SuperSearch/'
+VENDORS = {'nvidia': ('0x10de', 'NVIDIA'), 'amd': ('0x1002', 'AMD'),
+           'intel': ('0x8086', 'Intel')}
+DRIVER_WINDOW_DAYS = 45
+DRIVER_QUIET_SHARE = 0.002   # under this the version is not around yet
+DRIVER_MIN_SHARE = 0.01      # adoption: reached within DRIVER_RAMP_DAYS...
+DRIVER_MIN_COUNT = 20
+DRIVER_RAMP_DAYS = 14
+DRIVER_CONFIRM_SHARE = 0.005  # ... and held (half of it) the next day
+DRIVER_MIN_QUIET_DAYS = 5
+DRIVER_TIMEOUT = 60
+
+
+def driver_url(vendor):
+    """SuperSearch: daily counts of every driver version of *vendor* on
+    Firefox release, Windows, over the last ``DRIVER_WINDOW_DAYS``."""
+    vendor_id = VENDORS[vendor][0]
+
+    def url(today):
+        since = today - datetime.timedelta(days=DRIVER_WINDOW_DAYS)
+        return SOCORRO + '?' + urllib.parse.urlencode([
+            ('product', 'Firefox'), ('release_channel', 'release'),
+            ('platform', 'Windows'), ('adapter_vendor_id', vendor_id),
+            ('date', '>=' + since.isoformat()),
+            ('_histogram.date', 'adapter_driver_version'),
+            ('_histogram_interval.date', '1d'), ('_facets_size', '100'),
+            ('_results_number', '0')])
+    return url
+
+
+def socorro_headers():
+    token = os.environ.get('LIBMOZDATA_CFG_SOCORRO_TOKEN')
+    return {'Auth-Token': token} if token else {}
+
+
+def nvidia_name(version):
+    """``32.0.16.1656`` -> ``616.56``, the GeForce name of a Windows driver
+    string; None when the string is not shaped like one."""
+    parts = version.split('.')
+    if len(parts) != 4 or len(parts[2]) != 2 or len(parts[3]) != 4 or \
+            not (parts[2] + parts[3]).isdigit():
+        return None
+    digits = parts[2][-1] + parts[3]
+    if int(digits[:3]) < 100:  # GeForce releases are in the hundreds
+        return None
+    return digits[:3] + '.' + digits[3:]
+
+
+def _driver_event(vendor, version, day, share, ramp_days):
+    vendor_id, name = VENDORS[vendor]
+    pretty = nvidia_name(version) if vendor == 'nvidia' else None
+    label = '{} ({})'.format(pretty, version) if pretty else version
+    search = CRASH_STATS + '?' + urllib.parse.urlencode([
+        ('product', 'Firefox'), ('adapter_vendor_id', vendor_id),
+        ('adapter_driver_version', version), ('date', '>=' + day.isoformat()),
+        ('_facets', 'signature'), ('_facets', 'version')])
+    when = 'the same day' if ramp_days == 0 else \
+        '{} day{} later'.format(ramp_days, '' if ramp_days == 1 else 's')
+    return event(vendor, 'driver-seen', '{}/{}'.format(vendor, version), day,
+                 '{} driver {} appears in crash reports'.format(name, label),
+                 detail='first seen this day, {:.1f} % of {} crashes on '
+                        'Firefox release (Windows) {}; drivers reach users '
+                        'through vendor installers, Windows Update and OEMs'
+                        .format(share * 100, name, when),
+                 search=search)
+
+
+def parse_drivers(vendor):
+    """Parser of the SuperSearch histogram: the versions that are new."""
+    def parse(payload, today=None):
+        today = today or models.utctoday()
+        days = []
+        for b in (payload.get('facets') or {}).get('histogram_date', []):
+            day = _day(b.get('term'))
+            total = b.get('count') or 0
+            if day is None or day >= today or total <= 0:
+                continue  # the current day is partial
+            counts = {f['term']: f['count'] for f in
+                      (b.get('facets') or {}).get('adapter_driver_version',
+                                                  [])}
+            days.append((day, total, counts))
+        days.sort()
+        versions = set()
+        for _, _, counts in days:
+            versions.update(counts)
+        out = []
+        for version in sorted(versions):
+            series = [(day, counts.get(version, 0),
+                       counts.get(version, 0) / float(total))
+                      for day, total, counts in days]
+            # first sighting: the version was not around before it
+            first = next((i for i, (_, _, s) in enumerate(series)
+                          if s >= DRIVER_QUIET_SHARE), None)
+            if first is None or first < DRIVER_MIN_QUIET_DAYS:
+                continue  # never shows up, or established before the window
+            # adoption: reaches the share within the ramp, and holds it the
+            # next day (a one-day blip is one machine crashing in a loop)
+            for i in range(first, min(first + DRIVER_RAMP_DAYS + 1,
+                                      len(series) - 1)):
+                _, n, share = series[i]
+                if share >= DRIVER_MIN_SHARE and n >= DRIVER_MIN_COUNT:
+                    if series[i + 1][2] >= DRIVER_CONFIRM_SHARE:
+                        out.append(_driver_event(vendor, version,
+                                                 series[first][0], share,
+                                                 i - first))
+                    break
+        return out
+    return parse
+
+
+# --------------------------------------------------------------------------
 # Feeds
 # --------------------------------------------------------------------------
 
 class Source:
-    def __init__(self, name, url, parse, timeout=TIMEOUT):
+    """A feed: *url* (a string, or a callable of today's date), *parse*
+    ``(payload, today) -> events``, the payload being JSON (``fmt='json'``)
+    or text; *headers* is a dict or a callable returning one."""
+
+    def __init__(self, name, url, parse, timeout=TIMEOUT, fmt='json',
+                 headers=None):
         self.name = name
         self.url = url
         self.parse = parse
         self.timeout = timeout
+        self.fmt = fmt
+        self.headers = headers
 
 
 SOURCES = [
@@ -255,6 +391,12 @@ SOURCES = [
            'https://api.datafornerds.io/v2/microsoft/'
            'windows-update-history.json', parse_windows),
     Source('nvidia-geforce', NVIDIA_URL, parse_nvidia, timeout=NVIDIA_TIMEOUT),
+    Source('drivers-nvidia', driver_url('nvidia'), parse_drivers('nvidia'),
+           timeout=DRIVER_TIMEOUT, headers=socorro_headers),
+    Source('drivers-amd', driver_url('amd'), parse_drivers('amd'),
+           timeout=DRIVER_TIMEOUT, headers=socorro_headers),
+    Source('drivers-intel', driver_url('intel'), parse_drivers('intel'),
+           timeout=DRIVER_TIMEOUT, headers=socorro_headers),
     Source('macos-sofa',
            'https://sofafeed.macadmins.io/v1/macos_data_feed.json',
            parse_sofa),
@@ -276,12 +418,13 @@ COMPUTED = 'android-bulletins'
 FEED_NAMES = [s.name for s in SOURCES] + [COMPUTED]
 
 
-def _get(url, timeout=TIMEOUT):
-    r = requests.get(url, timeout=timeout,
-                     headers={'User-Agent': USER_AGENT,
-                              'Accept': 'application/json'})
+def _get(url, timeout=TIMEOUT, fmt='json', headers=None):
+    h = {'User-Agent': USER_AGENT,
+         'Accept': 'application/json' if fmt == 'json' else '*/*'}
+    h.update(headers or {})
+    r = requests.get(url, timeout=timeout, headers=h)
     r.raise_for_status()
-    return r.json()
+    return r.json() if fmt == 'json' else r.text
 
 
 def refresh(now, fetch=None, names=None):
@@ -297,7 +440,9 @@ def refresh(now, fetch=None, names=None):
     rows = []
     with concurrent.futures.ThreadPoolExecutor(max_workers=4) as pool:
         def run(s):
-            return s.parse(fetch(s.url, s.timeout))
+            url = s.url(today) if callable(s.url) else s.url
+            headers = s.headers() if callable(s.headers) else s.headers
+            return s.parse(fetch(url, s.timeout, s.fmt, headers), today)
         futures = {pool.submit(run, s): s for s in sources}
         for fut, source in futures.items():
             try:
@@ -317,7 +462,12 @@ def refresh(now, fetch=None, names=None):
     for r in rows:
         r['updated_at'] = now
         unique[(r['kind'], r['ref'])] = r
-    models.upsert(models.Event, list(unique.values()), ['kind', 'ref'])
+    models.upsert(models.Event, [r for r in unique.values()
+                                 if r['kind'] not in IMMUTABLE_KINDS],
+                  ['kind', 'ref'])
+    models.upsert(models.Event, [r for r in unique.values()
+                                 if r['kind'] in IMMUTABLE_KINDS],
+                  ['kind', 'ref'], ignore_conflicts=True)
     models.upsert(models.Feed, [
         {'name': name, 'fetched_at': now, 'ok': ok, 'items': items,
          'message': message}

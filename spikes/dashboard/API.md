@@ -187,7 +187,7 @@ feeds); the `ETag` only changes when a refresh wrote something.
 {
   "since": "2024-09-03",
   "events": [
-    {"day": "2026-08-26", "source": "nvidia",          // windows | nvidia | apple | linux | android
+    {"day": "2026-08-26", "source": "nvidia",          // windows | nvidia | amd | intel | apple | linux | android
      "platform": "windows",                            // windows | mac | linux | android (which products show it)
      "label": "NVIDIA driver", "at": null,             // at: earliest known time of the day's items
      "items": [{"kind": "nvidia-driver", "title": "GeForce Game Ready Driver 616.56",

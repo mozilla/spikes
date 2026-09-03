@@ -419,7 +419,7 @@ function yAxis(root, ticks, y, left, right, format) {
 // tooltip lists the items and explains what happened that day.
 const BADGE = 14;
 const BADGE_GAP = 2;
-const SOURCE_ORDER = ['windows', 'nvidia', 'apple', 'linux', 'android'];
+const SOURCE_ORDER = ['windows', 'nvidia', 'amd', 'intel', 'apple', 'linux', 'android'];
 
 function eventRows(groups, withDay = false) {
   const rows = [];

@@ -282,6 +282,7 @@ events, Fenix the Android ones.
 |-------|--------|------|
 | Windows | DataForNerds' machine-readable copy of Microsoft's update-history pages | every KB with its OS build and type (Patch Tuesday, preview, out-of-band, hotpatch) |
 | NVIDIA | the GeForce download page's lookup endpoint (unofficial, unchanged for years) | Game Ready drivers with a crash-stats link on the `adapter_driver_version` string they report as (`616.56` is `*.6.1656`) |
+| NVIDIA, AMD, Intel | Socorro itself: one SuperSearch query per vendor, the daily counts of every `adapter_driver_version` on Firefox release, Windows, over 45 days | a driver version *appears in crash reports*: dated the day it first shows up (0.2 % of its vendor's crashes after at least five days without it), once it has reached 1 % (≥ 20 crashes) within two weeks and held half of that the next day. An established version never qualifies, nor does a one-day blip from a crash-looping machine. Covers drivers shipped by Windows Update and OEMs, which no vendor feed does; never moved once stored. NVIDIA strings get their GeForce name (`32.0.16.1656` is `616.56`) |
 | Apple | MacAdmins SOFA feed | macOS security releases, with the CVE count |
 | Linux | endoflife.date (kernel series, Ubuntu, Fedora), freedesktop GitLab tags (Mesa) | releases, no release candidates |
 | Android | endoflife.date (major versions); the monthly security bulletin is computed, it has no feed | published on the first Monday of the month |

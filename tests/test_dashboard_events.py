@@ -75,18 +75,63 @@ EOL_ANDROID = [{'cycle': '17', 'codename': 'Cinnamon Bun',
                {'cycle': '16', 'codename': 'Baklava',
                 'releaseDate': '2025-06-10'}]
 
+
+
+def driver_payload(days, series, total=3000):
+    """SuperSearch histogram: *series* is ``{version: [count per day]}``."""
+    buckets = []
+    for i, d in enumerate(days):
+        facets = [{'term': v, 'count': c[i]} for v, c in series.items()
+                  if c[i]]
+        buckets.append({'term': d.isoformat() + 'T00:00:00+00:00',
+                        'count': total,
+                        'facets': {'adapter_driver_version': facets}})
+    return {'facets': {'histogram_date': buckets}}
+
+
+# ten complete days, then today (partial)
+DRIVER_DAYS = [TODAY - datetime.timedelta(days=10 - i) for i in range(11)]
+DRIVERS_NVIDIA = driver_payload(DRIVER_DAYS, {
+    # established
+    '32.0.15.6094': [150] * 11,
+    # new on day 7 (3 %), holds the next day
+    '32.0.16.1656': [0, 0, 0, 0, 0, 0, 0, 90, 200, 260, 300],
+    # release day under 1 % (0.8 %), crosses on day 7: dated day 6
+    '32.0.16.1700': [0, 0, 0, 0, 0, 0, 25, 100, 150, 200, 220],
+    # takes off after only 2 quiet days: established before the window
+    '32.0.16.1088': [0, 0, 60, 80, 90, 90, 90, 90, 90, 90, 90],
+    # hovers at 0.3 %, one day at 1.3 %: not new
+    '31.0.15.4601': [10, 12, 9, 11, 10, 10, 11, 40, 12, 10, 9],
+    # one-day blip (a machine crashing in a loop): not new
+    '31.0.15.5000': [0, 0, 0, 0, 0, 0, 0, 40, 0, 0, 0],
+    # crosses on the last complete day: not confirmed yet
+    '32.0.16.1900': [0, 0, 0, 0, 0, 0, 0, 0, 0, 60, 300],
+    # today only (partial day): ignored
+    '32.0.16.2000': [0] * 10 + [400],
+})
+DRIVERS_AMD = driver_payload(DRIVER_DAYS, {
+    # a stray 0.1 % day keeps the history quiet; new on day 8
+    '32.0.21045.5002': [0, 0, 0, 0, 0, 3, 0, 0, 45, 120, 200],
+})
+DRIVERS_NONE = {'facets': {'histogram_date': []}}
+
 PAYLOADS = {'windows-updates': WINDOWS, 'nvidia-geforce': NVIDIA,
+            'drivers-nvidia': DRIVERS_NVIDIA, 'drivers-amd': DRIVERS_AMD,
+            'drivers-intel': DRIVERS_NONE,
             'macos-sofa': SOFA, 'linux-kernel': EOL_LINUX,
             'ubuntu': EOL_UBUNTU, 'fedora': EOL_FEDORA, 'mesa': MESA,
             'android-versions': EOL_ANDROID}
-BY_URL = {s.url: s.name for s in events.SOURCES}
+BY_URL = {(s.url(TODAY) if callable(s.url) else s.url): s.name
+          for s in events.SOURCES}
 
 
-def fake_fetch(failing=()):
-    def fetch(url, timeout=None):
+def fake_fetch(failing=(), override=None):
+    def fetch(url, timeout=None, fmt='json', headers=None):
         name = BY_URL[url]
         if name in failing:
             raise RuntimeError('boom')
+        if override and name in override:
+            return override[name]
         return PAYLOADS[name]
     return fetch
 
@@ -156,6 +201,42 @@ class ParserTest(unittest.TestCase):
         self.assertTrue(evs[-1]['url'].endswith('/2026-08-01'))
 
 
+    def test_nvidia_name(self):
+        self.assertEqual(events.nvidia_name('32.0.16.1656'), '616.56')
+        self.assertEqual(events.nvidia_name('27.21.14.5671'), '456.71')
+        self.assertIsNone(events.nvidia_name('32.0.21045.5002'))  # AMD shape
+        self.assertIsNone(events.nvidia_name('9.17.10.4459'))
+
+    def test_drivers_seen(self):
+        evs = events.parse_drivers('nvidia')(DRIVERS_NVIDIA, TODAY)
+        self.assertEqual([e['ref'] for e in evs],
+                         ['nvidia/32.0.16.1656', 'nvidia/32.0.16.1700'])
+        e = evs[0]
+        self.assertEqual(e['day'], DRIVER_DAYS[7])
+        self.assertEqual(e['title'], 'NVIDIA driver 616.56 (32.0.16.1656) '
+                                     'appears in crash reports')
+        self.assertTrue(e['detail'].startswith(
+            'first seen this day, 3.0 % of NVIDIA crashes'))
+        self.assertIn('the same day', e['detail'])
+        self.assertIn('adapter_vendor_id=0x10de', e['search'])
+        self.assertIn('adapter_driver_version=32.0.16.1656', e['search'])
+        self.assertIsNone(e['url'])
+        # the ramp: dated the release day, adoption confirmed a day later
+        self.assertEqual(evs[1]['day'], DRIVER_DAYS[6])
+        self.assertIn('1 day later', evs[1]['detail'])
+        # AMD: a stray 0.1 % day is under the sighting threshold
+        evs = events.parse_drivers('amd')(DRIVERS_AMD, TODAY)
+        self.assertEqual(len(evs), 1)
+        self.assertEqual(evs[0]['day'], DRIVER_DAYS[8])
+        self.assertEqual(evs[0]['title'],
+                         'AMD driver 32.0.21045.5002 appears in crash reports')
+        self.assertEqual(events.parse_drivers('intel')(DRIVERS_NONE, TODAY),
+                         [])
+        url = events.driver_url('intel')(TODAY)
+        self.assertIn('adapter_vendor_id=0x8086', url)
+        self.assertIn('_histogram.date=adapter_driver_version', url)
+
+
 class DBTestCase(unittest.TestCase):
 
     def setUp(self):
@@ -184,6 +265,9 @@ class RefreshTest(DBTestCase):
         self.assertEqual(res['nvidia-geforce']['items'], 2)
         self.assertEqual(res['linux-kernel']['items'], 2)
         self.assertGreater(res['android-bulletins']['items'], 20)
+        self.assertEqual(res['drivers-nvidia']['items'], 2)
+        self.assertEqual(res['drivers-amd']['items'], 1)
+        self.assertEqual(res['drivers-intel']['items'], 0)
         count, latest = models.events_version()
         self.assertEqual(latest, NOW)
         # idempotent
@@ -236,6 +320,23 @@ class RefreshTest(DBTestCase):
         self.assertIsNone(events.maybe_refresh(later + datetime.timedelta(
             minutes=30)))
 
+    def test_driver_sightings_keep_their_first_day(self):
+        events.refresh(NOW, fetch=fake_fetch())
+        db.session.commit()
+        # a later window sees the same version take off a day later (the
+        # earlier data has aged out): the stored sighting does not move
+        shifted = driver_payload(DRIVER_DAYS, {
+            '32.0.16.1656': [0, 0, 0, 0, 0, 0, 0, 0, 200, 260, 300]})
+        events.refresh(NOW + datetime.timedelta(hours=6),
+                       fetch=fake_fetch(override={'drivers-nvidia': shifted}))
+        db.session.commit()
+        rows = [e for e in models.load_events(TODAY - datetime.timedelta(
+            days=10)) if e.kind == 'driver-seen' and e.source == 'nvidia']
+        self.assertEqual([r.day for r in rows],
+                         [DRIVER_DAYS[6], DRIVER_DAYS[7]])
+        # untouched by the second refresh (feed events are updated in place)
+        self.assertEqual({r.updated_at for r in rows}, {NOW})
+
     def test_prune(self):
         events.refresh(NOW, fetch=fake_fetch())
         db.session.commit()
@@ -266,11 +367,18 @@ class ApiTest(DBTestCase):
         days = [g['day'] for g in d['events']]
         self.assertEqual(days, sorted(days))
         self.assertTrue(all(day >= '2026-08-04' for day in days))
+        # the release from the GeForce feed, then its appearance in the
+        # crash reports a few days later: two badges
         nvidia = [g for g in d['events'] if g['source'] == 'nvidia']
-        self.assertEqual(len(nvidia), 1)
+        self.assertEqual([(g['day'], g['items'][0]['kind']) for g in nvidia],
+                         [('2026-08-26', 'nvidia-driver'),
+                          (DRIVER_DAYS[6].isoformat(), 'driver-seen'),
+                          (DRIVER_DAYS[7].isoformat(), 'driver-seen')])
         self.assertEqual(nvidia[0]['items'][0]['title'],
                          'GeForce Game Ready Driver 616.56')
         self.assertIn('search', nvidia[0]['items'][0])
+        self.assertIn('adapter_driver_version=32.0.16.1656',
+                      nvidia[2]['items'][0]['search'])
         self.assertIn('windows-updates', d['feeds'])
         etag = r.headers['ETag']
         r2 = self.client.get('/dashboard/api/events?days=30',
