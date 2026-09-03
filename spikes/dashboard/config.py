@@ -87,29 +87,19 @@ def fit_history_days():
                int(get('fit_history_days', 1100)))
 
 
-def min_crashes(channel, product=None):
-    """Minimum crashes today for a signature to be scored.
-
-    Looked up as ``"Product/channel"``, then ``channel``, then ``default``:
-    every product and channel has its own volume and seasonality.
-    """
-    mins = get('min_crashes', {})
-    if product is not None and '{}/{}'.format(product, channel) in mins:
-        return int(mins['{}/{}'.format(product, channel)])
-    return int(mins.get(channel, mins.get('default', 10)))
+def alert_rate():
+    """False-alarm rate per series-day allowed to each severity level; the
+    z thresholds are learned from it per channel (see calibration.py)."""
+    return get('alert_rate', {})
 
 
-def severity_rules():
-    return get('severity', {})
+def volume_share():
+    """Share of the channel's expected day a signature needs in crashes to
+    be flagged (installs: half of it)."""
+    return float(get('volume_share', 0.001))
 
 
-def min_installs(channel, product=None):
-    """Minimum distinct installs today for a signature to be flagged.
-
-    One machine crashing a thousand times is one machine.  Looked up like
-    :func:`min_crashes`.
-    """
-    mins = get('min_installs', {})
-    if product is not None and '{}/{}'.format(product, channel) in mins:
-        return int(mins['{}/{}'.format(product, channel)])
-    return int(mins.get(channel, mins.get('default', 5)))
+def storm_quantile():
+    """Quantile of the channel's crashes-per-install ratios above which a
+    signature is a storm."""
+    return float(get('storm_quantile', 0.995))

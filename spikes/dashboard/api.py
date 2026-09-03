@@ -15,7 +15,8 @@ import requests
 from flask import Blueprint, Response, jsonify, render_template, request
 
 from spikes.logger import logger
-from . import config, events, intraday, models, scoring, seasonal, socorro
+from . import (calibration, config, events, intraday, models, scoring,
+               seasonal, socorro)
 
 
 blueprint = Blueprint('dashboard', __name__, template_folder='templates',
@@ -132,6 +133,7 @@ def score_json(score, series, final=None):
         res['drivers'] = details.get('drivers', [])
         res['storm_share'] = details.get('storm_share', 0.0)
         res['storm_driven'] = bool(details.get('storm_driven'))
+        res['calibration'] = details.get('calibration')
     return res
 
 
@@ -380,8 +382,13 @@ def data_health(now, run, channels, check_count=True):
     return {'status': 'ok', 'since': None, 'detail': None}
 
 
-def thresholds():
-    return config.severity_rules()
+def channel_rules(total_score):
+    """The channel's calibrated severity thresholds, stored with its total's
+    score by the scheduler (calibration.py); Gaussian defaults before the
+    first run."""
+    details = (total_score.details if total_score is not None else None) or {}
+    calib = details.get('calibration') or {}
+    return calib.get('rules') or calibration.calibrate([])['rules']
 
 
 def channel_day(product, channel, today):
@@ -591,6 +598,8 @@ def channel_summary(product, channel, today, now):
                                 day_final(product, channel, yesterday))
         if 'yesterday' in entry else None,
         'counts': counts_of(rows),
+        'thresholds': channel_rules(entry['today']),
+        'calibration': (entry['today'].details or {}).get('calibration'),
         '_rows': rows,
     }
 
@@ -601,7 +610,7 @@ def channel_summary(product, channel, today, now):
 
 def daily_block(product, channel, series_id, today, days, granularity,
                 score_today, prior_fit=None, history_days=None,
-                horizon=None):
+                horizon=None, rules=None):
     """Recompute the fit of a series and return the ``daily`` block and
     the fitted model (see API.md).
 
@@ -643,7 +652,7 @@ def daily_block(product, channel, series_id, today, days, granularity,
     all_dates, observed, expected, zs = (all_dates[cut:], observed[cut:],
                                          expected[cut:], zs[cut:])
     ti = all_dates.index(today)
-    rules = thresholds()
+    rules = rules or calibration.calibrate([])['rules']
     if granularity == 'week':
         agg = seasonal.aggregate_weekly(all_dates, observed, expected, c2,
                                         forecast_after=today)
@@ -880,7 +889,10 @@ def summary():
                          else None),
                      'lag_suspected': bool(run.lag_suspected)}
         if run else None,
-        'data_health': health, 'thresholds': thresholds(),
+        'data_health': health,
+        # per channel: learned from each channel's own data
+        'thresholds': {'{}/{}'.format(c['product'], c['channel']):
+                       c['thresholds'] for c in channels},
         'flag_window_hours': config.get('flag_window_hours', 48),
         'channels': channels, 'alerts': alerts[:50],
         'releases': releases(today - datetime.timedelta(days=730)),
@@ -907,10 +919,11 @@ def channel_view():
     by_series = channel_scores(product, channel, today)
     total_score = by_series[total_id]['today']
     horizon, upcoming = horizon_for(product, channel, today)
+    rules = channel_rules(total_score)
     daily, fit = daily_block(product, channel, total_id, today, days,
                              granularity, total_score,
                              history_days=config.fit_history_days(),
-                             horizon=horizon)
+                             horizon=horizon, rules=rules)
     marks = releases(today - datetime.timedelta(days=days), channel, product)
     s.update({
         'daily': daily,
@@ -923,7 +936,7 @@ def channel_view():
         'signatures': rows,
         'releases': marks + ([upcoming] if upcoming else []),
         'next_release': upcoming,
-        'thresholds': thresholds(),
+        'thresholds': rules,
         'data_health': data_health(now, run, [s], check_count=False),
     })
     return versioned(s, run, product, channel, days, granularity, now=now)
@@ -978,12 +991,14 @@ def signature_view():
         return jsonify({'error': 'signature not scored today'}), 404
     total_id = models.total_series(product, channel, create=False)
     horizon, upcoming = horizon_for(product, channel, today)
+    total_score = by_series.get(total_id, {}).get('today')
+    rules = channel_rules(total_score)
     _, prior = daily_block(product, channel, total_id, today, days, 'day',
-                           by_series.get(total_id, {}).get('today'),
-                           history_days=config.fit_history_days())
+                           total_score, history_days=config.fit_history_days(),
+                           rules=rules)
     daily, fit = daily_block(product, channel, series.id, today, days,
                              granularity, entry['today'], prior_fit=prior,
-                             horizon=horizon)
+                             horizon=horizon, rules=rules)
     yesterday = today - datetime.timedelta(days=1)
     rows = rows_json(product, channel, by_series, today,
                      day_final(product, channel, yesterday), now,

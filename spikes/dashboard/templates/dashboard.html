@@ -15,6 +15,7 @@
       <div class="brand-row">
         <a href="https://www.mozilla.org/" class="brand" aria-label="Mozilla">mozilla</a>
         <h1><a class="dashboard-link" href="https://crash-spikes.herokuapp.com/dashboard.html#all">Crash spikes</a></h1>
+        <button type="button" id="help-btn" class="help-btn" aria-label="How the thresholds are computed" title="Thresholds: what they are, how they are computed">?</button>
       </div>
       <div class="header-right">
         <p id="freshness" class="freshness"></p>
@@ -107,6 +108,14 @@
     <div id="signature-table" class="table-wrap"></div>
   </section>
 </main>
+
+<dialog id="help" class="help" aria-labelledby="help-title">
+  <div class="help-head">
+    <h2 id="help-title">Thresholds</h2>
+    <button type="button" id="help-close" class="chart-btn" aria-label="Close">Close</button>
+  </div>
+  <div id="help-body" class="help-body"></div>
+</dialog>
 
 <script type="module" src="{{ url_for('dashboard.static', filename='dashboard.js') }}"></script>
 </body>

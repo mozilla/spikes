@@ -215,31 +215,49 @@ y[t] ~ level[t] * weekly[weekday(t)] * cycle[t mod 28] * yearly[week(t)]
 
 ### Severity
 
+No hand-set threshold: every one is learned from the channel's own data
+(`calibration.py`; the page's **?** button shows the current values).
+
 | label | condition |
 |-------|-----------|
-| `major` | z ≥ 8 and ratio ≥ 2 |
-| `spike` | z ≥ 5 and ratio ≥ 1.5 |
-| `watch` | z ≥ 3 and ratio ≥ 1.25 |
-| `drop` | z ≤ −4 and ratio ≤ 0.6 and expected ≥ 20 (cumulative only) |
+| `major`, `spike`, `watch` | z ≥ the channel's threshold for the level |
+| `drop` | z ≤ the channel's drop threshold and expected ≥ the volume floor (cumulative only) |
 
-taken as the worst of the cumulative and the recent score, then gated:
+The thresholds are quantiles of the channel's one-step-ahead z-scores,
+pooled over its scored signatures (each fit caches a histogram of its z
+with the model).  The config only states the false-alarm rate per
+signature and day each level may have (`alert_rate`: watch 1.5 %, spike
+0.15 %, major 0.015 %, drop 0.15 % in the lower tail): with 200
+signatures, watch is three false flags a day.  Measured on real data the
+tails are far heavier than Gaussian and differ by channel (z ≥ 3 on 2.9 %
+of the series-days on Firefox release, 5.5 % on Fenix release), so a fixed
+z would mean different things per channel; the learned bar is higher where
+the residuals are noisier.  The Gaussian value for the same rate is a floor
+(real tails are never lighter) and is used outright under 300 pooled
+series-days; a level whose tail holds fewer than 5 points is extrapolated
+with an exponential tail fitted on the top of the sample.  The ratio gates
+of the first version are gone: the over-dispersion term of the score
+already grows with the count.  The severity is the worst of the cumulative
+and the recent score, then gated:
 
-* a signature needs `min_crashes` (per channel, optionally per
-  `Product/channel`) over the **last 24 hours**: today so far plus the part
-  of yesterday after this hour (from its hourly split), so the per-day
-  floor means the same at 06:00 UTC as at 22:00 and does not hide a spike
-  that already scores high in the European morning;
+* **volume floor**: a signature needs `volume_share` (0.1 %) of the
+  channel's expected day in crashes (at least 2) over the **last 24
+  hours**: today so far plus the part of yesterday after this hour (from
+  its hourly split), so the floor means the same at 06:00 UTC as at 22:00
+  and does not hide a spike that already scores high in the European
+  morning;
 * **installs are first class**: one machine crashing a thousand times is
-  one machine.  An upward severity also needs at least `min_installs`
+  one machine.  An upward severity also needs half the crash floor in
   distinct installs over the last 24 hours (today's plus yesterday's scaled
   by the share of its day after this hour, an estimate since installs are
   not additive) *and* an install-based score (`installs` vs
   `expected * install_share`, where `install_share` is the signature's
   usual installs/crashes ratio over the last 28 days) that reaches the
-  same level: the final severity is the lower of the two.  A **storm**
-  (≤ 5 installs with ≥ 5 crashes each, or ≥ 20 crashes per install) is a
-  badge and a count, never an alert.  The channel total is gated the same
-  way with the channel's distinct installs, and when ≥ 50 % of a total's
+  same level: the final severity is the lower of the two.  A **storm** is a
+  signature whose crashes per install exceed the `storm_quantile` (99.5 %)
+  quantile of the channel's own signatures over the last 4 weeks: a badge
+  and a count, never an alert.  The channel total is gated the same way
+  with the channel's distinct installs, and when ≥ 50 % of a total's
   excess comes from storm signatures it is marked `storm_driven` and not
   reported as a spike;
 * **hysteresis**: a severity only steps down once z is one unit under its

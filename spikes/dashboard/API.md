@@ -148,15 +148,28 @@ today's own state.
                "queries": 12, "failures": 0, "message": null, "lag_suspected": false},
   "data_health": {"status": "ok",     // ok|stale_local|stale_upstream|backfilling
                   "since": null, "detail": "..."},
-  "thresholds": {"watch": {"z": 3, "ratio": 1.25}, "spike": {"z": 5, "ratio": 1.5},
-                 "major": {"z": 8, "ratio": 2}, "drop": {"z": -4, "ratio": 0.6}},
+  "thresholds": {"Firefox/release": {"watch": {"z": 4.3}, "spike": {"z": 9.8},
+                                     "major": {"z": 27.1}, "drop": {"z": -6.2}}},  // per channel,
+                                      // learned from its own data (see `calibration` below)
   "flag_window_hours": 48,            // how long a previous day's flag stays listed
   "channels": [
     {"product": "Firefox", "channel": "release", "day": "2026-09-02",
      "as_of": "...", "history_days": 180,
      "total": Score, "yesterday": Score,           // yesterday may be null
      "counts": {"major": 1, "spike": 2, "watch": 5, "drop": 0, "new": 3,
-                "storm": 1, "scored": 312, "noise": 4}}
+                "storm": 1, "scored": 312, "noise": 4},
+     "thresholds": {"watch": {"z": 4.3}, "spike": {"z": 9.8}, "major": {"z": 27.1}, "drop": {"z": -6.2}},
+     "calibration": {                             // how the thresholds were learned (calibration.py)
+       "rules": {...},                            // == thresholds
+       "method": {"watch": "empirical", "spike": "empirical", "major": "extrapolated", "drop": "empirical"},
+       "gaussian": {"watch": 2.17, "spike": 2.97, "major": 3.62, "drop": -2.97},  // the floors
+       "rates": {"watch": 0.015, "spike": 0.0015, "major": 0.00015, "drop": 0.0015},
+       "sample": 34210, "series": 190,            // pooled series-days of one-step-ahead z, signatures
+       "tail": {"watch": 0.028, "spike": 0.004, "major": 0.0003, "drop": 0.002},  // share beyond each
+       "min_crashes": 21, "min_installs": 10,     // volume floors: volume_share of the expected day
+       "volume_share": 0.001,
+       "storm_ratio": 7.4, "storm_quantile": 0.995  // crashes per install above which a storm
+     }}
   ],
   "alerts": [Row],                    // union of flagged rows across channels, <= 50,
                                       // sorted by severity rank then excess
@@ -172,7 +185,8 @@ today's own state.
   "total": Score, "yesterday": Score,
   "daily": SeriesBlock.daily, "hourly": SeriesBlock.hourly, "model": SeriesBlock.model,
   "signatures": [Row],                // every scored row (flagged and not)
-  "counts": {...}, "thresholds": {...},
+  "counts": {...},
+  "thresholds": {...}, "calibration": {...},   // this channel's, as in the summary
   "releases": [...],                  // major releases; ESR point releases ("140.15.0esr") for channel esr;
                                       // plus the upcoming one {"date", "version", "upcoming": true}
   "next_release": {"date": "2026-09-15", "version": "156.0", "upcoming": true},  // or null: the end of

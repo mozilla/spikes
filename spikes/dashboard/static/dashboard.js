@@ -240,16 +240,23 @@ function rowRank(row) {
   return SEV_RANK[s] ?? SEV_RANK.ok;
 }
 
+/** The severity thresholds of the channel on screen (learned per channel, see the ? view). */
+function currentRules() {
+  if (app.channel?.thresholds) return app.channel.thresholds;
+  const all = app.summary?.thresholds || {};
+  const keys = Object.keys(all);
+  return keys.length === 1 ? all[keys[0]] : null;
+}
+
 /** Plain-language meaning of a chip, with the thresholds the server uses. */
 function chipHelp(kind) {
-  const t = app.summary?.thresholds || {};
-  const above = (r) => (r >= 2 ? `${r}x the expected count` : `${Math.round((r - 1) * 100)} % above it`);
-  const rule = (k) => (t[k] ? `at least ${t[k].z} standard deviations above the seasonal expectation and ${above(t[k].ratio)}` : 'well above the seasonal expectation');
+  const t = currentRules() || {};
+  const rule = (k) => (t[k] ? `at least ${t[k].z} standard deviations above the seasonal expectation (this channel's learned threshold, see ?)` : 'above the seasonal expectation by this channel\'s learned threshold (see ?)');
   switch (kind) {
     case 'major': return `Major spike: crashes today are ${rule('major')}, and the number of distinct installs rose as much. The strongest alert.`;
     case 'spike': return `Spike: crashes today are ${rule('spike')}, and the number of distinct installs rose as much.`;
     case 'watch': return `Watch: crashes today are ${rule('watch')}. Worth a look, not yet a confirmed spike.`;
-    case 'drop': return `Drop: crashes today are ${t.drop ? `at least ${Math.abs(t.drop.z)} standard deviations below the seasonal expectation and ${Math.round(t.drop.ratio * 100)} % of it or less` : 'well below the seasonal expectation'} (a fix landed, or a data problem).`;
+    case 'drop': return `Drop: crashes today are ${t.drop ? `at least ${Math.abs(t.drop.z)} standard deviations below the seasonal expectation (this channel's learned threshold)` : 'well below the seasonal expectation'} (a fix landed, or a data problem).`;
     case 'new': return 'New: not seen above the reporting cut on any of the previous 14 days.';
     case 'storm': case 'crash-loop': return 'Storm / crash loop: many crashes from a handful of installs (few machines crashing repeatedly), or 20+ crashes per install. Not a regression across users, so it is never an alert.';
     case 'noise': return 'Noise: a signature listed in the skiplist (processing artefacts such as shutdown kills or empty dumps). Shown, never alerted on.';
@@ -1247,8 +1254,73 @@ function focusSignature(sig) {
   setTimeout(() => tr.classList.remove('is-target'), 2500);
 }
 
+// ---------------------------------------------------------------- thresholds help (?)
+// Every threshold is learned from each channel's own data by the scheduler
+// (calibration.py); this view shows the current values and the method.
+function fmtPct(x, digits = 2) {
+  return x == null ? '—' : `${(x * 100).toFixed(digits)} %`;
+}
+
+function renderHelp() {
+  const body = $('help-body');
+  body.textContent = '';
+  const channels = app.summary?.channels || [];
+  const calib = channels.find((c) => c.calibration)?.calibration;
+  const rates = calib?.rates || { watch: 0.015, spike: 0.0015, major: 0.00015, drop: 0.0015 };
+  const method = el('div', { class: 'help-method' });
+  method.append(el('h3', {}, 'How'));
+  const ul = el('ul');
+  const li = (...nodes) => ul.append(el('li', {}, ...nodes));
+  li(el('b', {}, 'Score. '), 'For every signature and day, z = distance between the observed count and the seasonal expectation, on the Anscombe scale, divided by the fitted dispersion (over-dispersion grows with the count, so no ratio gate is needed).');
+  li(el('b', {}, 'Severity thresholds. '), `Per channel, the quantiles of its own one-step-ahead z over the last months, pooled over all its scored signatures. The only setting is the false-alarm rate per signature and day each level may have: watch ${fmtPct(rates.watch)}, spike ${fmtPct(rates.spike)}, major ${fmtPct(rates.major)}, drop ${fmtPct(rates.drop)} (lower tail). A noisy channel gets a higher bar by itself.`);
+  li(el('b', {}, 'Floor. '), 'The Gaussian value for the same rate: real tails are never lighter. It is used outright when the pooled sample is under 300 series-days; when a level\'s tail holds fewer than 5 points it is extrapolated from an exponential fit of the top of the sample ("extrapolated" below).');
+  li(el('b', {}, 'Volume floors. '), `A signature must reach ${fmtPct(calib?.volume_share ?? 0.001, 1)} of its channel's expected daily crashes over the last 24 hours (installs: half of it, at least 2) to be flagged at all.`);
+  li(el('b', {}, 'Storm. '), `Crashes per install above the ${fmtPct(calib?.storm_quantile ?? 0.995, 1)} quantile of the channel's own signatures over the last 4 weeks: a badge, never an alert.`);
+  li(el('b', {}, 'Installs. '), 'An upward severity also needs the distinct-install count to deviate as much as the crash count; the final severity is the lower of the two.');
+  li(el('b', {}, 'Refresh. '), 'Recomputed at every scheduler run (5 min) from the fits cached with the models (refitted every 6 h).');
+  method.append(ul);
+  body.append(method);
+
+  const table = el('table', { class: 'rows help-table' });
+  const head = el('tr');
+  for (const h of ['Channel', 'watch', 'spike', 'major', 'drop', 'min crashes', 'min installs', 'storm ≥ crashes/install', 'sample', 'days above watch']) head.append(el('th', { scope: 'col' }, h));
+  table.append(el('thead', {}, head));
+  const tbody = el('tbody');
+  for (const c of channels) {
+    const k = c.calibration;
+    const tr = el('tr');
+    tr.append(el('td', {}, `${c.product} ${c.channel}`));
+    for (const level of ['watch', 'spike', 'major', 'drop']) {
+      const z = c.thresholds?.[level]?.z;
+      const how = k?.method?.[level];
+      const g = k?.gaussian?.[level];
+      const cell = el('td', { class: 'num', title: how ? `${how}${g != null ? `; Gaussian floor ${g}` : ''}` : '' }, z == null ? '—' : fmtZ(z));
+      if (how && how !== 'empirical') cell.append(el('span', { class: 'muted' }, how === 'gaussian' ? ' (Gaussian)' : ' (extrapolated)'));
+      tr.append(cell);
+    }
+    tr.append(el('td', { class: 'num' }, k ? fmtInt(k.min_crashes) : '—'));
+    tr.append(el('td', { class: 'num' }, k ? fmtInt(k.min_installs) : '—'));
+    tr.append(el('td', { class: 'num' }, k?.storm_ratio != null ? k.storm_ratio.toFixed(1) : '—'));
+    tr.append(el('td', { class: 'num', title: 'series-days of one-step-ahead z pooled over the scored signatures' }, k ? `${fmtInt(k.sample)} (${fmtInt(k.series)} sig.)` : '—'));
+    tr.append(el('td', { class: 'num', title: 'share of the pooled series-days at or above the watch threshold (includes real spikes)' }, k?.tail?.watch != null ? fmtPct(k.tail.watch) : '—'));
+    tbody.append(tr);
+  }
+  table.append(tbody);
+  body.append(el('h3', {}, 'Now'), table);
+}
+
+function openHelp() {
+  renderHelp();
+  const dlg = $('help');
+  if (typeof dlg.showModal === 'function') dlg.showModal();
+  else dlg.setAttribute('open', '');
+}
+
 // ---------------------------------------------------------------- controls
 function bindControls() {
+  $('help-btn').addEventListener('click', openHelp);
+  $('help-close').addEventListener('click', () => $('help').close());
+  $('help').addEventListener('click', (e) => { if (e.target === e.currentTarget) e.currentTarget.close(); }); // backdrop
   // Cards are rebuilt on refresh, so their click handler is delegated.
   $('channel-cards').addEventListener('click', (e) => {
     const card = e.target.closest('.card');

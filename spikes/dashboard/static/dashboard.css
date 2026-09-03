@@ -242,6 +242,43 @@ main > section { margin-top: 28px; }
 /* a flag carried over from a previous day: "major  yesterday" */
 .flag-when { color: var(--ink-2); font-size: 11px; white-space: nowrap; }
 
+/* "?" next to the title: the thresholds view */
+.help-btn {
+  width: 22px;
+  height: 22px;
+  margin-left: 6px;
+  border: var(--border-control);
+  border-radius: 50%;
+  background: transparent;
+  color: var(--ink-2);
+  font: 600 13px/20px var(--font);
+  cursor: pointer;
+  align-self: center;
+
+  &:hover { color: var(--ink); border-color: var(--muted); }
+  &:focus-visible { outline: var(--focus-ring); outline-offset: 1px; }
+}
+dialog.help {
+  width: min(1100px, calc(100vw - 32px));
+  max-height: calc(100vh - 32px);
+  padding: 16px 20px 20px;
+  border: var(--border-control);
+  border-radius: var(--radius-control);
+  background: var(--surface);
+  color: var(--ink);
+  font-family: var(--font);
+
+  &::backdrop { background: rgb(0 0 0 / 35%); }
+  & .help-head { display: flex; justify-content: space-between; align-items: center; gap: 12px; margin-bottom: 8px; }
+  & h2 { margin: 0; font-size: 18px; }
+  & h3 { margin: 12px 0 6px; font-size: 13px; color: var(--ink-2); text-transform: uppercase; letter-spacing: 0.04em; }
+  & .help-method ul { margin: 0; padding-left: 18px; line-height: 1.5; font-size: 13.5px; }
+  & .help-method li { margin: 3px 0; }
+  & .help-table { width: 100%; }
+  & .help-table td, & .help-table th { padding: 4px 8px; white-space: nowrap; }
+  & .muted { color: var(--ink-2); font-weight: 400; font-size: 11px; }
+}
+
 /* confidence dots */
 .dots { color: var(--ink-2); letter-spacing: 1px; font-size: 9px; vertical-align: 1px; margin-left: 4px; }
 

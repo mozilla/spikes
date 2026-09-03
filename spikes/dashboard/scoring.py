@@ -29,7 +29,7 @@ import datetime
 import numpy as np
 
 from spikes.logger import logger
-from . import config, intraday, models, seasonal
+from . import calibration, config, intraday, models, seasonal
 
 
 RANK = {'ok': 0, 'drop': 1, 'watch': 2, 'spike': 3, 'major': 4}
@@ -38,16 +38,21 @@ PROFILE_HISTORY_DAYS = 56
 
 
 def severity_of(z, ratio, rules, expected=None, min_expected_drop=0.0):
-    """Severity label from a score and the observed/expected ratio."""
+    """Severity label from a score.
+
+    *rules* are the channel's calibrated thresholds ``{'watch': {'z'},
+    'spike': {'z'}, 'major': {'z'}, 'drop': {'z'}}`` (calibration.py).
+    *ratio* is accepted for compatibility and ignored: the over-dispersion
+    term of the score already grows with the count.
+    """
     if z is None or not np.isfinite(z):
         return 'ok'
-    ratio = float('inf') if ratio is None else ratio
     for label in ('major', 'spike', 'watch'):
         rule = rules.get(label)
-        if rule and z >= rule['z'] and ratio >= rule['ratio']:
+        if rule and z >= rule['z']:
             return label
     rule = rules.get('drop')
-    if rule and z <= rule['z'] and ratio <= rule['ratio'] and \
+    if rule and z <= rule['z'] and \
             (expected is None or expected >= min_expected_drop):
         return 'drop'
     return 'ok'
@@ -78,7 +83,7 @@ class Cached:
 
     def __init__(self, level, trend, c2, dispersion, factors, borrowed,
                  components, install_share, level_change_28, last_day,
-                 history_days, recent_days_seen, fitted_at):
+                 history_days, recent_days_seen, fitted_at, z_hist=None):
         self.level = level
         self.trend = trend
         self.c2 = c2
@@ -92,6 +97,9 @@ class Cached:
         self.history_days = history_days
         self.recent_days_seen = recent_days_seen
         self.fitted_at = fitted_at
+        # histogram of the one-step-ahead z of the history: pooled over the
+        # channel's series to learn its severity thresholds
+        self.z_hist = z_hist
 
     @classmethod
     def from_fit(cls, fit, last_day, install_share, recent_days_seen,
@@ -100,7 +108,8 @@ class Cached:
         return cls(fit.next_level, fit.next_slope, fit.c2, fit.dispersion,
                    s['factors'], s['borrowed'], s['components'],
                    install_share, fit.level_change(28), last_day,
-                   s['history_days'], recent_days_seen, fitted_at)
+                   s['history_days'], recent_days_seen, fitted_at,
+                   calibration.histogram(fit.z, fit.expected))
 
     @classmethod
     def from_row(cls, row):
@@ -109,7 +118,7 @@ class Cached:
                    row.factors, row.borrowed, details.get('components'),
                    row.install_share, row.level_change_28, row.last_day,
                    row.history_days, details.get('recent_days_seen', 1),
-                   row.fitted_at)
+                   row.fitted_at, details.get('z_hist'))
 
     def to_row(self, series_id):
         return {'series_id': series_id, 'fitted_at': self.fitted_at,
@@ -120,7 +129,8 @@ class Cached:
                 'install_share': self.install_share,
                 'factors': self.factors, 'borrowed': list(self.borrowed),
                 'components': {'components': self.components,
-                               'recent_days_seen': self.recent_days_seen},
+                               'recent_days_seen': self.recent_days_seen,
+                               'z_hist': self.z_hist},
                 'level_change_28': self.level_change_28}
 
     def expected(self, date):
@@ -192,6 +202,7 @@ class Context:
     """Everything needed to score the series of one channel."""
 
     def __init__(self, product, channel, today, as_of, profile, rules,
+                 min_crashes, min_installs, storm_ratio=None,
                  installs_as_of=None):
         self.product = product
         self.channel = channel
@@ -201,9 +212,11 @@ class Context:
         # distinct installs are refreshed less often than the counts
         self.installs_as_of = installs_as_of or as_of
         self.profile = profile
+        # all learned from the channel's own data (calibration.py)
         self.rules = rules
-        self.min_crashes = config.min_crashes(channel, product)
-        self.min_installs = config.min_installs(channel, product)
+        self.min_crashes = min_crashes
+        self.min_installs = min_installs
+        self.storm_ratio = storm_ratio
         self.pace = None
         self.hour = intraday.hour_of(as_of)
 
@@ -316,8 +329,8 @@ def score_today(ctx, series, cached, daily_today, hourly_today,
     projected, lo, hi = _projection(observed, elapsed, cached.c2)
     recent, reason = _recent(ctx, cached, hourly_today, hourly_yesterday,
                              e_day, e_yday)
-    min_drop = config.get('min_expected_drop', 20)
-    sev = severity_of(z, ratio, ctx.rules, expected, min_drop)
+    # a drop needs enough expected crashes to be a drop of something
+    sev = severity_of(z, ratio, ctx.rules, expected, ctx.min_crashes)
     z_recent = recent['z'] if recent else None
     if z_recent is not None:
         sev_recent = severity_of(z_recent, recent['ratio'], ctx.rules)
@@ -344,9 +357,8 @@ def score_today(ctx, series, cached, daily_today, hourly_today,
     per_install = None
     if installs is not None and observed >= ctx.min_crashes:
         per_install = installs_crashes / float(max(installs, 1))
-        if (installs <= config.get('storm_max_installs', 5) and
-                per_install >= config.get('storm_min_ratio', 5)) or \
-                per_install >= config.get('storm_loop_ratio', 20):
+        # storm: crashes per install in the channel's own extreme tail
+        if ctx.storm_ratio is not None and per_install >= ctx.storm_ratio:
             storm = True
     if installs is not None and cached.install_share:
         # the install count is as of its own fetch time
@@ -438,8 +450,7 @@ def score_yesterday(ctx, series, cached, fit, daily_yesterday, previous):
         expected = cached.expected(ctx.yesterday)
     z = seasonal.score(observed, expected, cached.c2)
     ratio = observed / expected if expected > 0 else None
-    sev = severity_of(z, ratio, ctx.rules, expected,
-                      config.get('min_expected_drop', 20))
+    sev = severity_of(z, ratio, ctx.rules, expected, ctx.min_crashes)
     e_inst = z_inst = None
     if installs is not None and cached.install_share:
         e_inst = expected * cached.install_share
@@ -528,7 +539,6 @@ def score_channel(product, channel, today, now, fits_budget=None,
         stale_fits (bool): the history is still being backfilled: cache
             the fits but mark them stale so they are redone next run.
     """
-    rules = config.severity_rules()
     day_row = models.get_day(product, channel, today)
     if day_row is None or day_row.as_of is None:
         return None
@@ -564,13 +574,15 @@ def score_channel(product, channel, today, now, fits_budget=None,
         # the channel fit is cheap and is the prior of every signature:
         # always recompute it so borrowed factors are fresh
         total_fit, cached_total = fit_series(
-            total_daily, day_rows, start_total, yesterday, None,
-            config.min_crashes(channel, product), now)
+            total_daily, day_rows, start_total, yesterday, None, 1, now)
         models.upsert(models.Model, [cached_total.to_row(total_id)],
                       ['series_id'])
         if stale_fits:
             cached_total.fitted_at = now - datetime.timedelta(
                 hours=config.get('refit_hours', 6))
+    # volume floors: a share of the channel's expected day
+    min_crashes, min_installs = calibration.volume_floors(
+        cached_total.expected(today), config.volume_share())
     hourly_total = models.load_hourly(
         [total_id], [today - datetime.timedelta(days=i)
                      for i in range(PROFILE_HISTORY_DAYS + 1)]
@@ -579,11 +591,7 @@ def score_channel(product, channel, today, now, fits_budget=None,
         hourly_total, today,
         profile_days=config.get('profile_days', 28),
         weekday_days=config.get('profile_weekday_days', 8))
-    ctx = Context(product, channel, today, as_of, profile, rules,
-                  installs_as_of=day_row.installs_as_of)
-
     # -- candidates
-    min_crashes = ctx.min_crashes
     recent = models.recent_max(product, channel,
                                today - datetime.timedelta(days=28))
     both = models.channel_daily(product, channel, [today, yesterday])
@@ -631,6 +639,24 @@ def score_channel(product, channel, today, now, fits_budget=None,
     for sid in candidates:
         if sid not in cached:
             cached[sid] = Cached.from_row(models_by_id[sid])
+
+    # -- thresholds learned from the channel's own data: the severity
+    #    levels from the pooled one-step-ahead z of the candidates' fits
+    #    (histograms cached with the models), the storm ratio from its
+    #    crashes-per-install distribution
+    calib = calibration.calibrate([cached[sid].z_hist for sid in candidates],
+                                  config.alert_rate())
+    rules = calib['rules']
+    ratios = models.load_daily(candidates, today - datetime.timedelta(
+        days=config.get('install_share_days', 28)), yesterday)
+    calib['storm_ratio'] = calibration.storm_ratio(
+        ratios, min_crashes, config.storm_quantile())
+    calib['min_crashes'], calib['min_installs'] = min_crashes, min_installs
+    calib['volume_share'] = config.volume_share()
+    calib['storm_quantile'] = config.storm_quantile()
+    ctx = Context(product, channel, today, as_of, profile, rules,
+                  min_crashes, min_installs, storm_ratio=calib['storm_ratio'],
+                  installs_as_of=day_row.installs_as_of)
 
     # -- realised pace of the channel (robust to processing lag)
     weekday = today.weekday()
@@ -707,6 +733,7 @@ def score_channel(product, channel, today, now, fits_budget=None,
                 total_row[k] = getattr(prev, k) if prev is not None \
                     else None
     total_row['details']['components'] = cached_total.components
+    total_row['details']['calibration'] = calib
     total_row['details']['profile_days'] = profile.ndays if profile else 0
     rows.append(total_row)
     ty = score_yesterday(ctx, series_by_id[total_id], cached_total, total_fit,
