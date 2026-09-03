@@ -42,6 +42,25 @@ class HelpersTest(unittest.TestCase):
         self.assertTrue(np.isnan(trailing[0]))
         np.testing.assert_allclose(trailing[1:], [1, 1.5, 2, 3, 4, 5])
 
+    def test_nanmedian_rows(self):
+        rng = np.random.default_rng(0)
+        a = rng.normal(size=(40, 9))
+        a[rng.random(a.shape) < 0.4] = np.nan
+        a[3] = np.nan  # an empty row
+        a[5, :4] = np.nan  # an odd count of values
+        with np.errstate(invalid='ignore'):
+            ref = np.nanmedian(a, axis=1)
+        got = S._nanmedian_rows(a)
+        np.testing.assert_array_equal(np.isnan(got), np.isnan(ref))
+        np.testing.assert_allclose(got[~np.isnan(ref)], ref[~np.isnan(ref)])
+
+    def test_smooth_circular(self):
+        f = np.array([1.0, 5.0, 2.0, 3.0, 9.0])
+        # median over (i-1, i, i+1), wrapping around the ends
+        np.testing.assert_allclose(S._smooth_circular(f, 1),
+                                   [5.0, 2.0, 3.0, 3.0, 3.0])
+        self.assertIs(S._smooth_circular(f, 0), f)
+
     def test_rolling_level_follows_trend(self):
         x = 100.0 + 5.0 * np.arange(30)
         level, slope = S.rolling_level(x, 14, trend_min_level=50)

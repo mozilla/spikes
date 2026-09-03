@@ -31,10 +31,9 @@ Only numpy/scipy are used; everything is vectorised.
 """
 
 import datetime
-import warnings
 
 import numpy as np
-from scipy import stats
+from scipy import ndimage, special, stats
 
 
 MAD_TO_SIGMA = 1.4826
@@ -113,7 +112,11 @@ def anscombe_inverse(e, a):
 
 
 def robust_scale(a, floor=1.0):
-    """``1.4826 * MAD`` of the finite values of *a*, floored."""
+    """``1.4826 * MAD`` of the finite values of *a*, floored.
+
+    (``scipy.stats.median_abs_deviation`` does the same but its nan-policy
+    decorator costs ~300 us per call; this is called seven times per fit.)
+    """
     a = np.asarray(a, dtype=np.float64)
     a = a[np.isfinite(a)]
     if a.size < 3:
@@ -150,21 +153,35 @@ def score(y, e, c2, extra=0.0):
         return float(anscombe(y, e) / scale(e, rel))
     e = max(e, 0.05)
     k = int(round(y))
+    # mid-p upper tail: P(Y > k) + P(Y = k) / 2
     if rel * e < 0.1:
-        dist = stats.poisson(e)
+        p_upper = stats.poisson.sf(k, e) + 0.5 * stats.poisson.pmf(k, e)
     else:
         r = 1.0 / rel
-        dist = stats.nbinom(r, r / (r + e))
-    # mid-p upper tail: P(Y > k) + P(Y = k) / 2
-    p_upper = float(dist.sf(k) + 0.5 * dist.pmf(k))
-    p_upper = min(max(p_upper, 1e-300), 1.0 - 1e-16)
-    return float(stats.norm.isf(p_upper))
+        p = r / (r + e)
+        p_upper = stats.nbinom.sf(k, r, p) + 0.5 * stats.nbinom.pmf(k, r, p)
+    p_upper = min(max(float(p_upper), 1e-300), 1.0 - 1e-16)
+    return float(-special.ndtri(p_upper))
 
 
 def band(e, k, c2):
     """Counts ``(lo, hi)`` at ``+-k`` scales around *e*."""
     s = scale(e, c2)
     return anscombe_inverse(e, -k * s), anscombe_inverse(e, k * s)
+
+
+def _nanmedian_rows(a):
+    """``np.nanmedian(a, axis=1)`` without numpy's masked-array slow path.
+
+    NaN sorts last, so the median of a row is read at the middle of its
+    non-NaN prefix.  A row without a value gives NaN.
+    """
+    s = np.sort(a, axis=1)
+    cnt = np.sum(~np.isnan(a), axis=1)
+    rows = np.arange(a.shape[0])
+    lo = np.maximum(cnt - 1, 0) // 2
+    hi = np.maximum(cnt, 1) // 2
+    return np.where(cnt > 0, 0.5 * (s[rows, lo] + s[rows, hi]), np.nan)
 
 
 def rolling_median(x, window, center=True):
@@ -187,9 +204,7 @@ def rolling_median(x, window, center=True):
         padded = np.concatenate([np.full(window, np.nan), x])
         width = window
     windows = np.lib.stride_tricks.sliding_window_view(padded, width)[:n]
-    with warnings.catch_warnings():
-        warnings.simplefilter('ignore', category=RuntimeWarning)
-        return np.nanmedian(windows, axis=1)
+    return _nanmedian_rows(windows)
 
 
 def rolling_level(x, window, trend_min_level, horizon=1):
@@ -212,35 +227,27 @@ def rolling_level(x, window, trend_min_level, horizon=1):
     padded = np.concatenate([np.full(window, np.nan), x,
                              np.full(horizon, np.nan)])
     win = np.lib.stride_tricks.sliding_window_view(padded, window)[:m]
-    with warnings.catch_warnings():
-        warnings.simplefilter('ignore', category=RuntimeWarning)
-        med = np.nanmedian(win, axis=1)
-        i, j = np.triu_indices(window, k=1)
-        slopes = (win[:, j] - win[:, i]) / (j - i)
-        slope = np.nanmedian(slopes, axis=1)
+    med = _nanmedian_rows(win)
+    i, j = np.triu_indices(window, k=1)
+    slopes = (win[:, j] - win[:, i]) / (j - i)
+    slope = _nanmedian_rows(slopes)
     slope = np.where(np.isfinite(slope), slope, 0.0)
     limit = MAX_SLOPE * np.maximum(med, 0)
     slope = np.clip(slope, -limit, limit)
     slope = np.where(med >= trend_min_level, slope, 0.0)
     # project the window values to the forecast point (offset window)
     offsets = window - np.arange(window)
-    with warnings.catch_warnings():
-        warnings.simplefilter('ignore', category=RuntimeWarning)
-        level = np.nanmedian(win + slope[:, None] * offsets[None, :], axis=1)
+    level = _nanmedian_rows(win + slope[:, None] * offsets[None, :])
     level = np.maximum(level, 0.0)
     # the first horizon-1 entries beyond t = 0 are unusable anyway
     return level, slope
 
 
 def _smooth_circular(f, half):
+    """Circular running median of half-width *half*."""
     if half <= 0:
         return f
-    n = f.size
-    out = np.empty(n)
-    for i in range(n):
-        idx = [(i + k) % n for k in range(-half, half + 1)]
-        out[i] = np.nanmedian(f[idx])
-    return out
+    return ndimage.median_filter(f, size=2 * half + 1, mode='wrap')
 
 
 def _phase_factors(ratio, phase, comp, prior=None, weight=1.0):
@@ -257,18 +264,19 @@ def _phase_factors(ratio, phase, comp, prior=None, weight=1.0):
     log space).
     """
     target = np.ones(comp.nphases) if prior is None else np.asarray(prior)
-    raw = target.copy()
-    counts = np.zeros(comp.nphases)
-    for k in range(comp.nphases):
-        vals = ratio[(phase == k) & np.isfinite(ratio)]
-        if vals.size:
-            raw[k] = float(np.median(vals))
-            counts[k] = vals.size
+    finite = np.isfinite(ratio)
+    vals, labels = ratio[finite], phase[finite]
+    counts = np.bincount(labels, minlength=comp.nphases).astype(np.float64)
     seen = counts > 0
+    raw = target.copy()
+    if vals.size:
+        # median per phase in one pass (unseen phases get a junk value)
+        med = ndimage.median(vals, labels=labels,
+                             index=np.arange(comp.nphases))
+        raw[seen] = np.asarray(med, dtype=np.float64)[seen]
     if np.sum(seen) < 2 or weight <= 0:
         return target.copy()
-    finite = np.isfinite(ratio)
-    resid = ratio[finite] - raw[phase[finite]]
+    resid = vals - raw[labels]
     sigma = robust_scale(resid, floor=0.0)
     dev = raw[seen] - target[seen]
     spread = float(np.var(dev, ddof=1))
@@ -287,12 +295,9 @@ def _phase_factors(ratio, phase, comp, prior=None, weight=1.0):
 
 def _constrain_cycle(f):
     """Remove any weekday effect from the 28-day cycle factors."""
-    f = np.asarray(f, dtype=np.float64).copy()
-    for w in range(7):
-        idx = np.arange(w, 28, 7)
-        m = np.mean(f[idx])
-        if m > 0:
-            f[idx] /= m
+    f = np.asarray(f, dtype=np.float64).reshape(4, 7)
+    m = f.mean(axis=0)  # one mean per weekday
+    f = (f / np.where(m > 0, m, 1.0)).ravel()
     return f / np.mean(f)
 
 
