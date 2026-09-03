@@ -560,6 +560,60 @@ class ScoringTest(DBTestCase):
         self.assertEqual(summary2['fits'], 0)
         self.assertEqual(self.scores()['spiking'].first_flagged_at, first)
 
+    def test_gates_count_the_last_24_hours(self):
+        # 03:00 UTC, an eighth of the day is in.  A quiet signature (5 a
+        # day) spiked yesterday (30 crashes) and has 15 crashes from 8
+        # installs today: far above expectation, but under the esr floors
+        # (20 crashes, 10 installs) if they were checked on today's partial
+        # count alone.  Over the last 24 hours it passes both.
+        now = datetime.datetime(2026, 9, 2, 3, 0, 0)
+        yesterday = TODAY - datetime.timedelta(days=1)
+        seed_channel('Firefox', 'esr', TODAY, now, hour_now=3, seed=1)
+        sid = models.series_ids('Firefox', 'esr', ['overnight'])['overnight']
+        daily, hourly = [], []
+        for i in range(60, -1, -1):
+            d = TODAY - datetime.timedelta(days=i)
+            hours = [0] * 24
+            if d == TODAY:
+                hours[0:3] = [5, 5, 5]
+                installs = 8
+            elif d == yesterday:
+                hours = [1, 1, 1, 1, 1, 1, 1, 1, 2, 2, 1, 1,
+                         1, 1, 2, 2, 1, 1, 1, 1, 2, 2, 1, 1]
+                installs = 25
+            else:
+                for h in (3, 8, 13, 18, 22):
+                    hours[h] = 1
+                installs = 4
+            daily.append({'series_id': sid, 'day': d, 'crashes': sum(hours),
+                          'installs': installs})
+            hourly.append({'series_id': sid, 'day': d, 'hourly': hours})
+            models.update_seen([sid], d)
+        models.upsert(models.Daily, daily, ['series_id', 'day'])
+        models.upsert(models.Hourly, hourly, ['series_id', 'day'])
+        db.session.commit()
+        scoring.score_channel('Firefox', 'esr', TODAY, now)
+        db.session.commit()
+        s = {series.signature: score for score, series in
+             models.load_scores('Firefox', 'esr', [TODAY])}
+        row = s['overnight']
+        self.assertEqual(row.observed, 15)
+        self.assertGreater(row.z, 5)
+        self.assertIn(row.severity, scoring.UPWARD)
+        # 15 today + the 21 hours of yesterday after 03:00 (27 crashes)
+        self.assertEqual(row.details['last24']['crashes'], 42)
+        self.assertGreaterEqual(row.details['last24']['installs'], 10)
+        self.assertEqual(row.last_flagged_at, now)
+        self.assertIsNone(s['stable'].last_flagged_at)
+        # yesterday is scored as a complete day and was a spike too
+        ys = {series.signature: score for score, series in
+              models.load_scores('Firefox', 'esr', [yesterday])}
+        self.assertIn(ys['overnight'].severity, scoring.UPWARD)
+        # a signature with nothing yesterday is still held to the floor:
+        # "brand new" (60 a day from today, ~7 crashes by 03:00) is not
+        # even a candidate yet
+        self.assertNotIn('brand new', s)
+
     def test_lag_guard(self):
         def summaries(nsuspicious):
             ok = {'ratio': 1.0, 'expected': 100, 'z_recent': 0}
@@ -708,6 +762,102 @@ class ApiTest(DBTestCase):
         r = self.client.get('/dashboard/api/channel?product=Firefox'
                             '&channel=beta')
         self.assertEqual(r.status_code, 404)
+
+    def test_flag_window(self):
+        """Yesterday's flags stay listed for 48 h (scores are per UTC day:
+        without this the page is empty in the European morning)."""
+        yesterday = TODAY - datetime.timedelta(days=1)
+        sid = models.get_series('Firefox', 'release', 'stable').id
+
+        def put(**kw):
+            row = {'series_id': sid, 'day': yesterday, 'as_of': NOW,
+                   'partial': False, 'elapsed': 1.0, 'observed': 430,
+                   'expected': 98.0, 'expected_day': 98.0, 'z': 12.0,
+                   'ratio': 4.39, 'excess': 332.0, 'severity': 'ok',
+                   'is_new': False, 'storm': False, 'first_flagged_at': None,
+                   'last_flagged_at': None, 'peak_severity': None,
+                   'peak_z': None, 'peak_excess': None, 'peak_at': None}
+            row.update(kw)
+            models.upsert(models.Score, [row], ['series_id', 'day'])
+            db.session.commit()
+
+        def view():
+            summary = self.client.get('/dashboard/api/summary').get_json()
+            alert = [a for a in summary['alerts']
+                     if a['signature'] == 'stable']
+            ch = self.client.get('/dashboard/api/channel?product=Firefox'
+                                 '&channel=release&days=30').get_json()
+            row = {s['signature']: s for s in ch['signatures']}['stable']
+            return summary, alert[0] if alert else None, row, ch['counts']
+
+        summary, alert, row, counts = view()
+        self.assertEqual(summary['flag_window_hours'], 48)
+        self.assertIsNone(row['flag'])
+        self.assertIsNone(alert)
+        base_major = counts['major']
+        # flagged until the end of yesterday: shown as yesterday's major
+        put(severity='major', peak_severity='major', peak_z=12.0,
+            peak_at=datetime.datetime(2026, 9, 1, 9, 30),
+            first_flagged_at=datetime.datetime(2026, 9, 1, 9, 12),
+            last_flagged_at=datetime.datetime(2026, 9, 1, 23, 57))
+        summary, alert, row, counts = view()
+        self.assertEqual(row['severity'], 'ok')  # today's own state
+        self.assertEqual(row['flag']['severity'], 'major')
+        self.assertEqual(row['flag']['day'], '2026-09-01')
+        self.assertEqual(row['flag']['observed'], 430)
+        self.assertEqual(row['flag']['since'], '2026-09-01T09:12:00Z')
+        self.assertIsNone(row['flag']['peak'])
+        self.assertEqual(row['flagged_days'], 1)
+        self.assertIsNotNone(alert)
+        self.assertEqual(alert['flag']['severity'], 'major')
+        self.assertEqual(counts['major'], base_major + 1)
+        # sorted with the flag: a carried-over major ranks with the majors
+        ch = self.client.get('/dashboard/api/channel?product=Firefox'
+                             '&channel=release&days=30').get_json()
+        names = [s['signature'] for s in ch['signatures']]
+        ranks = [scoring.RANK[api.flag_severity(s)] for s in ch['signatures']]
+        self.assertEqual(ranks, sorted(ranks, reverse=True))
+        self.assertEqual(ranks[names.index('stable')], scoring.RANK['major'])
+        # 49 hours after the last flagged run: gone
+        put(severity='major', peak_severity='major',
+            last_flagged_at=NOW - datetime.timedelta(hours=49))
+        summary, alert, row, counts = view()
+        self.assertIsNone(row['flag'])
+        self.assertIsNone(alert)
+        # a transient spike (stepped down to ok during the day) counts
+        # through its peak; its time falls back to the peak's
+        put(severity='ok', peak_severity='spike', peak_z=6.0,
+            peak_excess=200.0, peak_at=datetime.datetime(2026, 9, 1, 14, 0))
+        summary, alert, row, counts = view()
+        self.assertEqual(row['flag']['severity'], 'spike')
+        self.assertEqual(row['flag']['peak']['z'], 6.0)
+        self.assertEqual(row['flag']['at'], '2026-09-01T14:00:00Z')
+        # a drop has no peak: the end of its day is the reference time
+        put(severity='drop', observed=10, z=-6.0, excess=-88.0)
+        summary, alert, row, counts = view()
+        self.assertEqual(row['flag']['severity'], 'drop')
+        self.assertEqual(row['flag']['at'], '2026-09-02T00:00:00Z')
+        # "new" yesterday is kept as well
+        put(is_new=True)
+        summary, alert, row, counts = view()
+        self.assertEqual(row['flag']['severity'], 'ok')
+        self.assertTrue(row['flag']['is_new'])
+        self.assertIsNotNone(alert)
+        self.assertEqual(counts['new'], 2)  # + the seeded "brand new"
+        # today's own flag wins over a milder carried-over one
+        spiking = models.get_series('Firefox', 'release', 'spiking').id
+        models.upsert(models.Score, [{
+            'series_id': spiking, 'day': yesterday, 'as_of': NOW,
+            'partial': False, 'observed': 130, 'expected': 98.0, 'z': 3.2,
+            'excess': 32.0, 'severity': 'watch', 'peak_severity': 'watch',
+            'last_flagged_at': datetime.datetime(2026, 9, 1, 23, 57),
+            'is_new': False, 'storm': False}], ['series_id', 'day'])
+        db.session.commit()
+        e = api.channel_scores('Firefox', 'release', TODAY)[spiking]
+        flag = api.flag_of(e, NOW)
+        self.assertEqual(flag['day'], '2026-09-02')
+        self.assertEqual(flag['severity'], e['today'].severity)
+        self.assertIn(flag['severity'], ('spike', 'major'))
 
     def test_html(self):
         r = self.client.get('/dashboard.html')

@@ -216,10 +216,15 @@ y[t] ~ level[t] * weekly[weekday(t)] * cycle[t mod 28] * yearly[week(t)]
 taken as the worst of the cumulative and the recent score, then gated:
 
 * a signature needs `min_crashes` (per channel, optionally per
-  `Product/channel`) today;
+  `Product/channel`) over the **last 24 hours**: today so far plus the part
+  of yesterday after this hour (from its hourly split), so the per-day
+  floor means the same at 06:00 UTC as at 22:00 and does not hide a spike
+  that already scores high in the European morning;
 * **installs are first class**: one machine crashing a thousand times is
   one machine.  An upward severity also needs at least `min_installs`
-  distinct installs today *and* an install-based score (`installs` vs
+  distinct installs over the last 24 hours (today's plus yesterday's scaled
+  by the share of its day after this hour, an estimate since installs are
+  not additive) *and* an install-based score (`installs` vs
   `expected * install_share`, where `install_share` is the signature's
   usual installs/crashes ratio over the last 28 days) that reaches the
   same level: the final severity is the lower of the two.  A **storm**
@@ -230,6 +235,17 @@ taken as the worst of the cumulative and the recent score, then gated:
   reported as a spike;
 * **hysteresis**: a severity only steps down once z is one unit under its
   threshold; `first_flagged_at` and the day's peak are kept;
+* **flag window** (`api.flag_of`, `flag_window_hours` = 48): scores are
+  per UTC day, so at 00:00 UTC every live severity restarts from scratch
+  and the page would be empty for the European morning.  A row is
+  therefore *shown* with the worst state it reached today or on a previous
+  day, for 48 hours after the last run that flagged it (`last_flagged_at`;
+  drops and `new` included), marked "yesterday" with that day's numbers.
+  Yesterday's spikes stay listed until the live scoring takes over or the
+  window closes, and a reader in any timezone sees the same list; a spike
+  that lasts longer is re-flagged by the live scores until the model has
+  absorbed it as the new level (it is then a trend, not a spike, and
+  `level_change_28` keeps it visible);
 * **lag guard** (`update.lag_guard`): when at least 4 of the 6 channel
   totals are < 70 % of expectation or have `z_recent ≤ −3` at once,
   Socorro is late, not Firefox: drops are suppressed for the run and the
@@ -248,7 +264,7 @@ flagged signatures and cached on the series for 12 hours.
 `GET /dashboard.html` and the JSON endpoints described in `API.md`
 (`/dashboard/api/summary`, `/channel`, `/signature`).  The page is vanilla
 JS with hand-rolled SVG charts: an overview of the six channels with a
-cross-channel "flagged now" table, then for the selected channel the KPI
+cross-channel "flagged in the last 48 h" table, then for the selected channel the KPI
 tiles (today so far, projected, yesterday), the drivers, the intraday chart
 (hourly bars vs expected, in-progress hour hollow), the daily chart (day or
 week granularity, 30-365 days, expected line and bands, severity markers,

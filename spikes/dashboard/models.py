@@ -177,6 +177,9 @@ class Score(db.Model):
     is_new = db.Column(db.Boolean, nullable=False, default=False)
     storm = db.Column(db.Boolean, nullable=False, default=False)
     first_flagged_at = db.Column(db.DateTime)
+    # last run in which the live severity was flagged (the page keeps a
+    # past day's flag visible for `flag_window_hours` after it)
+    last_flagged_at = db.Column(db.DateTime)
     peak_severity = db.Column(db.String(8))
     peak_z = db.Column(db.Float)
     peak_excess = db.Column(db.Float)

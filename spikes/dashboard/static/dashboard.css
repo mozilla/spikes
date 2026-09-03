@@ -236,6 +236,8 @@ main > section { margin-top: 28px; }
   & input:focus-visible + span { outline: var(--focus-ring); outline-offset: 1px; }
 }
 .badge-set { display: inline-flex; gap: 4px; flex-wrap: nowrap; align-items: center; }
+/* a flag carried over from a previous day: "major  yesterday" */
+.flag-when { color: var(--ink-2); font-size: 11px; white-space: nowrap; }
 
 /* confidence dots */
 .dots { color: var(--ink-2); letter-spacing: 1px; font-size: 9px; vertical-align: 1px; margin-left: 4px; }

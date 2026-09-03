@@ -52,6 +52,7 @@
         "drop": {"z": -4.0, "ratio": 0.6}
     },
     "hysteresis": 1.0,
+    "flag_window_hours": 48,
     "bugs_max_signatures": 150,
 
     "prune_after_days": 120,

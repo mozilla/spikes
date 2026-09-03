@@ -165,19 +165,44 @@ function todayMs() {
   return parseDay(app.channel?.day || app.summary?.channels?.[0]?.day || new Date().toISOString().slice(0, 10));
 }
 
-/** Severity after the data-health rule (drops are demoted when Socorro lags). */
+/** Severity shown: the row's flag (today's live state, or what a previous day reached
+ * within the flag window) after the data-health rule (drops are demoted when Socorro lags). */
 function sevOf(score) {
-  const s = score?.severity || 'ok';
+  const s = score?.flag?.severity || score?.severity || 'ok';
   return s === 'drop' && app.hideDrops ? 'ok' : s;
 }
 
+function isNew(row) {
+  return !!(row?.flag ? row.flag.is_new : row?.is_new);
+}
+
+/** Days between the row's day and the day its flag comes from (0 = today's own state). */
+function flagAge(row) {
+  if (!row?.flag || !row.day || row.flag.day === row.day) return 0;
+  return Math.round((parseDay(row.day) - parseDay(row.flag.day)) / DAY_MS);
+}
+
+function flagWhen(row) {
+  const age = flagAge(row);
+  return age === 1 ? 'yesterday' : age > 1 ? `${age} days ago` : '';
+}
+
+/** "major yesterday: 430 vs 98 expected (z +12.9)" for a carried-over flag. */
+function flagTitle(row) {
+  const f = row.flag;
+  let t = `${f.severity}${isNew(row) ? ', new' : ''} ${flagWhen(row)} (${f.day}): ${fmtInt(f.observed)} vs ${fmtInt(f.expected)} expected`;
+  if (f.z != null) t += ` (z ${fmtZ(f.z)})`;
+  if (f.peak?.z != null) t += `, peak z ${fmtZ(f.peak.z)}`;
+  return t;
+}
+
 function visibleAlerts(summary) {
-  return (summary.alerts || []).filter((row) => !(row.severity === 'drop' && app.hideDrops));
+  return (summary.alerts || []).filter((row) => sevOf(row) !== 'ok' || isNew(row));
 }
 
 function rowRank(row) {
   const s = sevOf(row);
-  if (s === 'ok' && row.is_new) return SEV_RANK.new;
+  if (s === 'ok' && isNew(row)) return SEV_RANK.new;
   return SEV_RANK[s] ?? SEV_RANK.ok;
 }
 
@@ -227,6 +252,11 @@ function plural(n, word) {
   return `${n} ${word}${n === 1 ? '' : 's'}`;
 }
 
+/** How long a flag stays listed after the last run that raised it (server setting). */
+function flagWindowHours() {
+  return app.summary?.flag_window_hours || 48;
+}
+
 function displayedSeverities(kinds = COUNT_SEVERITIES) {
   return app.hideDrops ? kinds.filter((kind) => kind !== 'drop') : kinds;
 }
@@ -262,20 +292,27 @@ function midTruncate(s, max = 70) {
   return `${s.slice(0, head)}…${s.slice(s.length - (max - 1 - head))}`;
 }
 
+/** When the row's flag was first raised: today's own, or the carried-over day's. */
+function sinceOf(row) {
+  return row.flag?.since || row.since || null;
+}
+
 function sinceText(row) {
   const days = row.flagged_days || 0;
   if (days >= 2) return `${days + 1} days`;
   if (days === 1) return 'yesterday';
-  if (!row.since) return '—';
-  const ms = new Date(row.since).getTime();
+  const since = sinceOf(row);
+  if (!since) return '—';
+  const ms = new Date(since).getTime();
   const dayStart = todayMs();
-  if (ms >= dayStart) return `${fmtTime(row.since).replace(' UTC', '')} today`;
-  if (ms >= dayStart - DAY_MS) return `yesterday ${fmtTime(row.since).replace(' UTC', '')}`;
+  if (ms >= dayStart) return `${fmtTime(since).replace(' UTC', '')} today`;
+  if (ms >= dayStart - DAY_MS) return `yesterday ${fmtTime(since).replace(' UTC', '')}`;
   return `${Math.round((dayStart - ms) / DAY_MS) + 1} days`;
 }
 
 function sinceValue(row) {
-  const ms = row.since ? new Date(row.since).getTime() : todayMs() + DAY_MS;
+  const since = sinceOf(row);
+  const ms = since ? new Date(since).getTime() : todayMs() + DAY_MS;
   return (row.flagged_days || 0) * DAY_MS + (todayMs() + DAY_MS - ms);
 }
 
@@ -365,7 +402,7 @@ baseIcon.addEventListener('load', () => { if (lastTabColor) drawFavicon(lastTabC
 function overallHealth(s) {
   const rows = visibleAlerts(s);
   const counts = {};
-  for (const r of rows) if (r.severity !== 'ok') counts[r.severity] = (counts[r.severity] || 0) + 1;
+  for (const r of rows) { const sev = sevOf(r); if (sev !== 'ok') counts[sev] = (counts[sev] || 0) + 1; }
   const worst = ALERT_SEVERITIES.find((kind) => counts[kind]) || 'ok';
   const stale = s.data_health && s.data_health.status !== 'ok' && s.data_health.status !== 'backfilling';
   return { worst, counts, stale };
@@ -492,13 +529,13 @@ function renderCards(s) {
 /** Cross-channel card: what is flagged anywhere right now. */
 function allCard(s) {
   const rows = visibleAlerts(s);
-  const worst = rows.map((r) => r.severity).filter((sev) => sev in SEV_RANK && sev !== 'ok')
+  const worst = rows.map(sevOf).filter((sev) => sev in SEV_RANK && sev !== 'ok')
     .sort((a, b) => SEV_RANK[a] - SEV_RANK[b])[0] || 'ok';
   const card = el('button', { type: 'button', class: 'card card-all', 'data-key': ALL_KEY, 'data-focus': `card:${ALL_KEY}`, 'aria-pressed': 'false' });
   card.append(el('div', { class: 'card-head' },
     el('span', { class: 'card-title' }, 'All channels'),
     chip(worst)));
-  card.append(el('div', { class: 'tile-label' }, 'Flagged now'));
+  card.append(el('div', { class: 'tile-label' }, `Flagged, last ${flagWindowHours()} h`));
   const nchan = new Set(rows.map((r) => `${r.product}/${r.channel}`)).size;
   card.append(el('div', { class: 'card-value' }, fmtInt(rows.length),
     el('span', { class: 'vs' }, rows.length ? `flagged in ${plural(nchan, 'channel')}` : 'nothing flagged')));
@@ -559,7 +596,9 @@ async function selectChannel(product, channel, signature = null) {
 // ---------------------------------------------------------------- flagged now
 function renderAlerts(s) {
   const rows = visibleAlerts(s);
-  $('flagged-meta').textContent = rows.length ? `${rows.length} flagged ${rows.length === 1 ? 'signature' : 'signatures'} across ${new Set(rows.map(channelKey)).size} channels` : 'Nothing flagged right now';
+  const sub = document.querySelector('#flagged-title .sub');
+  if (sub) sub.textContent = `flagged in the last ${flagWindowHours()} h`;
+  $('flagged-meta').textContent = rows.length ? `${rows.length} flagged ${rows.length === 1 ? 'signature' : 'signatures'} across ${new Set(rows.map(channelKey)).size} channels` : `Nothing flagged in the last ${flagWindowHours()} h`;
   const wrap = $('alerts-table');
   const focus = focusedKey(wrap);
   wrap.textContent = '';
@@ -777,13 +816,13 @@ function readFilters() {
 }
 
 function rowCategory(row) {
-  if (sevOf(row) !== 'ok' || row.is_new) return 'flagged';
+  if (sevOf(row) !== 'ok' || isNew(row)) return 'flagged';
   return row.storm ? 'storm' : 'unflagged';
 }
 
 function matchesSeverityFilter(row, severities) {
   const severity = sevOf(row);
-  return (severity !== 'ok' && severities.has(severity)) || (row.is_new && severities.has('new'));
+  return (severity !== 'ok' && severities.has(severity)) || (isNew(row) && severities.has('new'));
 }
 
 function visibleRows() {
@@ -814,7 +853,7 @@ const SORTERS = {
   excess: (r) => r.excess,
   recent: (r) => r.recent?.excess ?? null,
   installs: (r) => r.installs,
-  since: (r) => (sevOf(r) === 'ok' && !r.is_new ? null : sinceValue(r)),
+  since: (r) => (sevOf(r) === 'ok' && !isNew(r) ? null : sinceValue(r)),
   trend: (r) => r.level_change_28,
   bug: (r) => r.bugs?.open ?? r.bugs?.closed ?? null,
 };
@@ -921,8 +960,12 @@ function buildRow(row, withChannel, onRow) {
   const tr = el('tr', { class: 'row', tabindex: -1, 'data-sig': row.signature });
   // severity + badges
   const badges = el('div', { class: 'badge-set' });
-  if (sev !== 'ok' || !row.is_new) badges.append(chip(sev));
-  if (row.is_new) badges.append(chip('new'));
+  const fresh = isNew(row);
+  if (sev !== 'ok' || !fresh) badges.append(chip(sev));
+  if (fresh) badges.append(chip('new'));
+  // a flag carried over from a previous day (scores are per UTC day; the flag
+  // window keeps yesterday's spikes listed): say so, with that day's numbers
+  if (row.flag && flagAge(row) > 0 && (sev !== 'ok' || fresh)) badges.append(el('span', { class: 'flag-when', title: flagTitle(row) }, flagWhen(row)));
   if (row.storm) badges.append(badge('storm'));
   if (row.noise) badges.append(badge('noise'));
   tr.append(el('td', {}, badges));

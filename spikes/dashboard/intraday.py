@@ -152,6 +152,17 @@ def build_profile(rows, today, profile_days=28, weekday_days=8,
     return Profile(f_all, v_all, f_weekday, v_weekday, len(all_idx), source)
 
 
+def tail(counts, hour):
+    """Count in *counts* (24 buckets) from fractional *hour* to midnight;
+    the bucket containing *hour* contributes the part after it."""
+    hour = min(max(float(hour), 0.0), float(HOURS))
+    first = int(np.floor(hour))
+    if first >= HOURS:
+        return 0.0
+    c = np.asarray(counts, dtype=np.float64)
+    return float(c[first] * (1.0 - (hour - first)) + c[first + 1:].sum())
+
+
 def window(hourly_today, hourly_yesterday, as_of, hours):
     """Observed count in the last *hours* hours ending at *as_of*.
 

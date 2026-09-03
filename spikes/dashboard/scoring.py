@@ -14,8 +14,10 @@ For every channel the run:
    the signature has too little volume of its own);
 3. scores *today so far* (cumulative, against ``E_day * F(as_of)`` blended
    with the channel's realised pace) and the *last few hours*, projects the
-   end of day, gates the severity with the distinct-install counts, applies
-   hysteresis and tracks the peak of the day;
+   end of day, gates the severity with the crash and distinct-install
+   counts of the last 24 hours (a full day's worth at any hour, so the
+   per-day floors do not hide a spike at 06:00 UTC), applies hysteresis
+   and tracks the peak of the day;
 4. scores *yesterday* as a complete day;
 5. computes the drivers of the channel total's deviation.
 
@@ -254,11 +256,45 @@ def _recent(ctx, cached, hourly_today, hourly_yesterday, e_today, e_yday):
             'ratio': observed / expected if expected > 0 else None}, reason
 
 
+def trailing_day(ctx, observed, installs, daily_yesterday, hourly_yesterday):
+    """Crashes and distinct installs of the last 24 hours, for the gates.
+
+    Today's counts plus the part of yesterday after this hour, so
+    ``min_crashes`` / ``min_installs`` keep their per-day meaning at any
+    hour of the day (at 06:00 UTC a fifth of the day is in: a spike that
+    already scores high would otherwise be hidden until the afternoon).
+    Yesterday's crashes come from its hourly split (the bucket containing
+    this hour pro rata); its installs are not additive across days and are
+    scaled by the share of its crashes usually after this hour, an
+    estimate that counts an install seen on both days twice.
+    """
+    y_crashes = daily_yesterday[0] if daily_yesterday else 0
+    y_installs = daily_yesterday[1] if daily_yesterday else None
+    if ctx.profile is not None:
+        f = ctx.profile.fraction(ctx.yesterday.weekday(), ctx.hour)[0]
+    else:
+        f = min(ctx.hour / 24.0, 1.0)
+    share = max(0.0, 1.0 - f)
+    if hourly_yesterday is not None:
+        carried = intraday.tail(hourly_yesterday, ctx.hour)
+    else:
+        carried = y_crashes * share
+    crashes = observed + carried
+    if installs is None:
+        installs_24 = None
+    else:
+        installs_24 = installs + (y_installs or 0) * share
+    return crashes, installs_24
+
+
 def score_today(ctx, series, cached, daily_today, hourly_today,
-                hourly_yesterday, previous, is_total):
+                hourly_yesterday, previous, is_total, daily_yesterday=None):
     """Score one series for the current (partial) day."""
     observed = daily_today[0] if daily_today else 0
     installs = daily_today[1] if daily_today else None
+    gate_crashes, gate_installs = trailing_day(ctx, observed, installs,
+                                               daily_yesterday,
+                                               hourly_yesterday)
     # crash count fetched together with the installs (the ratio needs a
     # matched pair; `observed` may be a few minutes fresher)
     installs_crashes = daily_today[2] if daily_today and \
@@ -322,8 +358,9 @@ def score_today(ctx, series, cached, daily_today, hourly_today,
                 ctx.installs_as_of) / 24.0, 1.0), 0.05
         e_inst = e_day * f_inst * cached.install_share
         z_inst = seasonal.score(installs, e_inst, cached.c2, var_inst)
+    # the absolute floors are per day: checked on the last 24 hours
     if sev in UPWARD and installs is not None:
-        if installs < ctx.min_installs:
+        if gate_installs < ctx.min_installs:
             sev = 'ok'
         elif z_inst is not None:
             r_inst = installs / e_inst if e_inst > 0 else None
@@ -333,11 +370,12 @@ def score_today(ctx, series, cached, daily_today, hourly_today,
     elif sev in UPWARD and installs is None:
         # installs unknown (not fetched yet): they cannot pass the gate
         sev = 'ok'
-    if observed < ctx.min_crashes and sev in UPWARD:
+    if gate_crashes < ctx.min_crashes and sev in UPWARD:
         sev = 'ok'
     is_new = bool(not is_total and cached.recent_days_seen == 0 and
-                  observed >= ctx.min_crashes and
-                  installs is not None and installs >= ctx.min_installs)
+                  gate_crashes >= ctx.min_crashes and
+                  gate_installs is not None and
+                  gate_installs >= ctx.min_installs)
     row = {
         'series_id': series.id, 'day': ctx.today, 'as_of': ctx.as_of,
         'partial': True, 'elapsed': elapsed, 'observed': int(observed),
@@ -353,6 +391,8 @@ def score_today(ctx, series, cached, daily_today, hourly_today,
         'recent_reason': reason, 'severity': sev, 'is_new': is_new,
         'storm': storm,
         'first_flagged_at': previous.first_flagged_at if previous else None,
+        'last_flagged_at': ctx.as_of if sev != 'ok' else (
+            previous.last_flagged_at if previous else None),
         'peak_severity': previous.peak_severity if previous else None,
         'peak_z': previous.peak_z if previous else None,
         'peak_excess': previous.peak_excess if previous else None,
@@ -364,7 +404,10 @@ def score_today(ctx, series, cached, daily_today, hourly_today,
                     'pace': ctx.pace if not is_total else None,
                     'installs_ratio': per_install,
                     'installs_as_of': ctx.installs_as_of.isoformat()
-                    if ctx.installs_as_of else None},
+                    if ctx.installs_as_of else None,
+                    'last24': {'crashes': int(round(gate_crashes)),
+                               'installs': int(round(gate_installs))
+                               if gate_installs is not None else None}},
     }
     if sev != 'ok' and sev != 'drop':
         if row['first_flagged_at'] is None:
@@ -425,10 +468,10 @@ def score_yesterday(ctx, series, cached, fit, daily_yesterday, previous):
                     'c2': cached.c2},
     }
     if previous is not None:
-        for k in ('first_flagged_at', 'peak_severity', 'peak_z',
-                  'peak_excess', 'peak_at', 'projected', 'projected_lo',
-                  'projected_hi', 'recent_hours', 'observed_recent',
-                  'expected_recent', 'z_recent'):
+        for k in ('first_flagged_at', 'last_flagged_at', 'peak_severity',
+                  'peak_z', 'peak_excess', 'peak_at', 'projected',
+                  'projected_lo', 'projected_hi', 'recent_hours',
+                  'observed_recent', 'expected_recent', 'z_recent'):
             row[k] = getattr(previous, k)
     if sev in UPWARD and row.get('peak_severity') is None:
         row['peak_severity'] = sev
@@ -624,7 +667,8 @@ def score_channel(product, channel, today, now, fits_budget=None,
         days = both.get(sid, {})
         r = score_today(ctx, s, c, days.get(today), hourly_of(sid, today),
                         hourly_of(sid, yesterday),
-                        previous.get((sid, today)), False)
+                        previous.get((sid, today)), False,
+                        daily_yesterday=days.get(yesterday))
         rows.append(r)
         sig_today.append(r)
         ry = score_yesterday(ctx, s, c, fits_by_id.get(sid),
@@ -636,7 +680,8 @@ def score_channel(product, channel, today, now, fits_budget=None,
     total_row = score_today(ctx, series_by_id[total_id], cached_total,
                             total_days.get(today), hourly_of(total_id, today),
                             hourly_of(total_id, yesterday),
-                            previous.get((total_id, today)), True)
+                            previous.get((total_id, today)), True,
+                            daily_yesterday=total_days.get(yesterday))
     total_row['details']['drivers'] = drivers(total_row, sig_today,
                                               series_by_id)
     share = storm_share(total_row, sig_today)

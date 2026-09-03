@@ -46,7 +46,8 @@ Severities (ordered worst first): `major`, `spike`, `watch`, `drop`, `ok`.
   "installs_ratio": 1.6,              // observed / installs
   "storm": false,                     // very few installs or >= 20 crashes per install:
                                       // a badge, never an alert (severity stays ok)
-  "severity": "ok",
+  "severity": "ok",                   // today's live state; the per-day floors (min crashes /
+                                      // installs) are checked on the last 24 hours
   "is_new": false,                    // not seen above the cut in the previous 14 days
   "noise": false,                     // matches config/skiplist.json (never alerts)
   "since": null,                      // first time today the severity was >= watch
@@ -78,9 +79,22 @@ A `Score` plus:
   "flagged_days": 2,                              // consecutive previous days with peak >= watch
   "yesterday": {"observed": 120, "expected": 98.0, "z": 1.1, "severity": "ok",
                 "final": true},                   // or null
-  "spark": {"dates": ["2026-08-06", "..."], "observed": [1, 2, 3], "expected": [1.1, 2.0, 2.9]}   // 28 days
+  "spark": {"dates": ["2026-08-06", "..."], "observed": [1, 2, 3], "expected": [1.1, 2.0, 2.9]},  // 28 days
+  "flag": {                                       // what the row is shown as, or null:
+    "severity": "major", "is_new": false,         // today's live state, or the worst state a
+    "day": "2026-09-01",                          // previous day reached, kept for
+    "since": "2026-09-01T09:12:00Z",              // `flag_window_hours` after the last run
+    "at": "2026-09-01T23:57:00Z",                 // that flagged it (so nothing vanishes at
+    "observed": 430, "expected": 98.0,            // 00:00 UTC); the numbers are that day's
+    "z": 12.0, "excess": 332,
+    "peak": null                                  // {"severity", "z", "excess", "at"} when the
+  }                                               // day stepped down from a higher severity
 }
 ```
+
+Lists, counts and sort orders use `flag` (a row whose `flag.day` is not
+`day` carries yesterday's spike into today); `severity` and `is_new` stay
+today's own state.
 
 ### Series block (charts)
 
@@ -133,6 +147,7 @@ A `Score` plus:
                   "since": null, "detail": "..."},
   "thresholds": {"watch": {"z": 3, "ratio": 1.25}, "spike": {"z": 5, "ratio": 1.5},
                  "major": {"z": 8, "ratio": 2}, "drop": {"z": -4, "ratio": 0.6}},
+  "flag_window_hours": 48,            // how long a previous day's flag stays listed
   "channels": [
     {"product": "Firefox", "channel": "release", "day": "2026-09-02",
      "as_of": "...", "history_days": 180,

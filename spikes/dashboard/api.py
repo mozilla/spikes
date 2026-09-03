@@ -22,7 +22,6 @@ blueprint = Blueprint('dashboard', __name__, template_folder='templates',
                       static_folder='static',
                       static_url_path='/dashboard/static')
 
-ALERT_SEVERITIES = ('major', 'spike', 'watch', 'drop')
 PRODUCT_DETAILS = 'https://product-details.mozilla.org/1.0/'
 # product-details feed prefix per product (Fenix follows the Firefox train)
 FEEDS = {'Firefox': 'firefox', 'Fenix': 'firefox',
@@ -137,7 +136,7 @@ def score_json(score, series, final=None):
 
 
 def row_json(score, series, product, channel, spark=None, yesterday=None,
-             flagged_days=0):
+             flagged_days=0, flag=None):
     res = score_json(score, series)
     res.update({
         'signature': series.signature, 'product': product,
@@ -147,9 +146,19 @@ def row_json(score, series, product, channel, spark=None, yesterday=None,
         'bugs': {'open': series.bug_open, 'closed': series.bug_closed},
         'first_seen': day_str(series.first_seen),
         'flagged_days': flagged_days,
-        'yesterday': yesterday, 'spark': spark,
+        'yesterday': yesterday, 'spark': spark, 'flag': flag,
     })
     return res
+
+
+def flag_severity(row):
+    """Severity the row is shown with (its flag's, else today's)."""
+    return row['flag']['severity'] if row.get('flag') else row['severity']
+
+
+def flag_is_new(row):
+    return bool(row['flag']['is_new']) if row.get('flag') else \
+        bool(row['is_new'])
 
 
 # --------------------------------------------------------------------------
@@ -327,14 +336,68 @@ def channel_day(product, channel, today):
 
 
 def channel_scores(product, channel, today):
-    """Today's and yesterday's scores of a channel keyed by series id."""
-    yesterday = today - datetime.timedelta(days=1)
-    scores = models.load_scores(product, channel, [today, yesterday])
+    """Scores of a channel for today, yesterday and the day before, keyed
+    by series id (``today`` / ``yesterday`` / ``earlier``); the previous
+    days feed the flag window (see :func:`flag_of`)."""
+    keys = {today - datetime.timedelta(days=i): k
+            for i, k in enumerate(('today', 'yesterday', 'earlier'))}
+    scores = models.load_scores(product, channel, list(keys))
     by_series = {}
     for score, series in scores:
         entry = by_series.setdefault(series.id, {'series': series})
-        entry['today' if score.day == today else 'yesterday'] = score
+        entry[keys[score.day]] = score
     return by_series
+
+
+def flag_of(entry, now):
+    """What a row is flagged as: today's live state, or the worst state a
+    previous day reached, kept for ``flag_window_hours`` after the last run
+    that flagged it.
+
+    Scores are per UTC day, so without this every flag would vanish at
+    00:00 UTC and the page would be empty for the European morning; with
+    it yesterday's spikes stay listed (marked as yesterday's) until the
+    live scoring takes over or the window closes, and a reader in any
+    timezone sees the same list.  A spike that lasts longer than the
+    window is re-flagged by the live scores until the model absorbs it as
+    the new level.  Returns ``None`` when nothing is flagged.
+    """
+    window = datetime.timedelta(hours=config.get('flag_window_hours', 48))
+    best = None
+    for key in ('today', 'yesterday', 'earlier'):
+        score = entry.get(key)
+        if score is None:
+            continue
+        if key == 'today':
+            sev, at = score.severity, score.as_of
+        else:
+            # the peak covers the upward severities a day reached and then
+            # stepped down from; the final severity covers drops
+            sev = scoring.worst(score.severity, score.peak_severity or 'ok')
+            at = score.last_flagged_at or score.peak_at or \
+                datetime.datetime.combine(
+                    score.day + datetime.timedelta(days=1), datetime.time())
+            if now - at > window:
+                continue
+        if sev == 'ok' and not score.is_new:
+            continue
+        rank = (scoring.RANK.get(sev, 0), bool(score.is_new))
+        if best is None or rank > best[0]:
+            best = (rank, key, score, sev, at)
+    if best is None:
+        return None
+    _, key, score, sev, at = best
+    peak = None
+    if key != 'today' and score.peak_severity and \
+            score.peak_severity != score.severity:
+        peak = {'severity': score.peak_severity, 'z': num(score.peak_z, 2),
+                'excess': num(score.peak_excess, 1), 'at': ts(score.peak_at)}
+    return {'severity': sev, 'is_new': bool(score.is_new),
+            'day': day_str(score.day),
+            'since': ts(score.first_flagged_at or at), 'at': ts(at),
+            'observed': int(score.observed or 0),
+            'expected': num(score.expected, 2), 'z': num(score.z, 2),
+            'excess': num(score.excess, 1), 'peak': peak}
 
 
 def sparks(product, channel, series_ids, today, cached_models, ndays=28):
@@ -396,7 +459,7 @@ def yesterday_json(score, final):
 
 
 def rows_json(product, channel, by_series, today, with_yesterday_final,
-              only_ids=None):
+              now, only_ids=None):
     ids = [sid for sid, e in by_series.items()
            if 'today' in e and not e['series'].is_total and
            (only_ids is None or sid in only_ids)]
@@ -411,24 +474,29 @@ def rows_json(product, channel, by_series, today, with_yesterday_final,
                              spark=spark.get(sid),
                              yesterday=yesterday_json(e.get('yesterday'),
                                                       with_yesterday_final),
-                             flagged_days=flagged.get(sid, 0)))
+                             flagged_days=flagged.get(sid, 0),
+                             flag=flag_of(e, now)))
     return rows
 
 
 def sort_key(row):
-    return (-scoring.RANK.get(row['severity'], 0), -(row['excess'] or 0))
+    flag = row.get('flag')
+    excess = flag['excess'] if flag else row['excess']
+    return (-scoring.RANK.get(flag_severity(row), 0), -(excess or 0))
 
 
 def counts_of(rows):
+    """Counts of the flags shown (the window's, not only today's)."""
     counts = {k: 0 for k in ('major', 'spike', 'watch', 'drop', 'new',
                              'storm', 'noise')}
     for r in rows:
         if r['noise']:
             counts['noise'] += 1
             continue
-        if r['severity'] in counts:
-            counts[r['severity']] += 1
-        if r['is_new']:
+        sev = flag_severity(r)
+        if sev in counts:
+            counts[sev] += 1
+        if flag_is_new(r):
             counts['new'] += 1
         if r['storm']:
             counts['storm'] += 1
@@ -452,7 +520,7 @@ def channel_summary(product, channel, today, now):
         return None
     yesterday = today - datetime.timedelta(days=1)
     rows = rows_json(product, channel, by_series, today,
-                     day_final(product, channel, yesterday))
+                     day_final(product, channel, yesterday), now)
     model = models.load_models([total_id]).get(total_id)
     return {
         'product': product, 'channel': channel, 'day': day_str(today),
@@ -703,14 +771,13 @@ def summary():
         if s is None:
             continue
         rows = s.pop('_rows')
-        alerts.extend(r for r in rows if not r['noise'] and
-                      (r['severity'] in ALERT_SEVERITIES or r['is_new']))
+        alerts.extend(r for r in rows if not r['noise'] and r['flag'])
         channels.append(s)
         if s['as_of'] and (as_of is None or s['as_of'] > as_of):
             as_of = s['as_of']
     health = data_health(now, run, channels)
     if health['status'] == 'stale_upstream':
-        alerts = [a for a in alerts if a['severity'] != 'drop']
+        alerts = [a for a in alerts if flag_severity(a) != 'drop']
     alerts.sort(key=sort_key)
     import json
     info = json.loads(run.message or '{}') if run and run.message else {}
@@ -725,6 +792,7 @@ def summary():
                      'lag_suspected': bool(run.lag_suspected)}
         if run else None,
         'data_health': health, 'thresholds': thresholds(),
+        'flag_window_hours': config.get('flag_window_hours', 48),
         'channels': channels, 'alerts': alerts[:50],
         'releases': releases(today - datetime.timedelta(days=730)),
     }, run, now=now)
@@ -794,7 +862,7 @@ def signature_view():
                              granularity, entry['today'], prior_fit=prior)
     yesterday = today - datetime.timedelta(days=1)
     rows = rows_json(product, channel, by_series, today,
-                     day_final(product, channel, yesterday),
+                     day_final(product, channel, yesterday), now,
                      only_ids={series.id})
     e_yday = float(fit.expected[-1]) if fit.ndays and \
         np.isfinite(fit.expected[-1]) else fit.forecast(today)
