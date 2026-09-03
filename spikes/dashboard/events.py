@@ -27,9 +27,10 @@ Feeds, all JSON:
   bulletin has no feed and is computed from Google's schedule (published
   on the first Monday of the month).
 
-Every feed is fetched in parallel with a 15 s timeout; a failure keeps the
-previous rows, is retried after ``events_retry_hours`` and reported in the
-run.  Successful feeds are refreshed every ``events_refresh_hours``.
+Every feed is fetched in parallel with a 15 s timeout (60 s for the slow
+GeForce lookup); a failure keeps the previous rows, is retried after
+``events_retry_hours`` and reported in the run.  Successful feeds are
+refreshed every ``events_refresh_hours``.
 """
 
 import concurrent.futures
@@ -51,7 +52,9 @@ NVIDIA_URL = ('https://gfwsl.geforce.com/services_toolkit/services/com/nvidia/'
               'services/AjaxDriverService.php?func=DriverManualLookup'
               '&psid=127&pfid=995&osID=135&languageCode=1033&beta=0'
               '&isWHQL=1&dltype=-1&dch=1&upCRD=0&qnf=0&sort1=0'
-              '&numberOfResults=60')
+              '&numberOfResults=40')
+# the GeForce lookup takes tens of seconds for a few dozen results
+NVIDIA_TIMEOUT = 60
 
 # source -> platform whose products the badge is shown for, and label
 PLATFORM = {'windows': 'windows', 'nvidia': 'windows', 'apple': 'mac',
@@ -236,17 +239,18 @@ def android_bulletins(today, days):
 # --------------------------------------------------------------------------
 
 class Source:
-    def __init__(self, name, url, parse):
+    def __init__(self, name, url, parse, timeout=TIMEOUT):
         self.name = name
         self.url = url
         self.parse = parse
+        self.timeout = timeout
 
 
 SOURCES = [
     Source('windows-updates',
            'https://api.datafornerds.io/v2/microsoft/'
            'windows-update-history.json', parse_windows),
-    Source('nvidia-geforce', NVIDIA_URL, parse_nvidia),
+    Source('nvidia-geforce', NVIDIA_URL, parse_nvidia, timeout=NVIDIA_TIMEOUT),
     Source('macos-sofa',
            'https://sofafeed.macadmins.io/v1/macos_data_feed.json',
            parse_sofa),
@@ -268,8 +272,8 @@ COMPUTED = 'android-bulletins'
 FEED_NAMES = [s.name for s in SOURCES] + [COMPUTED]
 
 
-def _get(url):
-    r = requests.get(url, timeout=TIMEOUT,
+def _get(url, timeout=TIMEOUT):
+    r = requests.get(url, timeout=timeout,
                      headers={'User-Agent': USER_AGENT,
                               'Accept': 'application/json'})
     r.raise_for_status()
@@ -288,11 +292,12 @@ def refresh(now, fetch=None, names=None):
     results = {}
     rows = []
     with concurrent.futures.ThreadPoolExecutor(max_workers=4) as pool:
-        futures = {pool.submit(lambda s: s.parse(fetch(s.url)), s): s
-                   for s in sources}
+        def run(s):
+            return s.parse(fetch(s.url, s.timeout))
+        futures = {pool.submit(run, s): s for s in sources}
         for fut, source in futures.items():
             try:
-                events = fut.result(timeout=TIMEOUT + 10)
+                events = fut.result(timeout=source.timeout + 10)
                 kept = [e for e in events if start <= e['day'] <= horizon]
                 results[source.name] = (True, len(kept), None)
                 rows.extend(kept)

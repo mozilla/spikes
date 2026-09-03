@@ -83,7 +83,7 @@ BY_URL = {s.url: s.name for s in events.SOURCES}
 
 
 def fake_fetch(failing=()):
-    def fetch(url):
+    def fetch(url, timeout=None):
         name = BY_URL[url]
         if name in failing:
             raise RuntimeError('boom')

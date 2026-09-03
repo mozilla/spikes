@@ -286,10 +286,10 @@ events, Fenix the Android ones.
 | Linux | endoflife.date (kernel series, Ubuntu, Fedora), freedesktop GitLab tags (Mesa) | releases, no release candidates |
 | Android | endoflife.date (major versions); the monthly security bulletin is computed, it has no feed | published on the first Monday of the month |
 
-Feeds are fetched in parallel with a 15 s timeout, every
-`events_refresh_hours` (6; a failed feed is retried after
-`events_retry_hours`), and the run reports them (`events` in the run
-message).  A dead feed keeps its previous rows.  `GET /dashboard/api/events`
+Feeds are fetched in parallel with a 15 s timeout (60 s for the GeForce
+lookup, which takes tens of seconds), every `events_refresh_hours` (6; a
+failed feed is retried after `events_retry_hours`), and the run reports
+them (`events` in the run message).  A dead feed keeps its previous rows.  `GET /dashboard/api/events`
 serves everything grouped per day and source, a few KB gzipped, with an
 ETag that only changes when a refresh wrote something: the page fetches it
 once and its polls cost a 304.  Rows older than `events_retention_days`
