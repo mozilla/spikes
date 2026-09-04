@@ -113,7 +113,9 @@ def search_term(signature):
 
 
 def noise_patterns(channel):
-    """Regexes of config/skiplist.json: noise signatures (never alerted)."""
+    """Regexes of config/skiplist.json: noise signatures (never alerted).
+    *channel* may be a channel key (the scopes share the skiplist)."""
+    channel, _ = config.split_channel(channel)
     return spikes_config.get_skiplist_channel(channel)
 
 
@@ -135,25 +137,33 @@ def date_range(start, end):
     return ['>=' + fmt(start), '<' + fmt(end)]
 
 
-def base_params(product, channel):
+def base_params(product, channel, version=None):
+    """Common filters.  *channel* is a channel key (``release`` or
+    ``release@current``, see config.channel_key); *version* the SuperSearch
+    filter of the version cycle (``{'major_version': 155}`` or exact
+    ``version`` strings, see versions.py) for the ``current`` scope."""
+    release_channel, _ = config.split_channel(channel)
     params = {'product': product,
-              'release_channel': channel,
+              'release_channel': release_channel,
               '_results_number': 0}
     excluded = config.get('exclude_submitted_from') or []
     if excluded:
         params['submitted_from'] = ['!' + v for v in excluded]
+    if version:
+        params.update(version)
     return params
 
 
-def query_params(kind, product, channel, start, end):
+def query_params(kind, product, channel, start, end, version=None):
     """Build the SuperSearch parameters of a query.
 
     Args:
         kind (str): one of :data:`KINDS`.
-        product, channel (str)
+        product, channel (str): channel is a channel key.
         start, end (datetime.date): half-open range (one day for ``day``).
+        version (dict): version filter of the cycle (``current`` scope).
     """
-    params = base_params(product, channel)
+    params = base_params(product, channel, version)
     params['date'] = date_range(start, end)
     if kind == 'day':
         params['_histogram.date'] = ['signature', '_cardinality.install_time']
@@ -185,8 +195,11 @@ def query_params(kind, product, channel, start, end):
 
 
 def link_params(product, channel, day, signature=None):
-    """Parameters of a crash-stats search page for a day (same filters)."""
-    params = base_params(product, channel)
+    """Parameters of a crash-stats search page for a day (same filters,
+    including the version of the day for the ``current`` scope)."""
+    from . import versions
+    params = base_params(product, channel,
+                         versions.params_for(product, channel, day))
     del params['_results_number']
     params['date'] = date_range(day, day + datetime.timedelta(days=1))
     if signature is not None and signature != '':

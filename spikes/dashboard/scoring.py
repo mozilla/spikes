@@ -29,7 +29,7 @@ import datetime
 import numpy as np
 
 from spikes.logger import logger
-from . import calibration, config, intraday, models, seasonal
+from . import calibration, config, intraday, models, seasonal, versions
 
 
 RANK = {'ok': 0, 'drop': 1, 'watch': 2, 'spike': 3, 'major': 4}
@@ -68,11 +68,12 @@ def confidence(z):
     return sum(1 for t in (3.0, 5.0, 8.0) if abs(z) >= t)
 
 
-def seasonal_at(factors, date):
-    """Seasonal factor of *date* from a ``{name: [values]}`` dict."""
+def seasonal_at(factors, date, components=None):
+    """Seasonal factor of *date* from a ``{name: [values]}`` dict, with
+    the phases of *components* (the calendar ones by default)."""
     s = 1.0
     for name, values in (factors or {}).items():
-        comp = seasonal.BY_NAME.get(name)
+        comp = seasonal.component(components or seasonal.COMPONENTS, name)
         if comp is not None and values:
             s *= float(values[comp.phase([date])[0]])
     return s
@@ -83,7 +84,12 @@ class Cached:
 
     def __init__(self, level, trend, c2, dispersion, factors, borrowed,
                  components, install_share, level_change_28, last_day,
-                 history_days, recent_days_seen, fitted_at, z_hist=None):
+                 history_days, recent_days_seen, fitted_at, z_hist=None,
+                 seasonal_components=None):
+        # the seasonal components (phase functions) the factors refer to:
+        # the release-phase cycle for the ``current`` scope (versions.py)
+        self.seasonal_components = seasonal_components or \
+            seasonal.COMPONENTS
         self.level = level
         self.trend = trend
         self.c2 = c2
@@ -109,16 +115,18 @@ class Cached:
                    s['factors'], s['borrowed'], s['components'],
                    install_share, fit.level_change(28), last_day,
                    s['history_days'], recent_days_seen, fitted_at,
-                   calibration.histogram(fit.z, fit.expected))
+                   calibration.histogram(fit.z, fit.expected),
+                   seasonal_components=fit.components)
 
     @classmethod
-    def from_row(cls, row):
+    def from_row(cls, row, components=None):
         details = row.components or {}
         return cls(row.level, row.trend, row.c2, row.dispersion,
                    row.factors, row.borrowed, details.get('components'),
                    row.install_share, row.level_change_28, row.last_day,
                    row.history_days, details.get('recent_days_seen', 1),
-                   row.fitted_at, details.get('z_hist'))
+                   row.fitted_at, details.get('z_hist'),
+                   seasonal_components=components)
 
     def to_row(self, series_id):
         return {'series_id': series_id, 'fitted_at': self.fitted_at,
@@ -140,7 +148,8 @@ class Cached:
         else:
             horizon = max(1, (date - self.last_day).days)
         level = max(0.0, self.level + self.trend * (horizon - 1))
-        return level * seasonal_at(self.factors, date)
+        return level * seasonal_at(self.factors, date,
+                                   self.seasonal_components)
 
 
 # --------------------------------------------------------------------------
@@ -177,13 +186,15 @@ def build_history(daily, day_rows, start, end):
     return dates, y, installs
 
 
-def fit_series(daily, day_rows, start, end, prior, min_crashes, now):
+def fit_series(daily, day_rows, start, end, prior, min_crashes, now,
+               components=None):
     """Fit one series and return a :class:`Cached`."""
     dates, y, installs = build_history(daily, day_rows, start, end)
     fit = seasonal.fit(dates, y, level_window=config.get('level_window', 14),
                        prior=prior,
                        own_min=config.get('own_factors_min_crashes', 10),
-                       trend_min_level=config.get('trend_min_level', 50))
+                       trend_min_level=config.get('trend_min_level', 50),
+                       components=components)
     recent = [v for v in y[-config.get('new_days', 14):] if np.isfinite(v)]
     seen = sum(1 for v in recent if v >= max(3, min_crashes / 2.0))
     share = None
@@ -543,6 +554,9 @@ def score_channel(product, channel, today, now, fits_budget=None,
     if day_row is None or day_row.as_of is None:
         return None
     as_of = day_row.as_of
+    # the ``current`` scope counts the cycle from the version's release
+    scope = config.split_channel(channel)[1]
+    comps = versions.components_for(product, channel)
     history_days = config.get('history_days', 180)
     start = today - datetime.timedelta(days=history_days)
     # the total is fitted on everything stored (up to 3 years) so the
@@ -569,20 +583,25 @@ def score_channel(product, channel, today, now, fits_budget=None,
     row = models_by_id.get(total_id)
     if row is not None and row.fitted_at >= refit_after and \
             row.last_day == yesterday:
-        cached_total = Cached.from_row(row)
+        cached_total = Cached.from_row(row, comps)
     if cached_total is None or True:
         # the channel fit is cheap and is the prior of every signature:
         # always recompute it so borrowed factors are fresh
         total_fit, cached_total = fit_series(
-            total_daily, day_rows, start_total, yesterday, None, 1, now)
+            total_daily, day_rows, start_total, yesterday, None, 1, now,
+            components=comps)
         models.upsert(models.Model, [cached_total.to_row(total_id)],
                       ['series_id'])
         if stale_fits:
             cached_total.fitted_at = now - datetime.timedelta(
                 hours=config.get('refit_hours', 6))
-    # volume floors: a share of the channel's expected day
+    # volume floors: a share of the channel's expected day; in the
+    # ``current`` scope of the de-seasonalised level (the day after a
+    # release expects a few percent of a normal day: a floor taken from it
+    # would flag every two-crash signature)
     min_crashes, min_installs = calibration.volume_floors(
-        cached_total.expected(today), config.volume_share())
+        cached_total.level if scope == config.SCOPE_CURRENT
+        else cached_total.expected(today), config.volume_share())
     hourly_total = models.load_hourly(
         [total_id], [today - datetime.timedelta(days=i)
                      for i in range(PROFILE_HISTORY_DAYS + 1)]
@@ -630,7 +649,8 @@ def score_channel(product, channel, today, now, fits_budget=None,
         rows = []
         for sid in to_fit:
             fit, c = fit_series(histories.get(sid, {}), day_rows, start,
-                                yesterday, total_fit, min_crashes, fitted_at)
+                                yesterday, total_fit, min_crashes, fitted_at,
+                                components=comps)
             fits_by_id[sid] = fit
             cached[sid] = c
             rows.append(c.to_row(sid))
@@ -638,7 +658,7 @@ def score_channel(product, channel, today, now, fits_budget=None,
         models.upsert(models.Model, rows, ['series_id'])
     for sid in candidates:
         if sid not in cached:
-            cached[sid] = Cached.from_row(models_by_id[sid])
+            cached[sid] = Cached.from_row(models_by_id[sid], comps)
 
     # -- thresholds learned from the channel's own data: the severity
     #    levels from the pooled one-step-ahead z of the candidates' fits

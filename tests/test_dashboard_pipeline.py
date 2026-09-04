@@ -123,7 +123,8 @@ class ConfigTest(unittest.TestCase):
         previous = config.override(
             products=['Firefox', 'Fenix'],
             channels={'Firefox': ['nightly', 'release', 'esr'],
-                      'Fenix': ['nightly', 'release']})
+                      'Fenix': ['nightly', 'release']},
+            scopes=['all'])
         try:
             self.assertEqual(config.channels('Firefox'),
                              ['nightly', 'release', 'esr'])
@@ -136,6 +137,11 @@ class ConfigTest(unittest.TestCase):
             config.override(channels=['nightly', 'beta'])
             self.assertEqual(config.channels('Fenix'), ['nightly', 'beta'])
             self.assertEqual(len(config.pairs()), 4)
+            # with the current-version scope every channel is collected
+            # twice, the all scope first (see config.channel_key)
+            config.override(scopes=['all', 'current'])
+            self.assertEqual(len(config.pairs()), 8)
+            self.assertEqual(config.pairs()[4], ('Firefox', 'nightly@current'))
         finally:
             config.restore(previous)
 
@@ -655,6 +661,11 @@ class ScoringTest(DBTestCase):
         self.assertFalse(update.lag_guard(summaries(3), TODAY))
         # fewer scored channels than the threshold: all of them must drop
         self.assertTrue(update.lag_guard(summaries(6)[:2], TODAY))
+        # the current-version scope restarts from nothing on release day:
+        # its channels never count
+        current = [dict(s, channel='release@current')
+                   for s in summaries(6)]
+        self.assertFalse(update.lag_guard(summaries(3) + current, TODAY))
 
     def test_history_chunk_replanned_when_hourly_fails(self):
         responses = {'day': load('socorro_day.json'),
@@ -900,6 +911,80 @@ class ApiTest(DBTestCase):
         self.assertEqual(r.status_code, 200)
         return {s['signature']: s for s in r.get_json()['signatures']}, \
             r.headers['ETag']
+
+    def test_scope(self):
+        """``scope=current`` serves the current-version channels (their own
+        series, keyed ``channel@current``), with the version current
+        today; the all scope does not list them."""
+        from spikes.dashboard import versions
+        seed_channel('Firefox', 'release@current', TODAY, NOW, seed=1)
+        scoring.score_channel('Firefox', 'release@current', TODAY, NOW)
+        db.session.commit()
+        models.replace_cycles('Firefox', 'release', [
+            {'start': TODAY - datetime.timedelta(days=15), 'end': TODAY,
+             'label': '154', 'params': {'major_version': 154}},
+            {'start': TODAY, 'end': None, 'label': '155',
+             'params': {'major_version': 155}}], NOW)
+        db.session.commit()
+        versions._cache.clear()
+        pairs = {None: [('Firefox', 'release'),
+                        ('Firefox', 'release@current')],
+                 'all': [('Firefox', 'release')],
+                 'current': [('Firefox', 'release@current')]}
+        with mock.patch.object(api.config, 'pairs',
+                               side_effect=lambda scope=None: pairs[scope]):
+            r = self.client.get('/dashboard/api/summary')
+            d = r.get_json()
+            self.assertEqual(d['scope'], 'all')
+            self.assertEqual(d['scopes'], ['all', 'current'])
+            self.assertEqual([c['channel'] for c in d['channels']],
+                             ['release'])
+            self.assertEqual(d['channels'][0]['scope'], 'all')
+            self.assertIsNone(d['channels'][0]['version'])
+            self.assertEqual(d['data_health']['status'], 'ok')
+            etag_all = r.headers['ETag']
+            r = self.client.get('/dashboard/api/summary?scope=current')
+            self.assertEqual(r.status_code, 200)
+            self.assertNotEqual(r.headers['ETag'], etag_all)
+            d = r.get_json()
+            self.assertEqual(d['scope'], 'current')
+            c = d['channels'][0]
+            self.assertEqual((c['channel'], c['scope'], c['version']),
+                             ('release', 'current', '155'))
+            self.assertEqual(d['data_health']['status'], 'ok')
+            self.assertTrue(all(a['scope'] == 'current' for a in d['alerts']))
+            self.assertEqual(self.client.get(
+                '/dashboard/api/summary?scope=nope').status_code, 400)
+        r = self.client.get('/dashboard/api/channel?product=Firefox'
+                            '&channel=release&scope=current&days=30')
+        self.assertEqual(r.status_code, 200)
+        d = r.get_json()
+        self.assertEqual((d['channel'], d['scope'], d['version']),
+                         ('release', 'current', '155'))
+        self.assertEqual(d['model']['cycle_from'], 'release')
+        self.assertEqual(d['model']['cycle_day'], 1)  # release day today
+        row = d['signatures'][0]
+        self.assertEqual(row['scope'], 'current')
+        self.assertIn('major_version=155', row['socorro_url'])
+        # the forecast runs to the next cycle when it is known; here none
+        # is planned, so the release schedule (mocked) gives the horizon
+        d = self.client.get('/dashboard/api/channel?product=Firefox'
+                            '&channel=release&days=30').get_json()
+        self.assertEqual(d['scope'], 'all')
+        self.assertEqual(d['model']['cycle_from'], 'calendar')
+        self.assertNotIn('major_version', d['signatures'][0]['socorro_url'])
+        # a done mark in one scope is that scope's
+        self.sign_in()
+        r = self.client.post('/dashboard/api/done', json={
+            'product': 'Firefox', 'channel': 'release', 'scope': 'current',
+            'signature': 'spiking', 'done': True})
+        self.assertEqual(r.status_code, 200)
+        rows, _ = self.channel_rows()
+        self.assertIsNone(rows['spiking']['done'])
+        d = self.client.get('/dashboard/api/channel?product=Firefox'
+                            '&channel=release&scope=current').get_json()
+        self.assertIsNotNone({s['signature']: s for s in d['signatures']}
+                             ['spiking']['done'])
 
     def test_mark_done(self):
         """A signed-in user marks a flagged spike as done: the row carries

@@ -68,9 +68,40 @@ def channels(product=None):
     return list(conf)
 
 
-def pairs():
-    """All (product, channel) pairs, in display order."""
-    return [(p, c) for p in products() for c in channels(p)]
+SCOPE_ALL = 'all'
+SCOPE_CURRENT = 'current'
+SCOPE_SEP = '@'
+
+
+def scopes():
+    """Version scopes collected for every channel: ``all`` (every version
+    reporting on the channel) and ``current`` (only the version that is
+    current on each day, see versions.py).  The ``current`` scope is a
+    second set of series per channel with its own fits and thresholds."""
+    return list(get('scopes', [SCOPE_ALL, SCOPE_CURRENT]))
+
+
+def channel_key(channel, scope=SCOPE_ALL):
+    """The channel *key* a (channel, scope) pair is stored under:
+    ``release`` for the ``all`` scope, ``release@current`` otherwise.  The
+    key is what every table, planner and scorer calls "channel"; only the
+    Socorro filters, the release calendar and the page tell them apart."""
+    return channel if scope == SCOPE_ALL else channel + SCOPE_SEP + scope
+
+
+def split_channel(key):
+    """``(channel, scope)`` of a channel key."""
+    channel, _, scope = key.partition(SCOPE_SEP)
+    return channel, scope or SCOPE_ALL
+
+
+def pairs(scope=None):
+    """All (product, channel key) pairs, in display order: the ``all``
+    scope of every channel first, then the ``current`` scope (or only
+    *scope*)."""
+    wanted = scopes() if scope is None else [scope]
+    return [(p, channel_key(c, sc)) for sc in wanted
+            for p in products() for c in channels(p)]
 
 
 def fit_history_days():

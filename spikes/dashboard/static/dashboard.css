@@ -109,6 +109,9 @@ main > section { margin-top: 28px; }
   &:focus-visible { outline: var(--focus-ring); outline-offset: 3px; }
 }
 .header-right { display: flex; align-items: center; gap: 14px; }
+/* all versions / current version (config.scopes) */
+.scope-seg { font-size: var(--font-size-control); }
+.version-tag { color: var(--ink-2); font-weight: 500; margin-left: 6px; font-size: var(--font-size-caption); }
 .github-link {
   color: var(--ink-2);
   display: inline-flex;

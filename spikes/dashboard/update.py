@@ -20,7 +20,7 @@ from libmozdata.bugzilla import Bugzilla
 
 from spikes import app, db
 from spikes.logger import logger
-from . import collect, config, events, models, scoring
+from . import collect, config, events, models, scoring, versions
 from .socorro import Fetcher
 
 
@@ -28,8 +28,12 @@ def lag_guard(summaries, today):
     """Suppress ``drop`` when most channels drop at once (processing lag).
 
     Independent products and channels do not lose volume simultaneously;
-    when they do, Socorro is late.  Returns True when the guard fired.
+    when they do, Socorro is late.  Only the ``all`` scope is looked at:
+    every ``current`` channel legitimately restarts from nothing on the
+    same release day.  Returns True when the guard fired.
     """
+    summaries = [s for s in summaries if config.split_channel(
+        s.get('channel') or '')[1] == config.SCOPE_ALL]
     suspicious = 0
     for s in summaries:
         t = s['total']
@@ -156,6 +160,15 @@ def run(now=None, budget=None, max_seconds=None):
     fetcher = Fetcher(budget=budget, deadline=started + max_seconds)
     info = {}
     try:
+        try:
+            refreshed = versions.maybe_refresh(now)
+            if refreshed is not None:
+                info['versions'] = refreshed
+                db.session.commit()
+        except Exception as ex:  # the all scope does not need it
+            db.session.rollback()
+            logger.exception('Dashboard: version calendars failed: %s', ex)
+            info.setdefault('errors', []).append('versions: {}'.format(ex))
         units = collect.plan_all(today, now=now)
         written, failed, skipped = collect.execute(units, fetcher, today,
                                                    now)

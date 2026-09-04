@@ -141,11 +141,24 @@ into.  The page hides done rows unless the `done` filter chip is on.
               "cycle": [/* 28 values */]},
   "today_factors": {"weekly": 1.13, "cycle": 0.97},
   "cycle_day": 12,                    // day 1..28 of the 28-day cycle
+  "cycle_from": "calendar",           // what it counts: "calendar", or "release" (current scope:
+                                      // days since the version's release, the rollout ramp)
   "borrowed": ["weekly", "cycle"]     // components taken from the channel (signatures)
 }
 ```
 
 ## Endpoints
+
+### Version scope
+
+Every endpoint below takes `scope=all` (default) or `scope=current` (only
+the version current on each day, see the README): the two scopes are
+separate series, fits and thresholds.  Rows and channels say which scope
+they belong to (`"scope"`), and a `current` channel says which version
+it shows today (`"version": "155"`, `"140.15"` for ESR).  The summary
+lists `"scopes"`, the scopes the server collects; the page hides its
+switch when there is one.  `POST /dashboard/api/done` takes `scope` in
+its body too (a mark is that scope's).
 
 ### `GET /dashboard/api/summary`
 
@@ -162,7 +175,8 @@ into.  The page hides done rows unless the `done` filter chip is on.
                                       // learned from its own data (see `calibration` below)
   "flag_window_hours": 48,            // how long a previous day's flag stays listed
   "channels": [
-    {"product": "Firefox", "channel": "release", "day": "2026-09-02",
+    {"product": "Firefox", "channel": "release", "scope": "all", "version": null,
+     "day": "2026-09-02",               // version: "155" in the current scope
      "as_of": "...", "history_days": 180,
      "total": Score, "yesterday": Score,           // yesterday may be null
      "counts": {"major": 1, "spike": 2, "watch": 5, "drop": 0, "new": 3,

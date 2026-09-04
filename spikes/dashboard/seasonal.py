@@ -15,8 +15,12 @@ A daily series ``y[t]`` is modelled as::
 * A component is only active when the history covers enough full cycles
   (see :data:`COMPONENTS`).  For a signature, components are *borrowed*
   from the channel prior unless the signature has enough informative
-  cycles of its own; the 28-day cycle is constrained to carry no weekday
-  effect (28 = 4 * 7 makes the two otherwise non-identifiable).
+  cycles of its own; the calendar 28-day cycle is constrained to carry
+  no weekday effect (28 = 4 * 7 makes the two otherwise
+  non-identifiable).  Counted from a version's release instead (see
+  :func:`with_cycle_phase`) the cycle is the rollout ramp: releases fall
+  on varying weekdays so no constraint is needed, and the floor of the
+  factors is lower (release day is a few percent of a normal day).
 * The level is a robust local-linear (Theil-Sen) forecast over the last
   ``level_window`` de-seasonalised days, so a steady trend is followed
   without lag while up to ~6 anomalous days are ignored.
@@ -62,7 +66,8 @@ def yearly_phase(dates):
 
 class Component:
     def __init__(self, name, nphases, period_days, phase, min_cycles,
-                 window, smooth=0, borrow_cycles=None):
+                 window, smooth=0, borrow_cycles=None, floor=0.05,
+                 constrain_weekday=False):
         self.name = name
         self.nphases = nphases
         self.period_days = period_days
@@ -74,6 +79,12 @@ class Component:
         # informative cycles a signature needs before its own estimate
         # is mixed with the prior (None: same as min_cycles)
         self.borrow_cycles = borrow_cycles or min_cycles
+        # smallest factor (relative to the mean): no phase is expected
+        # under this share of a normal day
+        self.floor = floor
+        # remove the weekday effect from the factors (the calendar
+        # 28-day cycle, non-identifiable from the weekly one otherwise)
+        self.constrain_weekday = constrain_weekday
 
     def cycles(self, ndays):
         return ndays / float(self.period_days)
@@ -85,11 +96,34 @@ class Component:
 COMPONENTS = [
     Component('weekly', 7, 7, weekday_phase, min_cycles=3, window=7),
     Component('cycle', 28, 28, cycle_phase, min_cycles=3, window=29,
-              borrow_cycles=6),
+              borrow_cycles=6, constrain_weekday=True),
     Component('yearly', 53, 365.25, yearly_phase, min_cycles=2,
               window=365, smooth=1, borrow_cycles=3),
 ]
 BY_NAME = {c.name: c for c in COMPONENTS}
+
+
+RELEASE_FLOOR = 0.01
+
+
+def with_cycle_phase(phase, floor=RELEASE_FLOOR):
+    """The components with the 28-day cycle counted by *phase* instead of
+    the calendar: ``phase(dates) -> ndarray`` of 0..27.  The ``current``
+    version scope uses the days since the version's release, so the cycle
+    factors describe the rollout ramp of a new version: release day is a
+    few percent of a normal day (hence the lower *floor*) and, releases
+    falling on varying weekdays, the factors are not constrained to be
+    free of a weekday effect (that would divide the ramp by its 4-week
+    column means and distort it)."""
+    return [Component(c.name, c.nphases, c.period_days, phase,
+                      min_cycles=c.min_cycles, window=c.window,
+                      smooth=c.smooth, borrow_cycles=c.borrow_cycles,
+                      floor=floor, constrain_weekday=False)
+            if c.name == 'cycle' else c for c in COMPONENTS]
+
+
+def component(components, name):
+    return next((c for c in components if c.name == name), None)
 
 
 # --------------------------------------------------------------------------
@@ -284,12 +318,13 @@ def _phase_factors(ratio, phase, comp, prior=None, weight=1.0):
         return target.copy()
     noise = (np.pi / 2.0) * sigma ** 2 / np.maximum(counts, 1)
     w = np.where(seen, np.maximum(0.0, 1.0 - noise / spread), 0.0) * weight
+    floor = comp.floor
     with np.errstate(divide='ignore', invalid='ignore'):
-        logf = np.log(np.maximum(target, 0.05)) + w * (
-            np.log(np.maximum(raw, 0.05)) - np.log(np.maximum(target, 0.05)))
+        logf = np.log(np.maximum(target, floor)) + w * (
+            np.log(np.maximum(raw, floor)) - np.log(np.maximum(target, floor)))
     f = np.exp(logf)
     f = _smooth_circular(f, comp.smooth)
-    f = np.maximum(f, 0.05)
+    f = np.maximum(f, floor)
     return f / np.mean(f)
 
 
@@ -319,10 +354,12 @@ class Fit:
         c2 (float): relative over-dispersion (``Var = e + c2 e^2``).
     """
 
-    def __init__(self, dates, y, level_window):
+    def __init__(self, dates, y, level_window, components=None):
         self.dates = list(dates)
         self.y = np.asarray(y, dtype=np.float64)
         self.level_window = level_window
+        # the components (and their phase functions) this fit was made with
+        self.components = COMPONENTS if components is None else components
         self.factors = {}
         self.active = {}
         self.cycles = {}
@@ -346,7 +383,7 @@ class Fit:
     def seasonal_at(self, date):
         """Seasonal factor of an arbitrary date."""
         s = 1.0
-        for comp in COMPONENTS:
+        for comp in self.components:
             if self.active.get(comp.name):
                 k = comp.phase([date])[0]
                 s *= self.factors[comp.name][k]
@@ -355,7 +392,12 @@ class Fit:
     def factors_at(self, date):
         return {comp.name: round(float(self.factors[comp.name][
             comp.phase([date])[0]]), 4)
-            for comp in COMPONENTS if self.active.get(comp.name)}
+            for comp in self.components if self.active.get(comp.name)}
+
+    def phase_of(self, name, date):
+        """Phase (0-based) of *date* in component *name*."""
+        comp = component(self.components, name)
+        return int(comp.phase([date])[0]) if comp is not None else 0
 
     def forecast(self, date, horizon=1, damping=1.0):
         """Expected count for *date*, *horizon* days after the series.
@@ -406,7 +448,7 @@ class Fit:
                             'cycles': round(self.cycles.get(comp.name,
                                                             0.0), 2),
                             'min_cycles': comp.min_cycles}
-                for comp in COMPONENTS},
+                for comp in self.components},
             'factors': {name: [round(float(v), 4) for v in f]
                         for name, f in self.factors.items()},
             'borrowed': sorted(self.borrowed),
@@ -438,7 +480,7 @@ def fit(dates, y, level_window=14, iterations=3, prior=None,
     """
     if components is None:
         components = COMPONENTS
-    res = Fit(dates, y, level_window)
+    res = Fit(dates, y, level_window, components)
     y = res.y
     n = y.size
     if n == 0:
@@ -498,7 +540,7 @@ def fit(dates, y, level_window=14, iterations=3, prior=None,
                           else None)
                 f = _phase_factors(ratio, phases[name], comp, target,
                                    weights[name])
-                if name == 'cycle':
+                if comp.constrain_weekday:
                     f = _constrain_cycle(f)
                 res.factors[name] = f
         seasonal = np.ones(n)

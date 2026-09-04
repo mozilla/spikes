@@ -36,7 +36,8 @@ and the afternoon peak are not spikes.
 
 | file | role |
 |------|------|
-| `config.py`, `config/dashboard.json` | all tunables |
+| `config.py`, `config/dashboard.json` | all tunables; version scopes and channel keys |
+| `versions.py` | which version is current on a channel on a given day: release calendars → `dashboard_cycles`, the Socorro filter and the release-phase cycle of the `current` scope |
 | `socorro.py` | query shapes, response parsers, paced execution |
 | `collect.py` | fetch planner (what is missing / not final) and writers |
 | `models.py` | tables `dashboard_*`, portable upserts |
@@ -49,6 +50,78 @@ and the afternoon peak are not spikes.
 | `auth.py` | sign-in with a Mozilla Google account (`/dashboard/login`, `/dashboard/logout`, `/dashboard/api/me`) and the `login_required` guard for routes that change something |
 | `API.md` | JSON contract used by the page |
 | `templates/`, `static/` | the page (vanilla JS, SVG charts, no build) |
+
+## Version scopes: all versions and the current version
+
+Every channel is collected twice (`scopes` in the config): the **all**
+scope is every version reporting on the channel, the **current** scope only
+the version that is *current* on each day: between the releases of 152
+and 153 the release channel is 152.x only, beta is 153.0bN, nightly
+154.0a1 and ESR its current point release (140.15.x).  The page opens on
+the current version and has a "Current version / All versions" switch in
+the header (`#current/...` in the address for the current scope; a hash
+without the prefix, as in older links, is the all scope); everything below
+it, cards, tables, charts, thresholds and done marks, is that scope's.
+
+The two scopes are two sets of series, fitted and calibrated separately:
+a (channel, scope) pair is stored under a *channel key*, `release` for the
+all scope and `release@current` for the current one (`config.channel_key`),
+which is what every table, the planner and the scorer call "channel"; only
+the Socorro filters, the release calendar and the page tell them apart.
+
+`versions.py` turns the release calendars into **cycles**, one per version
+and channel, stored in `dashboard_cycles` by the scheduler (every
+`versions_refresh_hours`, 6; the web process never fetches them):
+
+| channel | boundary | filter | source |
+|---------|----------|--------|--------|
+| release | the day `N.0` ships | `major_version=N` (covers `N.0`, `N.0.1`, `N.0rc2`) | product-details major releases |
+| beta | the day `N.0b1` ships | `major_version=N` | product-details development releases |
+| nightly | the day nightly becomes `N.0a1` (the merge day of N-1) | `major_version=N` | whattrainisitnow `nightly_start`; else the day before `(N-1).0b1` |
+| esr | the day of the point release `X.N.0esr` | the exact `version` strings `X.Nesr`, `X.N.0esr` ... `X.N.9esr` (SuperSearch matches `version` exactly) | product-details stability releases |
+
+Fenix follows the Firefox train; Thunderbird has its own calendar and
+follows Firefox's merge days for nightly.  A new ESR train (153 next to
+140) becomes the current one `esr_overlap_weeks` (12) after its first
+release, when the old train gets its last point release.  The planned
+boundaries of the next versions (whattrainisitnow) are stored too, so the
+forecast on the daily chart restarts at the next release; ESR point
+releases are planned on those release days as well, and Thunderbird,
+which ships on Firefox's days, takes Firefox's planned dates.  A cycle starts
+at 00:00 UTC of its day: the hours before the actual ship time make the
+first day of a cycle small, which the model learns like anything else.
+
+The **model of the current scope** is the same as below with one change:
+its 28-day cycle component counts the days since the version's release
+instead of the calendar (`seasonal.with_cycle_phase`, phases 0..27, a
+5-week cycle clipped to 27), so the cycle factors are the *rollout ramp*
+(a few percent of a normal day on the release day, most of it after a
+week; hence no weekday constraint and a lower floor on the factors, see
+the model section) and a signature borrows that ramp from its channel
+from day one.
+Like any component it needs three cycles of history (84 days) before it
+is active: with the default 180-day backfill that is the case from the
+first complete backfill on; until then the expectation of a fresh cycle's
+first days is too high and they read as drops.
+Thresholds are learned from that scope's own residuals, so the noisier
+first days of a cycle raise its bar rather than flag everything, and the
+volume floor is taken from the de-seasonalised level rather than from the
+(tiny) expected value of a release day.  What the scope is for: a
+signature fixed in the new version is a **drop** there while the all
+scope still sees the old versions' crashes; a regression in the new
+version is a spike without the dilution of the old ones.  The lag guard
+only looks at the all scope, since every current channel legitimately
+restarts from nothing on the same release day.
+
+Collection is the same machinery with a version filter per unit: the
+planner attaches the day's cycle to every unit and splits history chunks
+where the version changes (`collect.with_cycles`); the label of the cycle
+a day was fetched under is kept in `dashboard_days.version`, and a day
+whose label no longer matches the cycle now believed (a boundary was
+corrected, e.g. once product-details knows the release) is fetched again.
+Nothing is planned for a scope while its cycles are unknown.  The current
+scope doubles the steady-state queries (22 per run) and its first backfill
+is ~400 queries.
 
 ## Data collection (Socorro SuperSearch)
 
@@ -125,6 +198,7 @@ day's `cutoff`, and a missing (series, day) value is treated as censored
 | `dashboard_scores` | (series, day) → live score | updated in place; keeps `first_flagged_at` and the day's peak |
 | `dashboard_runs` | one per run | status (`ok`, `partial`, `failed`, `aborted`), queries, message (pending work, errors) |
 | `dashboard_marks` | one per user action | "done" marks: series, done/undone, severity at the time, who, when; the latest per series wins and the highest id versions the API responses |
+| `dashboard_cycles` | (product, channel, start) | version cycles of the `current` scope: end, label (`155`, `140.15`), SuperSearch filter; replaced when the calendars change |
 
 `models.create_all()` (called by every run and by the web process before
 its first request) creates missing tables and adds columns that were added
@@ -167,7 +241,13 @@ y[t] ~ level[t] * weekly[weekday(t)] * cycle[t mod 28] * yearly[week(t)]
   Signatures are fitted on 180 days and borrow the yearly factors from
   their channel.
 * `28 = 4 * 7` makes the cycle and weekday components non-identifiable, so
-  the cycle factors are constrained to carry no weekday effect.
+  the calendar cycle factors are constrained to carry no weekday effect.
+  Counted from a version's release instead (the current scope, see
+  above) the cycle is the rollout ramp: releases fall on varying weekdays
+  so the two components are identifiable and the constraint is skipped
+  (it would divide the ramp by its 4-week column means), and the factors
+  are floored at 1 % of a normal day instead of 5 % since release day is
+  a few percent of one.
 * **Signatures borrow the channel's factors**: a signature only estimates
   its own factors once it has `own_factors_min_crashes` on enough days, and
   then in log space between the channel's and its own with weight
@@ -323,7 +403,8 @@ once and its polls cost a 304.  Rows older than `events_retention_days`
 ## Web
 
 `GET /dashboard.html` and the JSON endpoints described in `API.md`
-(`/dashboard/api/summary`, `/channel`, `/signature`).  The page is vanilla
+(`/dashboard/api/summary`, `/channel`, `/signature`, all taking
+`scope=all|current`).  The page is vanilla
 JS with hand-rolled SVG charts: an overview of the six channels with a
 cross-channel "flagged in the last 48 h" table, then for the selected channel the KPI
 tiles (today so far, projected, yesterday), the drivers, the intraday chart

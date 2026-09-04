@@ -17,17 +17,15 @@ from flask import (Blueprint, Response, g, jsonify, render_template,
 
 from spikes.logger import logger
 from . import (auth, calibration, config, events, intraday, models, scoring,
-               seasonal, socorro)
+               seasonal, socorro, versions)
 
 
 blueprint = Blueprint('dashboard', __name__, template_folder='templates',
                       static_folder='static',
                       static_url_path='/dashboard/static')
 
-PRODUCT_DETAILS = 'https://product-details.mozilla.org/1.0/'
-# product-details feed prefix per product (Fenix follows the Firefox train)
-FEEDS = {'Firefox': 'firefox', 'Fenix': 'firefox',
-         'Thunderbird': 'thunderbird'}
+PRODUCT_DETAILS = versions.PRODUCT_DETAILS
+FEEDS = versions.FEEDS  # product-details feed per product
 _releases_cache = {}
 
 
@@ -140,10 +138,12 @@ def score_json(score, series, final=None):
 
 def row_json(score, series, product, channel, spark=None, yesterday=None,
              flagged_days=0, flag=None, done=None):
+    """*channel* is the channel key; the row says channel and scope."""
     res = score_json(score, series)
+    real, scope = config.split_channel(channel)
     res.update({
         'signature': series.signature, 'product': product,
-        'channel': channel, 'series_id': series.id,
+        'channel': real, 'scope': scope, 'series_id': series.id,
         'socorro_url': socorro.link(product, channel, score.day,
                                     series.signature),
         'bugs': {'open': series.bug_open, 'closed': series.bug_closed},
@@ -186,13 +186,25 @@ def today_utc():
     return latest or models.utctoday()
 
 
+def parse_scope(args):
+    """The version scope asked for (``all`` by default, see versions.py)."""
+    scope = args.get('scope') or config.SCOPE_ALL
+    if scope not in config.scopes():
+        raise BadRequest('unknown scope')
+    return scope
+
+
 def parse_args(args):
+    """``(product, channel key, days, granularity)``: the channel key
+    carries the scope (``release`` or ``release@current``), which is what
+    the tables are keyed by."""
     product = args.get('product', 'Firefox')
     channel = args.get('channel', 'release')
     if product not in config.products():
         raise BadRequest('unknown product')
     if channel not in config.channels(product):
         raise BadRequest('unknown channel for this product')
+    channel = config.channel_key(channel, parse_scope(args))
     try:
         days = int(args.get('days', 90))
     except ValueError:
@@ -262,6 +274,7 @@ def releases(since=None, channel=None, product='Firefox'):
     nightly, beta and release); the ESR channel gets the ESR point
     releases.
     """
+    channel = config.split_channel(channel or '')[0]
     feed = FEEDS.get(product, 'firefox')
     cache = _releases_cache.setdefault(feed, {'at': 0.0, 'data': [],
                                               'esr': []})
@@ -307,6 +320,7 @@ def next_release(product, channel, today):
     version for nightly, the release day of the current beta for beta,
     release and ESR (Thunderbird ships the same days as Firefox).
     ``{'date', 'version'}`` or None when unknown or past."""
+    channel = config.split_channel(channel)[0]
     train, key = ('nightly', 'merge_day') if channel == 'nightly' \
         else ('beta', 'release')
     data = _schedule(train) or {}
@@ -330,8 +344,20 @@ def next_release(product, channel, today):
 
 def horizon_for(product, channel, today):
     """``(last forecast day, upcoming release marker or None)`` for the
-    daily chart: up to the next release, else two weeks."""
+    daily chart: up to the next release, else two weeks.  In the
+    ``current`` scope the next version cycle (versions.py) is the
+    boundary when it is known: the forecast restarts there."""
     nxt = next_release(product, channel, today)
+    cycles = versions.cycles_for(product, channel)
+    if cycles:
+        start = cycles.next_start(today)
+        if start is not None:
+            # the scope restarts with the version that *starts* there (the
+            # calendar's nightly marker names the one that leaves)
+            label = cycles.at(start).label
+            real = config.split_channel(channel)[0]
+            nxt = {'date': start, 'version': '{}.0'.format(label)
+                   if real == 'release' else '{} starts'.format(label)}
     if nxt is None:
         return today + datetime.timedelta(days=FORECAST_DAYS), None
     day = min(nxt['date'], today + datetime.timedelta(days=FORECAST_MAX_DAYS))
@@ -350,7 +376,8 @@ def last_run():
     return runs[0] if runs else None
 
 
-def data_health(now, run, channels, check_count=True):
+def data_health(now, run, channels, check_count=True,
+                scope=config.SCOPE_ALL):
     if run is None:
         return {'status': 'backfilling', 'since': None,
                 'detail': 'No run yet'}
@@ -362,7 +389,7 @@ def data_health(now, run, channels, check_count=True):
         return {'status': 'stale_local', 'since': ts(finished),
                 'detail': 'Last run {} {:.0f} min ago'.format(run.status,
                                                                 age)}
-    expected_channels = len(config.pairs())
+    expected_channels = len(config.pairs(scope))
     missing = expected_channels - len(channels) if check_count else 0
     if info.get('errors') or missing > 0:
         detail = '; '.join(info.get('errors', []))
@@ -573,7 +600,8 @@ def rows_json(product, channel, by_series, today, with_yesterday_final,
     ids = [sid for sid, e in by_series.items()
            if 'today' in e and not e['series'].is_total and
            (only_ids is None or sid in only_ids)]
-    cached = {sid: scoring.Cached.from_row(m)
+    comps = versions.components_for(product, channel)
+    cached = {sid: scoring.Cached.from_row(m, comps)
               for sid, m in models.load_models(ids).items()}
     spark = sparks(product, channel, ids, today, cached)
     history = flag_history(ids, today)
@@ -644,8 +672,12 @@ def channel_summary(product, channel, today, now):
     rows = rows_json(product, channel, by_series, today,
                      day_final(product, channel, yesterday), now)
     model = models.load_models([total_id]).get(total_id)
+    real, scope = config.split_channel(channel)
     return {
-        'product': product, 'channel': channel, 'day': day_str(today),
+        'product': product, 'channel': real, 'scope': scope,
+        # the version current today (``current`` scope), e.g. "155"
+        'version': versions.label_for(product, channel, today),
+        'day': day_str(today),
         'as_of': ts(entry['today'].as_of),
         'history_days': model.history_days if model else 0,
         'total': score_json(entry['today'], entry['series']),
@@ -688,7 +720,8 @@ def daily_block(product, channel, series_id, today, days, granularity,
     fit = seasonal.fit(dates, y, level_window=config.get('level_window', 14),
                        prior=prior_fit,
                        own_min=config.get('own_factors_min_crashes', 10),
-                       trend_min_level=config.get('trend_min_level', 50))
+                       trend_min_level=config.get('trend_min_level', 50),
+                       components=versions.components_for(product, channel))
     c2 = fit.c2
     # append today (partial) and the forecast (damped trend)
     future = []
@@ -783,7 +816,11 @@ def model_block(fit, today, cached=None, borrowed=None):
             'history_days': s['history_days'],
             'components': s['components'], 'factors': s['factors'],
             'today_factors': fit.factors_at(today),
-            'cycle_day': int(seasonal.cycle_phase([today])[0]) + 1,
+            'cycle_day': fit.phase_of('cycle', today) + 1,
+            # what the 28-day cycle counts: the calendar (all versions) or
+            # the days since the version's release (current scope)
+            'cycle_from': 'release' if fit.components is not
+            seasonal.COMPONENTS else 'calendar',
             'borrowed': s['borrowed']}
 
 
@@ -914,16 +951,17 @@ def html():
 
 @blueprint.route('/dashboard/api/summary')
 def summary():
+    scope = parse_scope(request.args)
     now = models.utcnow()
     run = last_run()
-    not_modified = conditional(run, now=now)
+    not_modified = conditional(run, scope, now=now)
     if not_modified is not None:
         return not_modified
     today = today_utc()
     channels = []
     alerts = []
     as_of = None
-    for product, channel in config.pairs():
+    for product, channel in config.pairs(scope):
         s = channel_summary(product, channel, today, now)
         if s is None:
             continue
@@ -932,7 +970,7 @@ def summary():
         channels.append(s)
         if s['as_of'] and (as_of is None or s['as_of'] > as_of):
             as_of = s['as_of']
-    health = data_health(now, run, channels)
+    health = data_health(now, run, channels, scope=scope)
     if health['status'] == 'stale_upstream':
         alerts = [a for a in alerts if flag_severity(a) != 'drop']
     alerts.sort(key=sort_key)
@@ -953,9 +991,10 @@ def summary():
         'thresholds': {'{}/{}'.format(c['product'], c['channel']):
                        c['thresholds'] for c in channels},
         'flag_window_hours': config.get('flag_window_hours', 48),
+        'scope': scope, 'scopes': config.scopes(),
         'channels': channels, 'alerts': alerts[:50],
         'releases': releases(today - datetime.timedelta(days=730)),
-    }, run, now=now)
+    }, run, scope, now=now)
 
 
 @blueprint.route('/dashboard/api/channel')

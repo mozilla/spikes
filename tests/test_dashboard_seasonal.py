@@ -26,6 +26,41 @@ def simulate(ndays=180, base=1000.0, r=50, seed=0, cycle=None, trend=0.0):
     return dates, y
 
 
+# rollout of a new version: release day is ~5 % of a normal day
+RAMP = np.array([0.05, 0.3, 0.6, 0.8, 0.9, 0.95] + [1.0] * 22)
+
+
+def release_phase(starts):
+    """Phase function of a release calendar: days since the latest release
+    (clamped at 27), as ``versions.Cycles.phase`` does."""
+    starts = sorted(starts)
+
+    def phase(dates):
+        res = np.zeros(len(dates), dtype=np.int64)
+        for i, d in enumerate(dates):
+            past = [s for s in starts if s <= d]
+            res[i] = min(27, (d - past[-1]).days) if past else \
+                S.cycle_phase([d])[0]
+        return res
+    return phase
+
+
+def simulate_releases(ndays=200, base=20000.0, r=400, seed=1):
+    """A channel whose volume restarts at every release: releases 27 to 29
+    days apart (so on varying weekdays), the weekly pattern on top.
+
+    Returns ``(dates, y, mu, phase)``: *mu* is the true mean."""
+    rng = np.random.default_rng(seed)
+    dates = [START + datetime.timedelta(days=i) for i in range(ndays)]
+    starts = [START]
+    for gap in (28, 29, 27, 28, 29, 27, 28, 28):
+        starts.append(starts[-1] + datetime.timedelta(days=gap))
+    phase = release_phase(starts)
+    mu = base * WEEKLY[[d.weekday() for d in dates]] * RAMP[phase(dates)]
+    y = rng.negative_binomial(r, r / (r + mu)).astype(float)
+    return dates, y, mu, phase
+
+
 class HelpersTest(unittest.TestCase):
 
     def test_anscombe_roundtrip(self):
@@ -142,6 +177,41 @@ class FitTest(unittest.TestCase):
         f = S.fit(dates, y)
         self.assertGreater(f.factors['cycle'][:7].mean(), 1.15)
         self.assertLess(f.factors['cycle'][21:].mean(), 0.9)
+
+    def test_release_ramp(self):
+        dates, y, mu, phase = simulate_releases()
+        comps = S.with_cycle_phase(phase)
+        f = S.fit(dates, y, components=comps)
+        self.assertTrue(f.active['cycle'])
+        cycle = f.factors['cycle']
+        late = cycle[7:].mean()
+        # release day is a few percent of a normal day and the ramp is
+        # steep: neither is flattened by the floor or the weekday
+        # constraint of the calendar cycle
+        self.assertLess(cycle[0] / late, 0.1)
+        self.assertLess(abs(cycle[1] / late - RAMP[1]), 0.08)
+        self.assertLess(abs(cycle[3] / late - RAMP[3]), 0.08)
+        np.testing.assert_allclose(cycle[7:] / late, 1.0, atol=0.12)
+        self.assertLess(np.median(np.abs(cycle[7:] / late - 1.0)), 0.05)
+        # the weekly pattern is still told apart from the ramp
+        np.testing.assert_allclose(f.factors['weekly'], WEEKLY, atol=0.08)
+        # the in-sample expectation follows the sawtooth once the level
+        # has settled (nothing left of the release-day drop)
+        ok = np.isfinite(f.expected)
+        ok[:56] = False
+        rel = np.abs(f.expected[ok] - mu[ok]) / mu[ok]
+        self.assertLess(np.median(rel), 0.08)
+        self.assertLess(np.quantile(rel, 0.9), 0.2)
+        # the calendar cycle keeps its constraint and floor
+        self.assertTrue(S.BY_NAME['cycle'].constrain_weekday)
+        self.assertEqual(S.BY_NAME['cycle'].floor, 0.05)
+        release = S.component(comps, 'cycle')
+        self.assertFalse(release.constrain_weekday)
+        self.assertEqual(release.floor, S.RELEASE_FLOOR)
+        # with the calendar cycle's constraint the ramp would be distorted
+        g = S.fit(dates, y, components=S.with_cycle_phase(phase, 0.05))
+        self.assertLess(g.factors['cycle'][0] / g.factors['cycle'][7:].mean(),
+                        0.1)
 
     def test_follows_trend(self):
         dates, y = simulate(trend=0.01)

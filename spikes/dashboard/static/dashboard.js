@@ -27,10 +27,15 @@ function logoFor(product, channel) {
   return `logo-${family}${suffix}.svg`;
 }
 
+// the view the page opens on: the version current on each day (the hash can
+// ask for the other scope, `all`: every version reporting on the channel)
+const DEFAULT_SCOPE = 'current';
+
 const app = {
   summary: null,
   channel: null,
   selected: null,
+  scope: DEFAULT_SCOPE, // version scope: 'all' or 'current'
   days: 90,
   granularity: 'day',
   sort: { key: 'severity', dir: 'asc' },
@@ -53,6 +58,7 @@ const etags = new Map(); // url -> { etag, data }
 
 async function fetchJSON(endpoint, params = {}) {
   const url = new URL(endpoint, API);
+  if (endpoint !== 'events' && app.scope !== 'all') params = { scope: app.scope, ...params };
   for (const [k, v] of Object.entries(params)) if (v != null) url.searchParams.set(k, v);
   const key = url.toString();
   const known = etags.get(key);
@@ -103,7 +109,7 @@ async function markDone(row, done) {
     res = await fetch(url, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
-      body: JSON.stringify({ product: row.product || app.selected?.product, channel: row.channel || app.selected?.channel, signature: row.signature, done }),
+      body: JSON.stringify({ product: row.product || app.selected?.product, channel: row.channel || app.selected?.channel, scope: app.scope, signature: row.signature, done }),
     });
   } catch (e) {
     showError(`Could not mark the signature (${e.message})`);
@@ -177,9 +183,21 @@ function restoreFocus(container, key) {
 }
 
 async function refresh({ initial = false } = {}) {
-  if (initial) loadAccount(); // independent of the data; not awaited
+  if (initial) {
+    loadAccount(); // independent of the data; not awaited
+    const h = parseHash();
+    if (h?.scope) app.scope = h.scope; // `#current/...` deep links
+  }
   try {
-    const summary = await fetchJSON('summary');
+    let summary;
+    try {
+      summary = await fetchJSON('summary');
+    } catch (e) {
+      // a server that collects only the all scope rejects the default one
+      if (!initial || app.scope === 'all') throw e;
+      app.scope = 'all';
+      summary = await fetchJSON('summary');
+    }
     // A 304 returns the cached object, so identity is enough to avoid a redraw.
     const changed = summary !== app.summary;
     if (changed) {
@@ -458,21 +476,31 @@ function channelKey(c) {
   return isAll(c) ? ALL_KEY : `${c.product}/${c.channel}`;
 }
 
+const SCOPE_PREFIX = 'current'; // `#current/...`: the current-version scope
+
 /** `#all`, `#Product/channel` or `#Product/channel/<encoded signature>`
- * (the signature part is percent-encoded, so its own slashes are safe). */
+ * (the signature part is percent-encoded, so its own slashes are safe), each
+ * optionally prefixed with `current/` for the current-version scope; the scope
+ * is returned in `scope` (`all` when absent). */
 function parseHash() {
   const raw = location.hash.slice(1);
   if (!raw) return null;
-  if (decodeURIComponent(raw) === ALL_KEY) return ALL;
-  const parts = raw.split('/');
+  let parts = raw.split('/');
+  let scope = 'all';
+  if (parts.length > 1 && parts[0] === SCOPE_PREFIX) { scope = 'current'; parts = parts.slice(1); }
+  if (parts.length === 1 && decodeURIComponent(parts[0]) === ALL_KEY) return { ...ALL, scope };
   if (parts.length < 2 || !parts[0] || !parts[1]) return null;
-  const res = { product: decodeURIComponent(parts[0]), channel: decodeURIComponent(parts[1]) };
+  const res = { product: decodeURIComponent(parts[0]), channel: decodeURIComponent(parts[1]), scope };
   if (parts.length > 2 && parts.slice(2).join('/')) res.signature = decodeURIComponent(parts.slice(2).join('/'));
   return res;
 }
 
+function scopePrefix() {
+  return app.scope === 'all' ? '' : `${SCOPE_PREFIX}/`;
+}
+
 function channelHash(product, channel, signature = null) {
-  let hash = `#${encodeURIComponent(product)}/${encodeURIComponent(channel)}`;
+  let hash = `#${scopePrefix()}${encodeURIComponent(product)}/${encodeURIComponent(channel)}`;
   if (signature) hash += `/${encodeURIComponent(signature)}`;
   return hash;
 }
@@ -484,7 +512,7 @@ function updateHash(signature = null) {
     const current = parseHash();
     if (current && !isAll(current) && current.signature && channelKey(current) === channelKey(app.selected)) return;
   }
-  const hash = isAll(app.selected) ? `#${ALL_KEY}` : channelHash(app.selected.product, app.selected.channel, signature);
+  const hash = isAll(app.selected) ? `#${scopePrefix()}${ALL_KEY}` : channelHash(app.selected.product, app.selected.channel, signature);
   if (location.hash !== hash) history.replaceState(null, '', hash);
 }
 
@@ -494,7 +522,7 @@ function defaultChannel() {
   if (!channels.length) return null;
   const fromHash = parseHash();
   if (isAll(fromHash)) return ALL;
-  if (fromHash && channels.some((c) => c.product === fromHash.product && c.channel === fromHash.channel)) return fromHash; // may carry a signature
+  if (fromHash && channels.some((c) => c.product === fromHash.product && c.channel === fromHash.channel)) return { product: fromHash.product, channel: fromHash.channel, signature: fromHash.signature }; // may carry a signature
   return ALL;
 }
 
@@ -575,8 +603,42 @@ function renderTabStatus(s) {
 }
 
 // ---------------------------------------------------------------- header
+/** "All versions | Current version": shown when the server collects both scopes. */
+function renderScopeControls(s) {
+  const box = $('scope-controls');
+  const scopes = s.scopes || ['all'];
+  box.hidden = scopes.length < 2;
+  for (const input of box.querySelectorAll('input[name="scope"]')) {
+    input.checked = input.value === app.scope;
+    input.disabled = !scopes.includes(input.value);
+  }
+}
+
+/** Switch scope.  From the toggle the selected channel is kept (the hash gets
+ * its prefix); from a hash change the hash owns the selection, so it is re-read
+ * by `defaultChannel()` (a deep link to another channel or signature works). */
+async function setScope(scope, { fromHash = false } = {}) {
+  if (scope === app.scope) return;
+  app.scope = scope;
+  clearExpanded();
+  app.channel = null;
+  if (fromHash) app.selected = null;
+  else updateHash(); // the cached summary/channel of the other scope stay in `etags`
+  try {
+    await refresh();
+  } catch (e) {
+    showError(`Could not load the ${scope === 'all' ? 'all versions' : 'current version'} view (${e.message})`);
+  }
+}
+
+/** "155" / "140.15" of the version a current-scope channel shows today, or null. */
+function versionTag(c) {
+  return c?.scope === 'current' && c.version ? c.version : null;
+}
+
 function renderSummary() {
   const s = app.summary;
+  renderScopeControls(s);
   app.hideDrops = s.data_health?.status === 'stale_upstream';
   for (const label of document.querySelectorAll('#sig-filters .chip-toggle')) {
     const input = label.querySelector('input');
@@ -664,7 +726,7 @@ function allCard(s) {
     .sort((a, b) => SEV_RANK[a] - SEV_RANK[b])[0] || 'ok';
   const card = el('button', { type: 'button', class: 'card card-all', 'data-key': ALL_KEY, 'data-focus': `card:${ALL_KEY}`, 'aria-pressed': 'false' });
   card.append(el('div', { class: 'card-head' },
-    el('span', { class: 'card-title' }, 'All channels'),
+    el('span', { class: 'card-title' }, 'All channels', app.scope === 'current' ? el('span', { class: 'version-tag' }, 'current versions') : null),
     chip(worst)));
   card.append(el('div', { class: 'tile-label' }, `Flagged, last ${flagWindowHours()} h`));
   const nchan = new Set(rows.map((r) => `${r.product}/${r.channel}`)).size;
@@ -684,8 +746,10 @@ function channelCard(c) {
   const key = channelKey(c);
   const card = el('button', { type: 'button', class: 'card', 'data-key': key, 'data-focus': `card:${key}`, 'aria-pressed': 'false' });
   // the product is the group's title; keep it in the button's name
+  const version = versionTag(c);
   card.append(el('div', { class: 'card-head' },
-    el('span', { class: 'card-title' }, el('span', { class: 'visually-hidden' }, `${c.product} `), c.channel),
+    el('span', { class: 'card-title' }, el('span', { class: 'visually-hidden' }, `${c.product} `), c.channel,
+      version ? el('span', { class: 'version-tag', title: `Only version ${version}, the one current today` }, version) : null),
     chip(sev)));
   card.append(el('div', { class: 'tile-label' }, 'Today so far'));
   card.append(el('div', { class: 'card-value' }, fmtInt(t.observed), el('span', { class: 'vs' }, `vs ${fmtInt(t.expected)} expected`)));
@@ -762,8 +826,11 @@ function renderDetail() {
   const section = $('detail');
   section.hidden = false;
   renderRangeOptions(ch);
-  $('detail-title').textContent = `${ch.product} ${ch.channel}`;
-  $('detail-meta').textContent = `${fmtDateLong(parseDay(ch.day))} · data as of ${fmtTime(ch.as_of)}`;
+  const title = $('detail-title');
+  title.textContent = `${ch.product} ${ch.channel}`;
+  const version = versionTag(ch);
+  if (version) title.append(el('span', { class: 'version-tag', title: 'Only the version current on each day (the cycle restarts at every release)' }, `version ${version}`));
+  $('detail-meta').textContent = `${fmtDateLong(parseDay(ch.day))} · data as of ${fmtTime(ch.as_of)}${ch.scope === 'current' ? ' · current version only' : ''}`;
   renderTiles(ch);
   renderDrivers(ch);
   renderCharts(ch);
@@ -901,16 +968,30 @@ function modelSummaryText(model, day) {
   parts.push(`Today: ${wd}${tf.weekly != null ? ` ×${tf.weekly.toFixed(2)}` : ''}`);
   if (comp.cycle?.active && tf.cycle != null) {
     const d = cycleDay(model);
-    parts.push(`cycle${d ? ` day ${d}/${model.factors.cycle.length}` : ''} ×${tf.cycle.toFixed(2)}`);
-  } else if (comp.cycle) parts.push(`cycle n/a (${comp.cycle.cycles} / ${comp.cycle.min_cycles} cycles)`);
+    let when = '';
+    if (d && isReleaseCycle(model)) when = d === 1 ? ': release day' : `: day ${d - 1} after the release`;
+    else if (d) when = ` day ${d}/${model.factors.cycle.length}`;
+    parts.push(`${cycleName(model)}${when} ×${tf.cycle.toFixed(2)}`);
+  } else if (comp.cycle) parts.push(`${cycleName(model)} n/a (${comp.cycle.cycles} / ${comp.cycle.min_cycles} cycles)`);
   if (comp.yearly) parts.push(comp.yearly.active ? `yearly${tf.yearly != null ? ` ×${tf.yearly.toFixed(2)}` : ' active'}` : `yearly n/a (${comp.yearly.cycles} / ${comp.yearly.min_cycles} cycles)`);
   parts.push(`level ${fmtCompact(model.level)}`);
   parts.push(`dispersion ${model.dispersion != null ? model.dispersion.toFixed(1) : '—'}`);
   return parts.join(' · ');
 }
 
-function componentLine(name, c, borrowed) {
-  const label = { weekly: 'weekly seasonality', cycle: 'release cycle (28 days)', yearly: 'yearly seasonality' }[name] || name;
+// the current scope counts the 28-day cycle from the version's release:
+// its factors are the rollout ramp of a new version
+function isReleaseCycle(model) {
+  return model?.cycle_from === 'release';
+}
+
+function cycleName(model) {
+  return isReleaseCycle(model) ? 'rollout' : 'cycle';
+}
+
+function componentLine(name, c, borrowed, model) {
+  const cycleLabel = isReleaseCycle(model) ? 'rollout ramp (days since the release)' : 'release cycle (28 days)';
+  const label = { weekly: 'weekly seasonality', cycle: cycleLabel, yearly: 'yearly seasonality' }[name] || name;
   if (!c) return `${label}: unknown`;
   const src = borrowed?.includes(name) ? ', borrowed from the channel' : '';
   return c.active ? `${label}: active (${c.cycles} cycles${src})` : `${label}: not enough history (${c.cycles} / ${c.min_cycles} cycles)`;
@@ -927,16 +1008,18 @@ function renderModel(model, ch) {
   weekly.append(wMini);
   body.append(weekly);
   if (model.factors?.weekly) miniFactors(wMini, { values: model.factors.weekly, labels: ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'], highlight: todayIdx, kind: 'bar' });
-  const cycle = el('div', { class: 'model-block' }, el('h4', {}, 'Release-cycle factors (day of the 28-day cycle)'));
+  const cycle = el('div', { class: 'model-block' }, el('h4', {}, isReleaseCycle(model)
+    ? 'Rollout factors (day 1 = release day, then the days after it)'
+    : 'Release-cycle factors (day of the 28-day cycle)'));
   const cMini = el('div');
   cycle.append(cMini);
   body.append(cycle);
   if (model.factors?.cycle) miniFactors(cMini, { values: model.factors.cycle, highlight: (cycleDay(model) || 0) - 1, kind: 'line', ticks: [1, 8, 15, 22, 28] });
   const comps = el('ul');
-  for (const k of ['weekly', 'cycle', 'yearly']) comps.append(el('li', {}, componentLine(k, model.components?.[k], model.borrowed)));
+  for (const k of ['weekly', 'cycle', 'yearly']) comps.append(el('li', {}, componentLine(k, model.components?.[k], model.borrowed, model)));
   const disp = model.dispersion != null ? model.dispersion.toFixed(1) : '—';
   body.append(el('div', { class: 'model-block' }, el('h4', {}, 'Components and band'), comps,
-    el('p', {}, `Expected = level (${fmtInt(model.level)}, median of the last 14 de-seasonalised days) × weekday factor × cycle factor${model.components?.yearly?.active ? ' × yearly factor' : ''}. `
+    el('p', {}, `Expected = level (${fmtInt(model.level)}, median of the last 14 de-seasonalised days) × weekday factor × ${isReleaseCycle(model) ? 'rollout' : 'cycle'} factor${model.components?.yearly?.active ? ' × yearly factor' : ''}. `
       + `Residuals are measured on the Anscombe scale, 2·(√(observed + ⅜) − √(expected + ⅜)), and divided by the dispersion ${disp}; `
       + `the grey bands are ±3 (watch) and ±5 (spike) dispersions around the expectation. History: ${model.history_days ?? '—'} days.`)));
 }
@@ -1437,6 +1520,9 @@ function bindControls() {
     const [product, channel] = card.dataset.key.split('/');
     selectChannel(product, channel);
   });
+  $('scope-controls').addEventListener('change', (e) => {
+    if (e.target.name === 'scope') setScope(e.target.value);
+  });
   $('range-controls').addEventListener('change', (e) => {
     if (e.target.name === 'days') app.days = Number(e.target.value);
     if (e.target.name === 'granularity') app.granularity = e.target.value;
@@ -1458,6 +1544,7 @@ function bindControls() {
     if (app.account) renderAccount(); // the sign-in/out "next" follows the view
     const h = parseHash();
     if (!h || !app.summary) return;
+    if (h.scope && h.scope !== app.scope) { setScope(h.scope, { fromHash: true }); return; }
     if (isAll(h)) { if (!isAll(app.selected)) selectAll(); return; }
     const same = app.selected && channelKey(h) === channelKey(app.selected);
     if (!same || h.signature) selectChannel(h.product, h.channel, h.signature || null);

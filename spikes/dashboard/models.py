@@ -114,6 +114,10 @@ class Day(db.Model):
     # fetched with the merged per-day query (hourly split + installs)
     complete = db.Column(db.Boolean, nullable=False, default=False)
     hours_capped = db.Column(db.Integer, nullable=False, default=0)
+    # label of the version cycle the day was fetched for (``current``
+    # scope only, see versions.py): a day fetched under a cycle that was
+    # later corrected is fetched again
+    version = db.Column(db.String(32))
 
     __table_args__ = (
         sa.UniqueConstraint('product', 'channel', 'day',
@@ -239,6 +243,28 @@ class Feed(db.Model):
     message = db.Column(db.String(200))
 
 
+class Cycle(db.Model):
+    """A version cycle of a channel: the days on which one version was
+    the current one (see versions.py).  Computed by the scheduler from the
+    release calendars; the web process only reads them (crash-stats links,
+    the cycle phase of the ``current`` scope's fits)."""
+    __tablename__ = 'dashboard_cycles'
+
+    id = db.Column(db.Integer, primary_key=True, autoincrement=True)
+    product = db.Column(db.String(32), nullable=False)
+    channel = db.Column(db.String(32), nullable=False)  # the real channel
+    start = db.Column(db.Date, nullable=False)
+    end = db.Column(db.Date)                            # None: open
+    label = db.Column(db.String(32), nullable=False)    # "155", "140.15"
+    params = db.Column(db.JSON, nullable=False)         # SuperSearch filter
+    updated_at = db.Column(db.DateTime, nullable=False)
+
+    __table_args__ = (
+        sa.UniqueConstraint('product', 'channel', 'start',
+                            name='uq_dashboard_cycles'),
+    )
+
+
 class Mark(db.Model):
     """A signed-in user's mark on a series: "done", the spike is handled.
 
@@ -263,7 +289,7 @@ class Mark(db.Model):
 
 TABLES = [Series.__table__, Daily.__table__, Hourly.__table__,
           Day.__table__, Model.__table__, Score.__table__, Run.__table__,
-          Event.__table__, Feed.__table__, Mark.__table__]
+          Event.__table__, Feed.__table__, Mark.__table__, Cycle.__table__]
 
 
 def create_all():
@@ -691,3 +717,33 @@ def marks_version():
     """Highest mark id (0 when none): part of the API data version."""
     return int(db.session.execute(sa.select(sa.func.max(Mark.id))).scalar()
                or 0)
+
+
+# --------------------------------------------------------------------------
+# Version cycles
+# --------------------------------------------------------------------------
+
+def load_cycles(product, channel):
+    """Cycles of a (product, real channel), oldest first."""
+    return list(db.session.execute(sa.select(Cycle).where(
+        Cycle.product == product, Cycle.channel == channel).order_by(
+        Cycle.start)).scalars())
+
+
+def replace_cycles(product, channel, rows, now):
+    """Store the cycles of a channel (``[{start, end, label, params}]``),
+    replacing the previous set when it differs.  Returns True when the
+    table changed."""
+    current = [(c.start, c.end, c.label, c.params)
+               for c in load_cycles(product, channel)]
+    wanted = [(r['start'], r['end'], r['label'], r['params']) for r in rows]
+    if current == wanted:
+        return False
+    db.session.execute(sa.delete(Cycle).where(Cycle.product == product,
+                                              Cycle.channel == channel))
+    for r in rows:
+        db.session.add(Cycle(product=product, channel=channel,
+                             start=r['start'], end=r['end'],
+                             label=r['label'], params=r['params'],
+                             updated_at=now))
+    return True

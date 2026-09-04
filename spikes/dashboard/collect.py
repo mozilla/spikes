@@ -34,20 +34,27 @@ import datetime
 
 from spikes import db
 from spikes.logger import logger
-from . import config, models, socorro
+from . import config, models, socorro, versions
 
 
 class Unit:
     """A query to run: ``kind`` over ``[start, end)`` (dates, or naive UTC
-    datetimes for ``recent``)."""
+    datetimes for ``recent``).  *cycle* is the version cycle the range
+    lies in (``current`` scope, see versions.py): its filter goes into the
+    query and its label into the day bookkeeping."""
 
-    def __init__(self, kind, product, channel, start, end):
+    def __init__(self, kind, product, channel, start, end, cycle=None):
         self.kind = kind
         self.product = product
         self.channel = channel
         self.start = start
         self.end = end
+        self.cycle = cycle
         self.result = None
+
+    @property
+    def label(self):
+        return self.cycle.label if self.cycle is not None else None
 
     @property
     def day(self):
@@ -63,8 +70,9 @@ class Unit:
         return 1
 
     def params(self):
-        return socorro.query_params(self.kind, self.product, self.channel,
-                                    self.start, self.end)
+        return socorro.query_params(
+            self.kind, self.product, self.channel, self.start, self.end,
+            self.cycle.params if self.cycle is not None else None)
 
 
 def is_final(day, as_of, crashes, prev_crashes, today, grace_hours,
@@ -92,6 +100,15 @@ def plan(product, channel, today, history_days=None, recent_days=None,
         now = models.utcnow()
     first = today - datetime.timedelta(days=history_days)
     rows = {r.day: r for r in models.load_days(product, channel, first)}
+    # the ``current`` scope: nothing to plan before the version cycles are
+    # known, and a day fetched under a cycle that has since been corrected
+    # (a boundary moved) counts as missing
+    cycles = versions.cycles_for(product, channel)
+    if cycles is not None:
+        if not cycles:
+            return []
+        rows = {d: r for d, r in rows.items()
+                if r.version == getattr(cycles.at(d), 'label', None)}
     units = []
     one = datetime.timedelta(days=1)
     # 1. today: full fetch the first time, incremental afterwards
@@ -145,7 +162,28 @@ def plan(product, channel, today, history_days=None, recent_days=None,
         units.append(Unit('hourly_total', product, channel, start, end))
     for start, end in _chunks_of(missing_hourly, chunk_days):
         units.append(Unit('hourly_total', product, channel, start, end))
+    if cycles is not None:
+        units = with_cycles(units, cycles)
     return units
+
+
+def with_cycles(units, cycles):
+    """Attach the version cycle to every unit of a ``current``-scope
+    channel: single-day units get their day's cycle, history chunks are
+    split where the version changes; days without a known cycle are not
+    fetched."""
+    res = []
+    for u in units:
+        if u.kind in ('day', 'recent', 'installs'):
+            c = cycles.at(u.day)
+            if c is not None:
+                u.cycle = c
+                res.append(u)
+            continue
+        for start, end, c in cycles.split(u.start, u.end):
+            if c is not None:
+                res.append(Unit(u.kind, u.product, u.channel, start, end, c))
+    return res
 
 
 def _chunks_of(days, chunk_days):
@@ -216,7 +254,8 @@ def write_day(unit, parsed, as_of, today):
     models.upsert_day(product, channel, day, crashes=parsed['total'],
                       prev_crashes=prev, cutoff=parsed['cutoff'],
                       as_of=as_of, installs_as_of=as_of, final=final,
-                      complete=True, hours_capped=parsed['hours_capped'])
+                      complete=True, hours_capped=parsed['hours_capped'],
+                      version=unit.label)
 
 
 def write_recent(unit, parsed, as_of, today):
@@ -295,7 +334,7 @@ def write_recent(unit, parsed, as_of, today):
     models.update_seen([sid for sid in changed if sid != total_id and
                         sum(stored[sid]) > 0], day)
     models.upsert_day(product, channel, day, crashes=int(sum(total)),
-                      as_of=as_of)
+                      as_of=as_of, version=unit.label)
 
 
 def write_installs(unit, parsed, as_of, today):
@@ -339,12 +378,13 @@ def write_daily(unit, parsed, as_of, today):
         models.update_seen([ids[s] for s, c in info['signatures'].items()
                             if c > 0], day)
         row = models.get_day(product, channel, day)
-        if row is None or not row.complete:
+        if row is None or not row.complete or row.version != unit.label:
             final = is_final(day, as_of, info['total'], None, today, grace,
                              recent)
             models.upsert_day(product, channel, day, crashes=info['total'],
                               cutoff=info['cutoff'], as_of=as_of,
-                              final=final, complete=False)
+                              final=final, complete=False,
+                              version=unit.label)
         day += datetime.timedelta(days=1)
 
 
