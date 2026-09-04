@@ -8,6 +8,7 @@ The Socorro responses are fixtures or synthetic; nothing touches the
 network.
 """
 
+import copy
 import datetime
 import json
 import os
@@ -64,7 +65,10 @@ class FakeFetcher:
             if self.responses.get(kind) is None:
                 self.failures += 1
                 continue
-            cb(self.responses[kind])
+            try:
+                cb(self.responses[kind])
+            except Exception:  # like Fetcher._run_batch: a bad response
+                self.failures += 1
         return len(jobs), len(jobs)
 
 
@@ -687,6 +691,67 @@ class ScoringTest(DBTestCase):
         kinds = [(u.kind, u.start) for u in units if u.kind != 'day']
         self.assertEqual(kinds, [('hourly_total',
                                   datetime.date(2026, 8, 18))])
+
+    def test_missing_index_days_are_unknown(self):
+        # Socorro deleted the oldest week's index (its retention edge):
+        # the days of that week are stored as unknown, not as empty, and
+        # are not asked for again
+        start, end = datetime.date(2026, 8, 18), datetime.date(2026, 9, 1)
+        gone = socorro.index_for(start)
+        daily = copy.deepcopy(load('socorro_daily.json'))
+        daily['errors'] = [{'type': 'missing_index', 'index': gone}]
+        daily['facets']['histogram_date'] = [
+            b for b in daily['facets']['histogram_date']
+            if socorro.index_for(socorro.parse_term(b['term']).date())
+            != gone]
+        hourly = copy.deepcopy(load('socorro_hourly.json'))
+        hourly['errors'] = daily['errors']
+        responses = {'daily': daily, 'hourly_total': hourly}
+        units = [collect.Unit('daily', 'Firefox', 'nightly', start, end),
+                 collect.Unit('hourly_total', 'Firefox', 'nightly', start,
+                              end)]
+        written, failed, skipped = collect.execute(
+            units, FakeFetcher(responses), TODAY, NOW)
+        self.assertEqual((written, failed), (2, 0))
+        days = [start + datetime.timedelta(days=i)
+                for i in range((end - start).days)]
+        unknown = [d for d in days if socorro.index_for(d) == gone]
+        self.assertEqual(len(unknown), 6)  # Tuesday 18 .. Sunday 23
+        rows = {r.day: r
+                for r in models.load_days('Firefox', 'nightly', start)}
+        total_id = models.total_series('Firefox', 'nightly', create=False)
+        counts = models.load_daily([total_id], start)[total_id]
+        hours = models.load_hourly([total_id], days).get(total_id, {})
+        for d in unknown:
+            self.assertIsNone(rows[d].crashes)
+            self.assertTrue(rows[d].complete and rows[d].final)
+            self.assertNotIn(d, counts)
+            self.assertNotIn(d, hours)
+        for d in days:
+            if d not in unknown:
+                self.assertIn(d, counts)
+                self.assertIn(d, hours)
+        # the fits see them as NaN, not as days without crashes
+        dates, y, _ = scoring.build_history({}, rows, start, days[-1])
+        self.assertTrue(all(np.isnan(y[dates.index(d)]) for d in unknown))
+        self.assertTrue(all(np.isfinite(y[dates.index(d)])
+                            for d in days if d not in unknown))
+        # and the planner is done with them
+        units = collect.plan('Firefox', 'nightly', TODAY, history_days=15,
+                             recent_days=1)
+        self.assertEqual([u for u in units
+                          if u.kind in collect.HISTORY_KINDS], [])
+        # a single-day query whose index is gone stores nothing
+        day = load('socorro_day.json')
+        day['errors'] = [{'type': 'missing_index',
+                          'index': socorro.index_for(TODAY)}]
+        fetcher = FakeFetcher({'day': day})
+        units = [collect.Unit('day', 'Firefox', 'nightly', TODAY,
+                              TODAY + datetime.timedelta(days=1))]
+        written, failed, skipped = collect.execute(units, fetcher, TODAY,
+                                                   NOW)
+        self.assertEqual((written, failed, fetcher.failures), (0, 1, 1))
+        self.assertIsNone(models.get_day('Firefox', 'nightly', TODAY))
 
     def test_stale_non_final_day_is_refetched(self):
         old = TODAY - datetime.timedelta(days=12)

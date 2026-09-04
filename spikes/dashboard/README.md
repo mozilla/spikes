@@ -166,7 +166,12 @@ Query budget:
   not final and fetches them within `max_queries_per_run` (60) and
   `max_run_seconds` (420), interleaving channels so all of them progress.
   The initial 6 months (Socorro's retention) are ~200 queries, i.e. 3-4
-  runs.  Gaps after downtime are refilled the same way.
+  runs.  Gaps after downtime are refilled the same way.  At the retention
+  edge Socorro deletes the oldest week's index and answers a range that
+  touches it with the other weeks' data plus a `missing_index` error:
+  those days are stored as unknown (a complete `dashboard_days` row
+  without a count), so they are neither zeros in the fits nor asked for
+  again.
 * Requests go through a `SuperSearch` subclass with a bounded worker pool
   and 6 retries (libmozdata ignores those as keyword arguments and would
   otherwise retry 256 times), paced to at most `60 / min_seconds_per_query`

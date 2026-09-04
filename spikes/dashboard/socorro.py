@@ -235,8 +235,31 @@ def _cutoff(entries, size):
     return None
 
 
+# Socorro keeps one Elasticsearch index per week (Monday-based week
+# number, ``strftime``'s %W) and deletes the oldest at its retention edge
+INDEX_TEMPLATE = 'socorro%Y%W'
+
+
+def index_for(day):
+    """Name of the weekly index *day* is stored in."""
+    return day.strftime(INDEX_TEMPLATE)
+
+
+def is_missing_index(error):
+    return isinstance(error, dict) and error.get('type') == 'missing_index'
+
+
+def missing_indices(json):
+    """Indices SuperSearch reported missing (deleted at the retention
+    edge).  Their days have no data; the rest of the response is complete
+    (Socorro skips a missing index and goes on with the others)."""
+    errors = json.get('errors') if isinstance(json, dict) else None
+    return {e.get('index') for e in errors or [] if is_missing_index(e)}
+
+
 def check_errors(json):
     errors = json.get('errors') if isinstance(json, dict) else None
+    errors = [e for e in errors or [] if not is_missing_index(e)]
     if errors:
         raise ValueError('SuperSearch errors: {}'.format(errors))
     if not isinstance(json, dict) or 'facets' not in json:

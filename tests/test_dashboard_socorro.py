@@ -176,6 +176,29 @@ class SocorroParsingTest(unittest.TestCase):
         self.assertIsNone(res['installs'])
         self.assertIsNone(res['hourly_installs'])
 
+    def test_missing_index_is_not_an_error(self):
+        # Socorro's weekly indices: %W weeks (Monday-based); the week of
+        # 2026-03-02..08 was reported missing while 03-09 still had data
+        self.assertEqual(socorro.index_for(datetime.date(2026, 3, 2)),
+                         'socorro202609')
+        self.assertEqual(socorro.index_for(datetime.date(2026, 3, 8)),
+                         'socorro202609')
+        self.assertEqual(socorro.index_for(datetime.date(2026, 3, 9)),
+                         'socorro202610')
+        gone = {'type': 'missing_index', 'index': 'socorro202609'}
+        data = {'total': 5, 'errors': [gone], 'facets': {
+            'histogram_date': [
+                {'term': '2026-03-09T00:00:00+00:00', 'count': 5,
+                 'facets': {'signature': [{'term': 'a', 'count': 5}]}}]}}
+        self.assertEqual(socorro.missing_indices(data), {'socorro202609'})
+        parsed = socorro.parse_daily(data)
+        self.assertEqual(list(parsed), [datetime.date(2026, 3, 9)])
+        self.assertEqual(parsed[datetime.date(2026, 3, 9)]['total'], 5)
+        # any other error still fails the query
+        data['errors'].append({'type': 'bad'})
+        with self.assertRaises(ValueError):
+            socorro.parse_daily(data)
+
     def test_errors_raise(self):
         with self.assertRaises(ValueError):
             socorro.parse_day({'errors': ['bad'], 'facets': {}})

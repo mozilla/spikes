@@ -23,7 +23,10 @@ A day becomes final once it has been fetched at least ``final_grace_hours``
 after its end *and* its total did not change since the previous fetch
 (the SuperSearch ``date`` is the collector receipt time; the processor can
 index reports into past buckets for a while).  Days older than the recent
-window are final as soon as they are fetched.
+window are final as soon as they are fetched.  A day whose weekly index
+Socorro has deleted (its retention edge, reported as a ``missing_index``
+error next to the data of the other weeks) is stored as complete without
+a count: unknown to the fits and never asked for again.
 
 Every unit is written in its own transaction, the ``dashboard_days`` row
 last, so a crash or a killed dyno never leaves a half-written day that
@@ -51,6 +54,8 @@ class Unit:
         self.end = end
         self.cycle = cycle
         self.result = None
+        # weekly indices the response reported missing (see write_daily)
+        self.missing = set()
 
     @property
     def label(self):
@@ -367,6 +372,16 @@ def write_daily(unit, parsed, as_of, today):
     noise = _noise_checker(channel)
     day = unit.start
     while day < unit.end:
+        if socorro.index_for(day) in unit.missing:
+            # Socorro has deleted the week's index (its retention edge):
+            # the day is unknown, not empty.  A complete row without a
+            # count stops the planner from asking again; the fits see
+            # NaN (scoring.censored_value).
+            models.upsert_day(product, channel, day, crashes=None,
+                              cutoff=None, as_of=as_of, final=True,
+                              complete=True, version=unit.label)
+            day += datetime.timedelta(days=1)
+            continue
         info = parsed.get(day, {'total': 0, 'signatures': {}, 'cutoff': None})
         ids = models.series_ids(product, channel, info['signatures'].keys(),
                                 noise=noise)
@@ -395,15 +410,20 @@ def write_hourly_total(unit, parsed, as_of, today):
     day = unit.start
     while day < unit.end:
         # SuperSearch omits empty buckets: a day without crashes is zeros
-        # (a row per day makes the planner converge)
-        rows.append({'series_id': total_id, 'day': day,
-                     'hourly': parsed.get(day, [0] * socorro.HOURS)})
+        # (a row per day makes the planner converge); a day whose index
+        # is gone has no split at all
+        if socorro.index_for(day) not in unit.missing:
+            rows.append({'series_id': total_id, 'day': day,
+                         'hourly': parsed.get(day, [0] * socorro.HOURS)})
         day += datetime.timedelta(days=1)
-    models.upsert(models.Hourly, rows, ['series_id', 'day'])
+    if rows:
+        models.upsert(models.Hourly, rows, ['series_id', 'day'])
 
 
 HOURS_LAST = socorro.HOURS - 1
 
+# chunks of past days: a day whose index is gone is stored as unknown
+HISTORY_KINDS = ('daily', 'hourly_total')
 WRITERS = {'day': write_day, 'recent': write_recent,
            'installs': write_installs, 'daily': write_daily,
            'hourly_total': write_hourly_total}
@@ -432,7 +452,13 @@ def execute(units, fetcher, today, now=None):
         parser = PARSERS[unit.kind]
 
         def cb(json):
+            missing = socorro.missing_indices(json)
+            if missing and unit.kind not in HISTORY_KINDS and \
+                    socorro.index_for(unit.day) in missing:
+                # a single-day query with no index: nothing to store
+                raise ValueError('no index for {}'.format(unit.day))
             unit.result = parser(json)
+            unit.missing = missing
         return cb
 
     _, attempted = fetcher.run([(u.params(), make_cb(u)) for u in units])

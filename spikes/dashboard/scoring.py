@@ -157,8 +157,9 @@ class Cached:
 # --------------------------------------------------------------------------
 
 def censored_value(day_row):
-    """Imputed count of a signature absent from a day's top list."""
-    if day_row is None:
+    """Imputed count of a signature absent from a day's top list (NaN
+    for a day never fetched or that Socorro has no data for)."""
+    if day_row is None or day_row.crashes is None:
         return np.nan
     if day_row.cutoff is None:
         return 0.0
