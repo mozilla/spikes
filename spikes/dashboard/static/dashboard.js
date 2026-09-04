@@ -4,6 +4,7 @@ import {
   fmtInt, fmtCompact, fmtSigned, fmtRatio, fmtZ, parseDay, fmtDateLong,
   zoneLabel,
 } from './charts.js';
+import { iconSvg } from './icons.js';
 
 const API = new URL('../api/', import.meta.url);
 const REFRESH_MS = 5 * 60 * 1000;
@@ -1265,7 +1266,10 @@ function bugCell(row) {
   if (!b) { td.append(el('span', { class: 'dash' }, '—')); return td; }
   const cls = ['bug', b.after === true ? 'bug-after' : b.after === false ? 'bug-before' : null, RESOLVED.has(b.status) ? 'bug-closed' : null, b.restricted ? 'bug-restricted' : null].filter(Boolean).join(' ');
   const hidden = b.after === true ? ' (filed for this spike)' : b.after === false ? ' (filed before the spike)' : b.restricted ? ' (restricted bug)' : '';
-  td.append(el('a', { class: cls, href: `https://bugzilla.mozilla.org/${b.id}`, target: '_blank', rel: 'noopener', title: bugTitle(b) }, String(b.id), el('span', { class: 'visually-hidden' }, hidden)));
+  const link = el('a', { class: cls, href: `https://bugzilla.mozilla.org/${b.id}`, target: '_blank', rel: 'noopener', title: bugTitle(b) });
+  if (b.restricted) { const lock = iconSvg('lock', 11); lock.classList.add('bug-lock'); link.append(lock); }
+  link.append(String(b.id), el('span', { class: 'visually-hidden' }, hidden));
+  td.append(link);
   const others = bugs.filter((x) => x !== b);
   if (others.length) td.append(el('span', { class: 'bug-more', title: others.map(bugTitle).join('\n\n') }, ` +${others.length}`));
   return td;

@@ -1,7 +1,8 @@
-// icons.js — small brand marks used as platform-event badges on the charts.
-// The NVIDIA, Apple, Linux (Tux) and Android paths come from Simple Icons
-// (CC0 1.0, https://simpleicons.org); the Windows mark is a plain four-pane
-// glyph.  The logos remain trademarks of their respective owners.
+// icons.js — small brand marks used as platform-event badges on the charts,
+// and a few plain glyphs.  The NVIDIA, Apple, Linux (Tux) and Android paths
+// come from Simple Icons (CC0 1.0, https://simpleicons.org); the Windows
+// mark is a plain four-pane glyph; the lock is Material Icons' (Apache 2.0).
+// The logos remain trademarks of their respective owners.
 
 const SVG_NS = 'http://www.w3.org/2000/svg';
 
@@ -38,6 +39,11 @@ export const EVENT_ICONS = {
     // a generic shield with a check mark, not a vendor's logo
     title: 'Antivirus', fill: 'currentColor',
     d: 'M12 1.5 3.5 4.7v6.1c0 5.3 3.6 10.2 8.5 11.7 4.9-1.5 8.5-6.4 8.5-11.7V4.7L12 1.5zm-1.4 15.1-3.3-3.3 1.4-1.4 1.9 1.9 4.7-4.7 1.4 1.4-6.1 6.1z',
+  },
+  lock: {
+    // a restricted bug (signed-in readers only)
+    title: 'Restricted', fill: 'currentColor',
+    d: 'M18 8h-1V6c0-2.76-2.24-5-5-5S7 3.24 7 6v2H6c-1.1 0-2 .9-2 2v10c0 1.1.9 2 2 2h12c1.1 0 2-.9 2-2V10c0-1.1-.9-2-2-2zm-6 9c-1.1 0-2-.9-2-2s.9-2 2-2 2 .9 2 2-.9 2-2 2zm3.1-9H8.9V6c0-1.71 1.39-3.1 3.1-3.1 1.71 0 3.1 1.39 3.1 3.1v2z',
   },
 };
 

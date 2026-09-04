@@ -745,6 +745,7 @@ table.rows {
 .bug-before { color: var(--st-major); font-weight: 600; }
 .bug-closed { text-decoration: line-through; }
 .bug-restricted { color: var(--ink-2); font-style: italic; } /* signed-in users only */
+.bug-lock { vertical-align: -1px; margin-right: 3px; }
 .bug-more { color: var(--ink-2); font-size: var(--font-size-caption); }
 .since, .dash { color: var(--ink-2); }
 .row-expander {

@@ -473,8 +473,8 @@ flagged day is not the spike's), so both views of a channel give a bug the
 same colour; rows flagged in neither scope in that time show their bugs
 without one.  A bug Bugzilla hides from anonymous
 callers (a security bug: Socorro gives its id, Bugzilla nothing) is
-*restricted*: listed, id only and in grey, for signed-in users, absent from
-what everyone else gets.  This replaced the hand-made "done" marks: a bug filed
+*restricted*: listed, id only, in grey with a lock, for signed-in users,
+absent from what everyone else gets.  This replaced the hand-made "done" marks: a bug filed
 for the spike is the signal that it is handled.
 
 ## Sign-in
