@@ -1278,6 +1278,11 @@ class ApiTest(DBTestCase):
             'signature': 'storm | 0x1'})
         self.assertEqual(r5.status_code, 200)
         self.assertNotIn('"0x', r5.headers['ETag'][1:-1])
+        # the page's script and style are compressed too
+        r6 = self.client.get('/dashboard/static/dashboard.css',
+                             headers={'Accept-Encoding': 'gzip'})
+        self.assertEqual(r6.headers.get('Content-Encoding'), 'gzip')
+        self.assertIn(b'.card', gzip.decompress(r6.data))
         # the version flips when the data goes stale, so the banner shows
         with mock.patch.object(models, 'utcnow',
                                return_value=NOW + datetime.timedelta(

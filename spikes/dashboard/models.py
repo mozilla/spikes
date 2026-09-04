@@ -575,12 +575,15 @@ def load_models(series_ids):
     return res
 
 
-def load_scores(product, channel, days):
-    """``list[(Score, Series)]`` of a channel for *days*."""
+def load_scores(product, channel, days, signatures=None):
+    """``list[(Score, Series)]`` of a channel for *days* (of the series
+    with one of *signatures* only, when given)."""
     q = sa.select(Score, Series).join(
         Series, Series.id == Score.series_id).where(
         Series.product == product, Series.channel == channel,
         Score.day.in_(list(days)))
+    if signatures is not None:
+        q = q.where(Series.signature.in_(list(signatures)))
     return list(db.session.execute(q).all())
 
 

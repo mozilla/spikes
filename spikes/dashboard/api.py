@@ -456,13 +456,14 @@ def channel_day(product, channel, today):
     return latest or today
 
 
-def channel_scores(product, channel, today):
+def channel_scores(product, channel, today, signatures=None):
     """Scores of a channel for today, yesterday and the day before, keyed
     by series id (``today`` / ``yesterday`` / ``earlier``); the previous
-    days feed the flag window (see :func:`flag_of`)."""
+    days feed the flag window (see :func:`flag_of`).  *signatures*
+    restricts the series."""
     keys = {today - datetime.timedelta(days=i): k
             for i, k in enumerate(('today', 'yesterday', 'earlier'))}
-    scores = models.load_scores(product, channel, list(keys))
+    scores = models.load_scores(product, channel, list(keys), signatures)
     by_series = {}
     for score, series in scores:
         entry = by_series.setdefault(series.id, {'series': series})
@@ -644,12 +645,11 @@ def sibling_episodes(product, channel, today, now, signatures):
     real, scope = config.split_channel(channel)
     other = config.SCOPE_CURRENT if scope == config.SCOPE_ALL \
         else config.SCOPE_ALL
-    if other not in config.scopes():
+    if not signatures or other not in config.scopes():
         return {}
     by_series = channel_scores(product, config.channel_key(real, other),
-                               today)
-    wanted = {e['series'].signature: sid for sid, e in by_series.items()
-              if e['series'].signature in signatures}
+                               today, signatures)
+    wanted = {e['series'].signature: sid for sid, e in by_series.items()}
     if not wanted:
         return {}
     history = flag_history(list(wanted.values()), today, VERDICT_DAYS)
@@ -689,11 +689,42 @@ def yesterday_json(score, final):
             'severity': score.severity, 'final': bool(final)}
 
 
+def scored_ids(by_series):
+    """The signature series scored today (the rows of a channel)."""
+    return [sid for sid, e in by_series.items()
+            if 'today' in e and not e['series'].is_total]
+
+
+def counts_from(by_series, ids, flags):
+    """Counts of the flags shown (the window's, not only today's) over
+    the rows *ids*.  A noise row counts as noise only: the severity
+    counts are what is left to look at."""
+    counts = {k: 0 for k in ('major', 'spike', 'watch', 'drop', 'new',
+                             'storm', 'noise')}
+    for sid in ids:
+        e = by_series[sid]
+        if e['series'].noise:
+            counts['noise'] += 1
+            continue
+        flag, today = flags[sid], e['today']
+        sev = flag['severity'] if flag else today.severity
+        if sev in counts:
+            counts[sev] += 1
+        if flag['is_new'] if flag else today.is_new:
+            counts['new'] += 1
+        if today.storm:
+            counts['storm'] += 1
+    counts['scored'] = len(ids)
+    return counts
+
+
 def rows_json(product, channel, by_series, today, with_yesterday_final,
-              now, only_ids=None):
-    ids = [sid for sid, e in by_series.items()
-           if 'today' in e and not e['series'].is_total and
-           (only_ids is None or sid in only_ids)]
+              now, only_ids=None, flags=None):
+    """The full rows (sparkline, bugs, flag...) of the series *only_ids*
+    (default: every scored one); *flags* are the rows' flags when the
+    caller has them already."""
+    ids = [sid for sid in scored_ids(by_series)
+           if only_ids is None or sid in only_ids]
     comps = versions.components_for(product, channel)
     cached = {sid: scoring.Cached.from_row(m, comps)
               for sid, m in models.load_models(ids).items()}
@@ -702,7 +733,8 @@ def rows_json(product, channel, by_series, today, with_yesterday_final,
     bugs = models.load_bugs({by_series[sid]['series'].signature
                              for sid in ids})
     restricted_ok = signed_in()
-    flags = {sid: flag_of(by_series[sid], now) for sid in ids}
+    if flags is None:
+        flags = {sid: flag_of(by_series[sid], now) for sid in ids}
     sinces = {sid: since_of(history.get(sid), flags[sid]) for sid in ids}
     # rows with bugs and no spike of their own in the window: the other
     # scope's
@@ -733,33 +765,17 @@ def sort_key(row):
     return (-scoring.RANK.get(flag_severity(row), 0), -(excess or 0))
 
 
-def counts_of(rows):
-    """Counts of the flags shown (the window's, not only today's).  A
-    noise row counts as noise only: the severity counts are what is left
-    to look at."""
-    counts = {k: 0 for k in ('major', 'spike', 'watch', 'drop', 'new',
-                             'storm', 'noise')}
-    for r in rows:
-        if r['noise']:
-            counts['noise'] += 1
-            continue
-        sev = flag_severity(r)
-        if sev in counts:
-            counts[sev] += 1
-        if flag_is_new(r):
-            counts['new'] += 1
-        if r['storm']:
-            counts['storm'] += 1
-    counts['scored'] = len(rows)
-    return counts
-
-
 def day_final(product, channel, day):
     row = models.get_day(product, channel, day)
     return bool(row and row.final)
 
 
-def channel_summary(product, channel, today, now):
+def channel_summary(product, channel, today, now, all_rows=True):
+    """A channel's summary with its rows under ``_rows``: every scored row
+    (the channel view), or with *all_rows* off only the flagged ones (the
+    alerts of the summary, which is what makes the page appear: the
+    counts still cover every row, the sparklines and bugs are only built
+    for the flagged ones)."""
     total_id = models.total_series(product, channel, create=False)
     if total_id is None:
         return None
@@ -769,8 +785,14 @@ def channel_summary(product, channel, today, now):
     if entry is None or 'today' not in entry:
         return None
     yesterday = today - datetime.timedelta(days=1)
+    ids = scored_ids(by_series)
+    flags = {sid: flag_of(by_series[sid], now) for sid in ids}
+    wanted = ids if all_rows else [
+        sid for sid in ids
+        if flags[sid] is not None and not by_series[sid]['series'].noise]
     rows = rows_json(product, channel, by_series, today,
-                     day_final(product, channel, yesterday), now)
+                     day_final(product, channel, yesterday), now,
+                     only_ids=set(wanted), flags=flags)
     model = models.load_models([total_id]).get(total_id)
     real, scope = config.split_channel(channel)
     return {
@@ -784,7 +806,7 @@ def channel_summary(product, channel, today, now):
         'yesterday': score_json(entry['yesterday'], entry['series'],
                                 day_final(product, channel, yesterday))
         if 'yesterday' in entry else None,
-        'counts': counts_of(rows),
+        'counts': counts_from(by_series, ids, flags),
         'thresholds': channel_rules(entry['today']),
         'calibration': (entry['today'].details or {}).get('calibration'),
         '_rows': rows,
@@ -1025,16 +1047,23 @@ def versioned(payload, run, *parts, now=None):
     return response
 
 
+COMPRESSIBLE = ('application/json', 'text/css', 'text/javascript',
+                'application/javascript')
+
+
 @blueprint.after_request
 def compress(response):
-    """gzip JSON responses (Heroku does not compress; a channel payload
-    shrinks from ~350 KB to ~60 KB)."""
-    if response.status_code != 200 or response.direct_passthrough or \
-            not response.mimetype == 'application/json' or \
+    """gzip JSON responses and the page's script and style (Heroku does
+    not compress; a channel payload shrinks from ~350 KB to ~60 KB, the
+    script from 70 KB to 17 KB)."""
+    if response.status_code != 200 or \
+            response.mimetype not in COMPRESSIBLE or \
             'gzip' not in request.headers.get('Accept-Encoding', '') or \
             response.content_length is not None and \
             response.content_length < 1024:
         return response
+    # a static file is streamed: read it to compress it
+    response.direct_passthrough = False
     data = gzip.compress(response.get_data(), compresslevel=6)
     response.set_data(data)
     response.headers['Content-Encoding'] = 'gzip'
@@ -1061,11 +1090,10 @@ def summary():
     alerts = []
     as_of = None
     for product, channel in config.pairs(scope):
-        s = channel_summary(product, channel, today, now)
+        s = channel_summary(product, channel, today, now, all_rows=False)
         if s is None:
             continue
-        rows = s.pop('_rows')
-        alerts.extend(r for r in rows if not r['noise'] and r['flag'])
+        alerts.extend(s.pop('_rows'))
         channels.append(s)
         if s['as_of'] and (as_of is None or s['as_of'] > as_of):
             as_of = s['as_of']
