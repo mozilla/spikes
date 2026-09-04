@@ -333,7 +333,7 @@ dialog.help {
 /* cards */
 .cards { display: flex; gap: 14px; align-items: stretch; flex-wrap: wrap; }
 .card-group { display: flex; flex-direction: column; gap: 3px; flex: var(--n, 1) 1 0; min-width: 0; }
-.card-group-all { flex: 0 0 150px; }
+.card-group-all { flex: 0 0 176px; } /* "All channels" + a severity chip on one line */
 .card-group-title { font-size: var(--font-size-caption); font-weight: 600; color: var(--ink-2); padding-left: 2px; line-height: 16px; }
 .card-row { display: grid; grid-auto-flow: column; grid-auto-columns: minmax(0, 1fr); gap: 8px; flex: 1; }
 .card {
@@ -364,7 +364,11 @@ dialog.help {
   }
   /* Keep count chips clear of the product logo. */
   & .card-counts { padding-right: 24px; }
-  & .card-head { display: flex; justify-content: space-between; align-items: center; gap: 8px; }
+  /* the chip drops under the title when the two do not fit (narrow
+     viewports, the version tag of the current scope): never past the card */
+  & .card-head { display: flex; justify-content: space-between; align-items: center; gap: 4px 8px; flex-wrap: wrap; }
+  /* "current versions" under the title of the All channels card */
+  & .card-scope { margin: -4px 0 0; line-height: 1.3; }
   & .card-title { font-weight: 600; font-size: var(--font-size-control); }
   & .card-value {
     font-size: 20px;

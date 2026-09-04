@@ -725,9 +725,9 @@ function allCard(s) {
   const worst = rows.map(sevOf).filter((sev) => sev in SEV_RANK && sev !== 'ok')
     .sort((a, b) => SEV_RANK[a] - SEV_RANK[b])[0] || 'ok';
   const card = el('button', { type: 'button', class: 'card card-all', 'data-key': ALL_KEY, 'data-focus': `card:${ALL_KEY}`, 'aria-pressed': 'false' });
-  card.append(el('div', { class: 'card-head' },
-    el('span', { class: 'card-title' }, 'All channels', app.scope === 'current' ? el('span', { class: 'version-tag' }, 'current versions') : null),
-    chip(worst)));
+  card.append(el('div', { class: 'card-head' }, el('span', { class: 'card-title' }, 'All channels'), chip(worst)));
+  // on its own line: next to the title it wraps and pushes the chip out of the card
+  if (app.scope === 'current') card.append(el('div', { class: 'version-tag card-scope' }, 'current versions'));
   card.append(el('div', { class: 'tile-label' }, `Flagged, last ${flagWindowHours()} h`));
   const nchan = new Set(rows.map((r) => `${r.product}/${r.channel}`)).size;
   card.append(el('div', { class: 'card-value' }, fmtInt(rows.length),
