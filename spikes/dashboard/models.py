@@ -618,6 +618,20 @@ def prune(today, prune_after_days, prune_min_crashes, long_after_days,
     db.session.execute(sa.delete(Score).where(Score.day < old))
     old = utcnow() - datetime.timedelta(days=runs_retention_days)
     db.session.execute(sa.delete(Run).where(Run.started < old))
+    # series left without any data (a signature seen a few times half a
+    # year ago, its daily rows pruned above) and their cached fits would
+    # otherwise stay forever, one row per channel key; marks are kept
+    empty = sa.select(Series.id).where(
+        Series.signature != TOTAL,
+        ~sa.exists().where(Daily.series_id == Series.id),
+        ~sa.exists().where(Hourly.series_id == Series.id),
+        ~sa.exists().where(Score.series_id == Series.id),
+        ~sa.exists().where(Mark.series_id == Series.id))
+    ids = list(db.session.execute(empty).scalars())
+    for chunk in _chunks(ids):
+        db.session.execute(sa.delete(Model).where(Model.series_id.in_(chunk)))
+        db.session.execute(sa.delete(Series).where(Series.id.in_(chunk)))
+    return len(ids)
 
 
 # --------------------------------------------------------------------------

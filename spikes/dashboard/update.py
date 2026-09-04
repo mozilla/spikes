@@ -102,7 +102,9 @@ def enrich_bugs(today, now, fetcher):
             continue
         if series.bugs_as_of is not None and series.bugs_as_of > stale:
             continue
-        todo[series.signature] = series
+        # the same signature flagged in several channels or scopes: one
+        # lookup, every series updated
+        todo.setdefault(series.signature, []).append(series)
     signatures = sorted(todo)[:limit]
     if not signatures:
         return 0
@@ -110,9 +112,9 @@ def enrich_bugs(today, now, fetcher):
     if found is None:
         return 0
     for sgn in signatures:
-        series = todo[sgn]
-        series.bug_open, series.bug_closed = found.get(sgn, (None, None))
-        series.bugs_as_of = now
+        for series in todo[sgn]:
+            series.bug_open, series.bug_closed = found.get(sgn, (None, None))
+            series.bugs_as_of = now
     db.session.commit()
     return len(signatures)
 
@@ -120,14 +122,16 @@ def enrich_bugs(today, now, fetcher):
 def maybe_prune(today, now):
     if now.hour < 3 or models.pruned_today(today):
         return False
-    models.prune(today,
-                 config.get('prune_after_days', 120),
-                 config.get('prune_min_crashes', 3),
-                 config.get('long_after_days', 365),
-                 config.get('long_min_crashes', 10),
-                 config.get('hourly_retention_days', 60),
-                 config.get('scores_retention_days', 30),
-                 config.get('runs_retention_days', 30))
+    removed = models.prune(today,
+                           config.get('prune_after_days', 120),
+                           config.get('prune_min_crashes', 3),
+                           config.get('long_after_days', 365),
+                           config.get('long_min_crashes', 10),
+                           config.get('hourly_retention_days', 60),
+                           config.get('scores_retention_days', 30),
+                           config.get('runs_retention_days', 30))
+    if removed:
+        logger.info('Dashboard: pruned %d series left without data', removed)
     events.prune(today)
     db.session.commit()
     return True

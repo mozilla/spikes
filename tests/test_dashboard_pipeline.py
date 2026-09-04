@@ -687,6 +687,71 @@ class ScoringTest(DBTestCase):
         self.assertIn(old, [u.start for u in units if u.kind == 'day'])
 
 
+class HousekeepingTest(DBTestCase):
+
+    def test_prune_drops_series_left_without_data(self):
+        old = TODAY - datetime.timedelta(days=200)
+        ids = models.series_ids('Firefox', 'release',
+                                ['gone', 'kept', 'marked', 'fresh'])
+        total = models.total_series('Firefox', 'release')
+        models.upsert(models.Daily, [
+            {'series_id': ids['gone'], 'day': old, 'crashes': 1},
+            {'series_id': ids['kept'], 'day': old, 'crashes': 50},
+            {'series_id': ids['marked'], 'day': old, 'crashes': 1},
+            {'series_id': ids['fresh'], 'day': TODAY, 'crashes': 1},
+            {'series_id': total, 'day': old, 'crashes': 1}],
+            ['series_id', 'day'])
+        models.upsert(models.Model, [
+            {'series_id': sid, 'fitted_at': NOW, 'last_day': TODAY}
+            for sid in (ids['gone'], ids['kept'])], ['series_id'])
+        models.add_mark(ids['marked'], True, 'spike', 'someone@mozilla.com',
+                        at=NOW)
+        db.session.commit()
+        removed = models.prune(TODAY, 120, 3, 365, 10, 60, 30, 30)
+        db.session.commit()
+        # the low-volume old rows go, and with them the series that has
+        # nothing left; a mark, recent data or volume keep a series
+        self.assertEqual(removed, 1)
+        self.assertIsNone(models.get_series('Firefox', 'release', 'gone'))
+        for sgn in ('kept', 'marked', 'fresh'):
+            self.assertIsNotNone(models.get_series('Firefox', 'release',
+                                                   sgn), sgn)
+        self.assertEqual(models.total_series('Firefox', 'release',
+                                             create=False), total)
+        self.assertEqual(sorted(models.load_models([ids['gone'],
+                                                    ids['kept']])),
+                         [ids['kept']])
+        # nothing more to do on a second pass
+        self.assertEqual(models.prune(TODAY, 120, 3, 365, 10, 60, 30, 30), 0)
+
+    def test_bugs_fetched_once_per_signature(self):
+        sgn = 'shared | signature'
+        sids = [models.series_ids('Firefox', ch, [sgn])[sgn]
+                for ch in ('release', 'release@current', 'beta')]
+        for sid in sids:
+            models.upsert(models.Score, [{
+                'series_id': sid, 'day': TODAY, 'as_of': NOW,
+                'partial': True, 'observed': 40, 'expected': 5.0, 'z': 8.0,
+                'severity': 'spike', 'is_new': False, 'storm': False}],
+                ['series_id', 'day'])
+        db.session.commit()
+        calls = []
+
+        def fake_fetch(signatures, fetcher):
+            calls.append(list(signatures))
+            return {s: (123, None) for s in signatures}
+        with mock.patch.object(update, 'fetch_bugs', fake_fetch):
+            n = update.enrich_bugs(TODAY, NOW, None)
+        # one lookup for the three series (two channels, two scopes)...
+        self.assertEqual((n, calls), (1, [[sgn]]))
+        # ... and every one of them carries the bug from this run on
+        for sid, series in models.load_series(sids).items():
+            self.assertEqual((series.bug_open, series.bug_closed,
+                              series.bugs_as_of), (123, None, NOW))
+        with mock.patch.object(update, 'fetch_bugs', fake_fetch):
+            self.assertEqual(update.enrich_bugs(TODAY, NOW, None), 0)
+
+
 class ApiTest(DBTestCase):
 
     def setUp(self):

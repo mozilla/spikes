@@ -133,10 +133,13 @@ to the models since, so additive schema changes deploy without a manual
 
 Retention (`update.maybe_prune`, once a day after 03:00 UTC): daily rows
 with < 3 crashes after 120 days and < 10 crashes after 365 days are deleted,
-signature hourly splits after 60 days, scores after 30 days.  The channel
-totals (daily and hourly), the `dashboard_days` bookkeeping (needed to
-censor missing signature days) and signature days with ≥ 10 crashes are
-kept indefinitely.  Growth is then a few tens of MB per year on the
+signature hourly splits after 60 days, scores after 30 days; a series left
+without any daily, hourly or score row (and without a done mark) is deleted
+with its cached fit, so the long tail of one-off signatures does not pile up
+in `dashboard_series` (with the two version scopes, one row per channel
+key).  The channel totals (daily and hourly), the `dashboard_days`
+bookkeeping (needed to censor missing signature days) and signature days
+with ≥ 10 crashes are kept indefinitely.  Growth is then a few tens of MB per year on the
 `essential-0` plan while the long-term history the yearly component needs
 is kept (the totals are what it is estimated on).
 
