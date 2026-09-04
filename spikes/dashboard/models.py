@@ -583,13 +583,16 @@ def load_series_scores(series_id, since):
     return list(db.session.execute(q).scalars())
 
 
-def flagged_scores(days, severities):
-    """``list[(Score, Series)]`` across channels with a flagged severity."""
+def flagged_scores(days, severities, peaks=()):
+    """``list[(Score, Series)]`` across channels with a flagged severity
+    on *days* (or ``is_new``, or a day's peak severity in *peaks*: a day
+    that stepped down from a spike is still shown flagged)."""
+    flagged = [Score.severity.in_(list(severities)), Score.is_new.is_(True)]
+    if peaks:
+        flagged.append(Score.peak_severity.in_(list(peaks)))
     q = sa.select(Score, Series).join(
         Series, Series.id == Score.series_id).where(
-        Score.day.in_(list(days)),
-        sa.or_(Score.severity.in_(list(severities)),
-               Score.is_new.is_(True)),
+        Score.day.in_(list(days)), sa.or_(*flagged),
         Series.signature != TOTAL)
     return list(db.session.execute(q).all())
 

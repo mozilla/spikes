@@ -376,9 +376,10 @@ than `refit_hours` (6), at most `max_fits_per_run` per run, so the
 10-minute run only recomputes the cheap score formula.  Yesterday is scored
 as a complete day.
 
-**Bugs** (`bugs.py`).  For every flagged signature the run looks up the
-bugs whose Bugzilla *Crash Signature* field lists it, once per signature
-whatever the channels and scopes it is flagged in, at most
+**Bugs** (`bugs.py`).  For every signature the page shows flagged (today's
+flags and those carried over within `flag_window_hours`) the run looks up
+the bugs whose Bugzilla *Crash Signature* field lists it, once per
+signature whatever the channels and scopes it is flagged in, at most
 `bugs_max_signatures` (150) per run and again `bugs_refresh_hours` (2)
 after the previous look-up.  Socorro's `Bugs` API gives the ids (Socorro
 syncs them from Bugzilla every hour), as many signatures per query as fit

@@ -37,7 +37,7 @@ from libmozdata.bugzilla import Bugzilla
 
 from spikes import db
 from spikes.logger import logger
-from . import config, models
+from . import config, models, scoring
 
 
 # a longer Bugs URL is refused with 400: characters of signatures per query
@@ -47,6 +47,7 @@ SEARCH_BATCH = 8            # signatures OR-ed in one Bugzilla search
 SEARCH_LIMIT = 200
 FIELDS = ['id', 'status', 'resolution', 'creation_time', 'summary']
 SUMMARY_CHARS = 200
+FLAGGED = ('major', 'spike', 'watch', 'drop')
 _SIGNATURE = re.compile(r'\[@\s*(.*?)\s*\]', re.S)
 
 
@@ -200,12 +201,22 @@ def fetch_details(bug_ids, fetcher):
 # Policy
 # --------------------------------------------------------------------------
 
+def flagged_days(today):
+    """Today and the previous days whose flags the page still shows
+    (``flag_window_hours``, see api.flag_of)."""
+    back = -(-config.get('flag_window_hours', 48) // 24)
+    return [today - datetime.timedelta(days=k) for k in range(back + 1)]
+
+
 def due_signatures(today, now):
-    """Flagged signatures (not noise) whose look-up is due, the never
-    looked-up and the oldest first, at most ``bugs_max_signatures``."""
+    """Signatures shown flagged (not noise) whose look-up is due, the never
+    looked-up and the oldest first, at most ``bugs_max_signatures``.  A
+    flag can come from a previous day within the flag window (a spike on
+    Tuesday is listed until Thursday), so those days count too."""
     hours = config.get('bugs_refresh_hours', 2)
     limit = config.get('bugs_max_signatures', 150)
-    rows = models.flagged_scores([today], ('major', 'spike', 'watch', 'drop'))
+    rows = models.flagged_scores(flagged_days(today), FLAGGED,
+                                 peaks=scoring.UPWARD)
     signatures = sorted({series.signature for _, series in rows
                          if not series.noise})
     if not signatures:

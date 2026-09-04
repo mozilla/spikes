@@ -142,6 +142,33 @@ class PolicyTest(DBTestCase):
             for p in patches:
                 p.stop()
 
+    def test_flags_carried_over_from_previous_days_count(self):
+        """The page keeps a spike listed for flag_window_hours after the
+        day it happened: those signatures are looked up too, not only the
+        ones flagged in today's scores."""
+        ids = models.series_ids('Firefox', 'nightly',
+                                ['stepped down', 'yesterday', 'old', 'calm'])
+        day = datetime.timedelta(days=1)
+
+        def score(sgn, when, **kw):
+            row = {'series_id': ids[sgn], 'day': when, 'as_of': NOW,
+                   'partial': False, 'observed': 5, 'expected': 0.0,
+                   'severity': 'ok', 'is_new': False, 'storm': False}
+            row.update(kw)
+            models.upsert(models.Score, [row], ['series_id', 'day'])
+        # flagged two days ago, stepped down to ok since (peak kept)
+        score('stepped down', TODAY - 2 * day, severity='ok',
+              peak_severity='spike')
+        score('stepped down', TODAY)
+        score('yesterday', TODAY - day, severity='watch')
+        score('yesterday', TODAY)
+        score('old', TODAY - 5 * day, severity='major')
+        score('old', TODAY)
+        score('calm', TODAY)
+        db.session.commit()
+        self.assertEqual(bugs.due_signatures(TODAY, NOW),
+                         ['stepped down', 'yesterday'])
+
     def test_failures_leave_signatures_for_the_next_run(self):
         self.flag('release', ['a', 'b'])
         # Socorro fails for everything: nothing is recorded
