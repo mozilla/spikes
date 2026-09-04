@@ -18,7 +18,7 @@ from unittest import mock
 import numpy as np
 
 from spikes import app, db
-from spikes.dashboard import api, collect, models, scoring, update
+from spikes.dashboard import api, collect, config, models, scoring, update
 from spikes.dashboard import socorro, versions
 
 
@@ -89,6 +89,7 @@ class DBTestCase(unittest.TestCase):
         models.drop_all()
         models.create_all()
         versions._cache.clear()  # cycles cached by a previous test's DB
+        api._channel_memo.clear()  # payloads of a previous test's DB
 
     def tearDown(self):
         db.session.rollback()
@@ -1035,6 +1036,7 @@ class ApiTest(DBTestCase):
         models.replace_bugs('stable', {1004: {'created_at': since - hour,
                                               'status': 'NEW'}}, NOW)
         db.session.commit()
+        api.forget_caches()
         rows, etag = self.channel_rows()
         bugs = rows['spiking']['bugs']
         # bug 1003 (nothing from Bugzilla: restricted) is not for everyone
@@ -1143,6 +1145,33 @@ class ApiTest(DBTestCase):
                          [(2001, True), (2002, False)])
         # 'stable' spikes in neither scope: no verdict
         self.assertEqual(rows['stable']['bugs'][0]['after'], None)
+        # flagged in both scopes, the current one since today only and the
+        # all one since yesterday: the spike started yesterday
+        yesterday = TODAY - datetime.timedelta(days=1)
+        models.upsert(models.Score, [{
+            'series_id': sid, 'day': TODAY, 'as_of': NOW, 'partial': True,
+            'observed': 400, 'expected': 100.0, 'z': 9.0,
+            'severity': 'spike', 'peak_severity': 'spike', 'is_new': False,
+            'storm': False, 'first_flagged_at': NOW}], ['series_id', 'day'])
+        all_sid = models.get_series('Firefox', 'release', 'spiking').id
+        models.upsert(models.Score, [{
+            'series_id': all_sid, 'day': yesterday, 'as_of': NOW,
+            'partial': False, 'observed': 300, 'expected': 100.0, 'z': 7.0,
+            'severity': 'spike', 'peak_severity': 'spike', 'is_new': False,
+            'storm': False}], ['series_id', 'day'])
+        models.replace_bugs('spiking', {2004: {
+            'created_at': start - 12 * hour, 'status': 'NEW'}}, NOW)
+        db.session.commit()
+        api.forget_caches()
+        with mock.patch.object(api.config, 'pairs',
+                               side_effect=lambda scope=None: pairs[scope]):
+            d = self.client.get('/dashboard/api/channel?product=Firefox'
+                                '&channel=release&scope=current&days=30'
+                                ).get_json()
+        row = {s['signature']: s for s in d['signatures']}['spiking']
+        self.assertEqual(row['flag']['day'], TODAY.isoformat())
+        self.assertEqual([(b['id'], b['after']) for b in row['bugs']],
+                         [(2004, True)])
 
     def test_flag_window(self):
         """Yesterday's flags stay listed for 48 h (scores are per UTC day:
@@ -1161,6 +1190,7 @@ class ApiTest(DBTestCase):
             row.update(kw)
             models.upsert(models.Score, [row], ['series_id', 'day'])
             db.session.commit()
+            api.forget_caches()
 
         def view():
             summary = self.client.get('/dashboard/api/summary').get_json()
@@ -1250,6 +1280,44 @@ class ApiTest(DBTestCase):
             self.assertEqual(r.mimetype, 'text/plain')
             self.assertEqual(r.get_data(as_text=True),
                              'User-agent: *\nDisallow: /\n')
+
+    def test_summary_cached_per_run(self):
+        """The summary is computed once per run: the first request (or
+        the scheduler) stores it, the next ones read it; a new run is a
+        miss.  Channel payloads are memoized in the process the same way."""
+        run = api.last_run()
+        d = self.client.get('/dashboard/api/summary').get_json()
+        key, version = 'summary:all:anon', api.summary_version(run, TODAY)
+        self.assertIsNotNone(models.get_cache(key, version))
+        self.assertIsNone(models.get_cache(key, 'other'))
+        with mock.patch.object(api, 'summary_payload',
+                               side_effect=AssertionError('recomputed')):
+            d2 = self.client.get('/dashboard/api/summary').get_json()
+        self.assertEqual(d2['alerts'], d['alerts'])
+        self.assertEqual(d2['channels'], d['channels'])
+        # the scheduler warms every scope for both kinds of reader
+        api.warm_summaries(run, TODAY, NOW)
+        for scope in config.scopes():
+            for who in ('anon', 'user'):
+                self.assertIsNotNone(models.get_cache(
+                    'summary:{}:{}'.format(scope, who), version), (scope, who))
+        # another run: recomputed
+        run2 = models.start_run()
+        run2.started = run.started + datetime.timedelta(minutes=4)
+        run2.status, run2.finished = 'ok', NOW + datetime.timedelta(minutes=5)
+        run2.message = json.dumps({'pending_units': 0})
+        db.session.commit()
+        with mock.patch.object(api, 'summary_payload',
+                               wraps=api.summary_payload) as sp:
+            self.client.get('/dashboard/api/summary')
+        self.assertEqual(sp.call_count, 1)
+        # the channel view is memoized per run too
+        url = '/dashboard/api/channel?product=Firefox&channel=release&days=60'
+        d = self.client.get(url).get_json()
+        with mock.patch.object(api, 'channel_payload',
+                               side_effect=AssertionError('recomputed')):
+            d2 = self.client.get(url).get_json()
+        self.assertEqual(d2['signatures'], d['signatures'])
 
     def test_conditional_and_gzip(self):
         r = self.client.get('/dashboard/api/summary')

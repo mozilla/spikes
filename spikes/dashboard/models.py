@@ -295,10 +295,24 @@ class BugCheck(db.Model):
     found = db.Column(db.Integer, nullable=False, default=0)
 
 
+class Cache(db.Model):
+    """A computed API payload (the summary), written by the scheduler at
+    the end of every run and by the web process on a miss, so the page's
+    first request costs one query instead of a hundred (api.py)."""
+    __tablename__ = 'dashboard_cache'
+
+    key = db.Column(db.String(64), primary_key=True)
+    # what the payload was computed from (run id and day); a mismatch
+    # is a miss
+    version = db.Column(db.String(64), nullable=False)
+    payload = db.Column(db.Text, nullable=False)
+    updated_at = db.Column(db.DateTime, nullable=False)
+
+
 TABLES = [Series.__table__, Daily.__table__, Hourly.__table__,
           Day.__table__, Model.__table__, Score.__table__, Run.__table__,
           Event.__table__, Feed.__table__, Cycle.__table__, Bug.__table__,
-          BugCheck.__table__]
+          BugCheck.__table__, Cache.__table__]
 
 
 def create_all():
@@ -755,6 +769,26 @@ def mark_bugs_checked(found, now):
     number of bugs``)."""
     upsert(BugCheck, [{'signature': s, 'checked_at': now, 'found': n}
                       for s, n in found.items()], ['signature'])
+
+
+# --------------------------------------------------------------------------
+# Cached payloads (api.py)
+# --------------------------------------------------------------------------
+
+def get_cache(key, version):
+    """The payload stored under *key* for *version*, or None."""
+    row = db.session.get(Cache, key)
+    return row.payload if row is not None and row.version == version \
+        else None
+
+
+def put_cache(key, version, payload, now):
+    upsert(Cache, [{'key': key, 'version': version, 'payload': payload,
+                    'updated_at': now}], ['key'])
+
+
+def clear_cache():
+    db.session.execute(sa.delete(Cache))
 
 
 # --------------------------------------------------------------------------

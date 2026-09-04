@@ -204,6 +204,7 @@ day's `cutoff`, and a missing (series, day) value is treated as censored
 | `dashboard_runs` | one per run | status (`ok`, `partial`, `failed`, `aborted`), queries, message (pending work, errors) |
 | `dashboard_bugs` | (signature, bug) | the bugs whose crash-signature field lists the signature: filed when, status, resolution, summary, source (`socorro` or `bugzilla`); per signature, shared by every channel and scope |
 | `dashboard_bug_checks` | signature | when its bugs were last looked up, how many were found |
+| `dashboard_cache` | key | computed API payloads (the summary per scope and reader kind), versioned by run and day; written by the scheduler after every run |
 | `dashboard_cycles` | (product, channel, start) | version cycles of the `current` scope: end, label (`155`, `140.15`), SuperSearch filter; replaced when the calendars change |
 
 `models.create_all()` (called by every run and by the web process before
@@ -421,6 +422,17 @@ once and its polls cost a 304.  Rows older than `events_retention_days`
 
 ## Web
 
+**Response times.**  The summary (what makes the page appear) is computed
+once per run: the scheduler stores it in `dashboard_cache` at the end of
+every run for both scopes and both kinds of reader (signed-in readers see
+the restricted bugs), the web process reads it with one query and only
+computes it itself on a miss.  Only the flagged rows are fully built for
+it (sparklines, bugs, links), the counts come from every row's flag.
+Channel payloads are memoized in the web process per run, so a view opened
+twice within a run is not recomputed.  Script, style and JSON are gzipped,
+the imported modules preloaded, and a deep-linked channel is fetched
+alongside the summary rather than after it.
+
 `GET /dashboard.html` and the JSON endpoints described in `API.md`
 (`/dashboard/api/summary`, `/channel`, `/signature`, all taking
 `scope=all|current`).  The page is vanilla
@@ -450,12 +462,13 @@ midnights), not from the run that first flagged it: the dashboard notices
 a spike hours after it begins, while a bug is often filed within the hour,
 so a bug from the spike's first day counts as filed for it.  The verdict
 outlives the flag: a row no longer flagged is judged against its most
-recent spike within the 30 days the scores are kept, and one without any
-borrows the spike of the same signature in the channel's other scope (the
-`current` series of a signature is often too young to have been flagged
-for a spike the `all` series shows), so both views of a channel give a bug
-the same colour; rows flagged nowhere in that time show their bugs without
-one.  A bug Bugzilla hides from anonymous
+recent spike within the 30 days the scores are kept.  The same signature's
+spike in the channel's other scope counts too, and the earlier start of
+the two is used (the `current` series of a signature is often younger than
+the spike the `all` series shows: backfilled after it began, its first
+flagged day is not the spike's), so both views of a channel give a bug the
+same colour; rows flagged in neither scope in that time show their bugs
+without one.  A bug Bugzilla hides from anonymous
 callers (a security bug: Socorro gives its id, Bugzilla nothing) is
 *restricted*: listed, id only and in grey, for signed-in users, absent from
 what everyone else gets.  This replaced the hand-made "done" marks: a bug filed

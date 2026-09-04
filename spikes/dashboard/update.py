@@ -17,7 +17,7 @@ import sqlalchemy as sa
 
 from spikes import app, db
 from spikes.logger import logger
-from . import bugs, collect, config, events, models, scoring, versions
+from . import api, bugs, collect, config, events, models, scoring, versions
 from .socorro import Fetcher
 
 
@@ -158,6 +158,16 @@ def run(now=None, budget=None, max_seconds=None):
     db.session.commit()
     logger.info('Dashboard: run %d %s: %s', run_row.id, run_row.status,
                 run_row.message)
+    # the page's first request after this run reads the summary from the
+    # cache instead of computing it
+    try:
+        started = time.time()
+        api.warm_summaries(run_row, today, models.utcnow())
+        logger.info('Dashboard: summaries cached in %.1fs',
+                    time.time() - started)
+    except Exception as ex:  # the web process computes them itself
+        db.session.rollback()
+        logger.exception('Dashboard: caching the summaries failed: %s', ex)
     return run_row
 
 

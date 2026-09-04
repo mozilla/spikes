@@ -56,11 +56,38 @@ const $ = (id) => document.getElementById(id);
 // a 304 (nothing new since the last scheduler run) reuses the cached JSON.
 const etags = new Map(); // url -> { etag, data }
 
-async function fetchJSON(endpoint, params = {}) {
+function requestURL(endpoint, params = {}) {
   const url = new URL(endpoint, API);
   if (endpoint !== 'events' && app.scope !== 'all') params = { scope: app.scope, ...params };
   for (const [k, v] of Object.entries(params)) if (v != null) url.searchParams.set(k, v);
-  const key = url.toString();
+  return url.toString();
+}
+
+// A request started ahead of its consumer (the deep-linked channel, fetched
+// alongside the summary instead of after it): the next fetchJSON of the same
+// URL takes it over instead of asking again.
+const prefetched = new Map(); // url -> { promise, at }
+const PREFETCH_MS = 30000;
+
+function prefetchJSON(endpoint, params = {}) {
+  const key = requestURL(endpoint, params);
+  const promise = fetchURL(key);
+  promise.catch(() => {}); // its consumer reports the failure
+  prefetched.set(key, { promise, at: Date.now() });
+}
+
+async function fetchJSON(endpoint, params = {}) {
+  const key = requestURL(endpoint, params);
+  const early = prefetched.get(key);
+  if (early) {
+    prefetched.delete(key);
+    if (Date.now() - early.at < PREFETCH_MS) return early.promise;
+  }
+  return fetchURL(key);
+}
+
+async function fetchURL(key) {
+  const url = new URL(key);
   const known = etags.get(key);
   const headers = { Accept: 'application/json' };
   if (known?.etag) headers['If-None-Match'] = known.etag;
@@ -150,6 +177,8 @@ async function refresh({ initial = false } = {}) {
     loadAccount(); // independent of the data; not awaited
     const h = parseHash();
     if (h?.scope) app.scope = h.scope; // `#current/...` deep links
+    // the deep-linked channel loads alongside the summary, not after it
+    if (h && !isAll(h) && h.product) prefetchJSON('channel', { product: h.product, channel: h.channel, days: app.days, granularity: app.granularity });
   }
   try {
     let summary;

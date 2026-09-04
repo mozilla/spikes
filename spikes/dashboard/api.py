@@ -4,15 +4,18 @@
 
 """Flask blueprint: ``dashboard.html`` and the JSON API (see API.md)."""
 
+import collections
 import datetime
 import gzip
 import hashlib
+import json
 import math
 import time
 
 import numpy as np
 import requests
-from flask import Blueprint, Response, jsonify, render_template, request
+from flask import (Blueprint, Response, jsonify, render_template, request,
+                   json as flask_json)
 
 from spikes.logger import logger
 from . import (auth, calibration, config, events, intraday, models,
@@ -407,7 +410,6 @@ def data_health(now, run, channels, check_count=True,
     if run is None:
         return {'status': 'backfilling', 'since': None,
                 'detail': 'No run yet'}
-    import json
     info = json.loads(run.message or '{}') if run.message else {}
     finished = run.finished or run.started
     age = (now - finished).total_seconds() / 60.0
@@ -638,10 +640,11 @@ def signed_in():
 def sibling_episodes(product, channel, today, now, signatures):
     """``signature -> spike start`` in the other scope of the same channel
     (its all-versions or current-version half), for those of *signatures*
-    flagged there.  A row not flagged in its own scope borrows that spike,
-    so the two views of a channel give a bug the same verdict (the
-    ``current`` series of a signature may be too young to have been
-    flagged for a spike the ``all`` series shows)."""
+    flagged there (now or lately).  The two views describe one spike: a
+    row takes the earlier of its own start and this one, so both give a
+    bug the same verdict (the ``current`` series of a signature is often
+    younger than the spike the ``all`` series shows: backfilled after it
+    began, its first flagged day is not the spike's first day)."""
     real, scope = config.split_channel(channel)
     other = config.SCOPE_CURRENT if scope == config.SCOPE_ALL \
         else config.SCOPE_ALL
@@ -719,10 +722,11 @@ def counts_from(by_series, ids, flags):
 
 
 def rows_json(product, channel, by_series, today, with_yesterday_final,
-              now, only_ids=None, flags=None):
+              now, only_ids=None, flags=None, restricted_ok=None):
     """The full rows (sparkline, bugs, flag...) of the series *only_ids*
     (default: every scored one); *flags* are the rows' flags when the
-    caller has them already."""
+    caller has them already; *restricted_ok* whether the restricted bugs
+    are listed (default: when the request is signed in)."""
     ids = [sid for sid in scored_ids(by_series)
            if only_ids is None or sid in only_ids]
     comps = versions.components_for(product, channel)
@@ -732,20 +736,23 @@ def rows_json(product, channel, by_series, today, with_yesterday_final,
     history = flag_history(ids, today, VERDICT_DAYS)
     bugs = models.load_bugs({by_series[sid]['series'].signature
                              for sid in ids})
-    restricted_ok = signed_in()
+    if restricted_ok is None:
+        restricted_ok = signed_in()
     if flags is None:
         flags = {sid: flag_of(by_series[sid], now) for sid in ids}
     sinces = {sid: since_of(history.get(sid), flags[sid]) for sid in ids}
-    # rows with bugs and no spike of their own in the window: the other
-    # scope's
-    borrowed = sibling_episodes(product, channel, today, now, {
+    # the same signature's spike in the other scope: the earlier start of
+    # the two is the spike's (rows with bugs only, nothing else needs it)
+    others = sibling_episodes(product, channel, today, now, {
         by_series[sid]['series'].signature for sid in ids
-        if sinces[sid] is None and by_series[sid]['series'].signature in bugs})
+        if by_series[sid]['series'].signature in bugs})
     rows = []
     for sid in ids:
         e = by_series[sid]
         flag = flags[sid]
-        since = sinces[sid] or borrowed.get(e['series'].signature)
+        starts = [s for s in (sinces[sid], others.get(e['series'].signature))
+                  if s is not None]
+        since = min(starts) if starts else None
         up = history[sid]['up'] if sid in history else set()
         rows.append(row_json(e['today'], e['series'], product, channel,
                              spark=spark.get(sid),
@@ -770,7 +777,8 @@ def day_final(product, channel, day):
     return bool(row and row.final)
 
 
-def channel_summary(product, channel, today, now, all_rows=True):
+def channel_summary(product, channel, today, now, all_rows=True,
+                    restricted_ok=None):
     """A channel's summary with its rows under ``_rows``: every scored row
     (the channel view), or with *all_rows* off only the flagged ones (the
     alerts of the summary, which is what makes the page appear: the
@@ -792,7 +800,8 @@ def channel_summary(product, channel, today, now, all_rows=True):
         if flags[sid] is not None and not by_series[sid]['series'].noise]
     rows = rows_json(product, channel, by_series, today,
                      day_final(product, channel, yesterday), now,
-                     only_ids=set(wanted), flags=flags)
+                     only_ids=set(wanted), flags=flags,
+                     restricted_ok=restricted_ok)
     model = models.load_models([total_id]).get(total_id)
     real, scope = config.split_channel(channel)
     return {
@@ -1077,6 +1086,78 @@ def html():
     return render_template('dashboard.html')
 
 
+MAX_ALERTS = 50
+
+
+def summary_payload(scope, today, now, run, restricted_ok):
+    """The heavy part of the summary: the channels and the alerts (the
+    flagged rows across them).  Everything in it follows from the run
+    and the day, so it is computed once per run (see
+    :func:`cached_summary`)."""
+    channels = []
+    alerts = []
+    as_of = None
+    for product, channel in config.pairs(scope):
+        s = channel_summary(product, channel, today, now, all_rows=False,
+                            restricted_ok=restricted_ok)
+        if s is None:
+            continue
+        alerts.extend(s.pop('_rows'))
+        channels.append(s)
+        if s['as_of'] and (as_of is None or s['as_of'] > as_of):
+            as_of = s['as_of']
+    if run is not None and run.lag_suspected:
+        # Socorro is late: the drops are its (data_health says so)
+        alerts = [a for a in alerts if flag_severity(a) != 'drop']
+    alerts.sort(key=sort_key)
+    return {'as_of': as_of, 'channels': channels,
+            'alerts': alerts[:MAX_ALERTS],
+            'releases': releases(today - datetime.timedelta(days=730))}
+
+
+def summary_version(run, today):
+    return '{}-{}'.format(run.id if run is not None else 0, today)
+
+
+def cached_summary(scope, today, now, run, restricted_ok):
+    """:func:`summary_payload` from ``dashboard_cache`` when it holds this
+    run's, else computed and stored.  The scheduler stores it at the end
+    of every run (:func:`warm_summaries`), so the page's first request
+    normally costs one query."""
+    key = 'summary:{}:{}'.format(scope, 'user' if restricted_ok else 'anon')
+    version = summary_version(run, today)
+    hit = models.get_cache(key, version) if run is not None else None
+    if hit is not None:
+        return json.loads(hit)
+    payload = summary_payload(scope, today, now, run, restricted_ok)
+    if run is not None:
+        models.put_cache(key, version, flask_json.dumps(payload), now)
+        db_commit()
+    return payload
+
+
+def warm_summaries(run, today, now):
+    """Store the summaries of every scope, for anonymous and signed-in
+    readers (the scheduler, after a run)."""
+    for scope in config.scopes():
+        for restricted_ok in (False, True):
+            cached_summary(scope, today, now, run, restricted_ok)
+
+
+def db_commit():
+    from spikes import db
+    db.session.commit()
+
+
+def forget_caches():
+    """Drop the memoized and stored payloads.  For tests that write scores
+    or bugs between two requests: in production only a run changes them,
+    and a run is a new version."""
+    _channel_memo.clear()
+    models.clear_cache()
+    db_commit()
+
+
 @blueprint.route('/dashboard/api/summary')
 def summary():
     scope = parse_scope(request.args)
@@ -1086,25 +1167,11 @@ def summary():
     if not_modified is not None:
         return not_modified
     today = today_utc()
-    channels = []
-    alerts = []
-    as_of = None
-    for product, channel in config.pairs(scope):
-        s = channel_summary(product, channel, today, now, all_rows=False)
-        if s is None:
-            continue
-        alerts.extend(s.pop('_rows'))
-        channels.append(s)
-        if s['as_of'] and (as_of is None or s['as_of'] > as_of):
-            as_of = s['as_of']
-    health = data_health(now, run, channels, scope=scope)
-    if health['status'] == 'stale_upstream':
-        alerts = [a for a in alerts if flag_severity(a) != 'drop']
-    alerts.sort(key=sort_key)
-    import json
+    payload = cached_summary(scope, today, now, run, signed_in())
+    channels = payload['channels']
     info = json.loads(run.message or '{}') if run and run.message else {}
     return versioned({
-        'now': ts(now), 'as_of': as_of,
+        'now': ts(now), 'as_of': payload['as_of'],
         'last_run': {'started': ts(run.started), 'finished': ts(run.finished),
                      'status': run.status, 'queries': run.queries,
                      'failures': run.failures,
@@ -1113,15 +1180,21 @@ def summary():
                          else None),
                      'lag_suspected': bool(run.lag_suspected)}
         if run else None,
-        'data_health': health,
+        'data_health': data_health(now, run, channels, scope=scope),
         # per channel: learned from each channel's own data
         'thresholds': {'{}/{}'.format(c['product'], c['channel']):
                        c['thresholds'] for c in channels},
         'flag_window_hours': config.get('flag_window_hours', 48),
         'scope': scope, 'scopes': config.scopes(),
-        'channels': channels, 'alerts': alerts[:50],
-        'releases': releases(today - datetime.timedelta(days=730)),
+        'channels': channels, 'alerts': payload['alerts'],
+        'releases': payload['releases'],
     }, run, scope, now=now)
+
+
+# channel payloads of this process, per run: a view opened twice within a
+# run (a reload, a second reader) is not recomputed
+_channel_memo = collections.OrderedDict()
+CHANNEL_MEMO = 24
 
 
 @blueprint.route('/dashboard/api/channel')
@@ -1134,9 +1207,26 @@ def channel_view():
     if not_modified is not None:
         return not_modified
     today = today_utc()
+    key = (product, channel, days, granularity, signed_in(),
+           summary_version(run, today))
+    s = _channel_memo.get(key)
+    if s is None:
+        s = channel_payload(product, channel, today, now, days, granularity)
+        if s is None:
+            return jsonify({'error': 'no data for this channel yet'}), 404
+        if run is not None:
+            _channel_memo[key] = s
+            while len(_channel_memo) > CHANNEL_MEMO:
+                _channel_memo.popitem(last=False)
+    s['data_health'] = data_health(now, run, [s], check_count=False)
+    return versioned(s, run, product, channel, days, granularity, now=now)
+
+
+def channel_payload(product, channel, today, now, days, granularity):
+    """The channel view: summary, rows, daily and hourly blocks, model."""
     s = channel_summary(product, channel, today, now)
     if s is None:
-        return jsonify({'error': 'no data for this channel yet'}), 404
+        return None
     rows = s.pop('_rows')
     rows.sort(key=sort_key)
     today = datetime.date.fromisoformat(s['day'])
@@ -1162,9 +1252,8 @@ def channel_view():
         'releases': marks + ([upcoming] if upcoming else []),
         'next_release': upcoming,
         'thresholds': rules,
-        'data_health': data_health(now, run, [s], check_count=False),
     })
-    return versioned(s, run, product, channel, days, granularity, now=now)
+    return s
 
 
 @blueprint.route('/dashboard/api/events')
