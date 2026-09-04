@@ -1249,7 +1249,7 @@ function shownBug(row) {
 }
 
 function bugTitle(b) {
-  if (b.restricted) return `Bug ${b.id}: restricted (Bugzilla shows it to its security group only, so its filing time and status are unknown here; listed for signed-in users)`;
+  if (b.restricted) return 'Restricted bug';
   const filed = b.created ? `filed ${b.created.slice(0, 16).replace('T', ' ')} UTC` : 'filing time unknown';
   const when = b.after === true ? ', for this spike (once the crash was there)' : b.after === false ? ', before the spike: a known crash' : '';
   const state = [b.status, b.resolution].filter(Boolean).join(' ');
