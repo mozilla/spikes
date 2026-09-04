@@ -199,7 +199,7 @@ switch when there is one.
   ],
   "alerts": [Row],                    // union of flagged rows across channels, <= 50,
                                       // sorted by severity rank then excess
-  "releases": [{"date": "2026-08-19", "version": "146.0"}]   // Firefox major releases
+  "releases": [{"date": "2026-08-19", "version": "146.0"}]   // Firefox major releases (sparklines)
 }
 ```
 
@@ -213,7 +213,9 @@ switch when there is one.
   "signatures": [Row],                // every scored row (flagged and not)
   "counts": {...},
   "thresholds": {...}, "calibration": {...},   // this channel's, as in the summary
-  "releases": [...],                  // major releases; ESR point releases ("140.15.0esr") for channel esr;
+  "releases": [...],                  // the channel's version boundaries: merge days ("157.0a1") on
+                                      // nightly, first betas ("156.0b1") on beta, releases ("155.0"),
+                                      // ESR point releases ("140.15 / 153.2 esr");
                                       // plus the upcoming one {"date", "version", "upcoming": true}
   "next_release": {"date": "2026-09-15", "version": "156.0", "upcoming": true},  // or null: the end of
                                       // the forecast (nightly: the merge day, "157 merge"); from

@@ -567,8 +567,8 @@ export function lineChart(container, spec) {
       { label: 'Expected', color: 'var(--expected)', kind: 'dash' },
       { label: '±3 band (watch)', color: 'var(--band3)', kind: 'rect' },
       { label: '±5 band (spike)', color: 'var(--band5)', kind: 'rect' },
-      { label: 'Release', color: 'var(--axis)', kind: 'rule' },
-      { label: 'Forecast to the next release', color: 'var(--forecast-key)', kind: 'rect' },
+      { label: 'Version', color: 'var(--axis)', kind: 'rule' },
+      { label: 'Forecast to the next version', color: 'var(--forecast-key)', kind: 'rect' },
     ],
     buttons: [
       { key: 'zoom', label: 'Reset zoom', hidden: true, onClick: () => setZoom(null) },

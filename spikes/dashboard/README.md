@@ -429,7 +429,8 @@ cross-channel "flagged in the last 48 h" table, then for the selected channel th
 tiles (today so far, projected, yesterday), the drivers, the intraday chart
 (hourly bars vs expected, in-progress hour hollow), the daily chart (day or
 week granularity, 30-365 days, expected line and bands, severity markers,
-release markers, and the forecast up to the next release: the expected
+the channel's own version boundaries (merge days on nightly, first betas
+on beta, releases, ESR point releases), and the forecast up to the next one: the expected
 path and its bands continue past today over a shaded zone, with a damped
 trend so a rollout ramp is not extrapolated forever, redone with every
 fit; the next release comes from whattrainisitnow, the merge day for

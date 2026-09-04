@@ -38,6 +38,7 @@ release (``140.15.0esr``, ``140.15.1esr``, ...), since SuperSearch matches
 ``version`` exactly.
 """
 
+import collections
 import datetime
 import re
 import time
@@ -364,6 +365,11 @@ def db_rollback():
 # Reading (scheduler and web)
 # --------------------------------------------------------------------------
 
+# a stored cycle, detached from the database session: the cache outlives
+# the request (and the session) that loaded it
+CycleData = collections.namedtuple('CycleData', 'start end label params')
+
+
 class Cycles:
     """The stored cycles of one (product, real channel)."""
 
@@ -422,7 +428,9 @@ def cycles_for(product, channel_key):
     hit = _cache.get(key)
     now = time.time()
     if hit is None or now - hit[0] > CACHE_SECONDS:
-        hit = (now, Cycles(models.load_cycles(product, channel)))
+        rows = [CycleData(c.start, c.end, c.label, c.params)
+                for c in models.load_cycles(product, channel)]
+        hit = (now, Cycles(rows))
         _cache[key] = hit
     return hit[1]
 

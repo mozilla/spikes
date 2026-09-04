@@ -8,6 +8,7 @@ planner's splitting and the release-phase cycle.  No network."""
 
 import datetime
 import unittest
+from unittest import mock
 
 import numpy as np
 
@@ -234,6 +235,48 @@ class StoredCyclesTest(DBTestCase):
     def tearDown(self):
         versions._cache.clear()
         super().tearDown()
+
+    def test_chart_markers(self):
+        """Every channel's chart marks its own version boundaries: the
+        merge days on nightly, the first betas on beta (from the stored
+        cycles), up to today; the upcoming one comes from the schedule
+        or the next stored cycle, in the same style."""
+        from spikes.dashboard import api
+        self.models.replace_cycles('Firefox', 'beta', versions.compute_cycles(
+            calendar(), 'beta', D(2026, 6, 1)), datetime.datetime(2026, 9, 3))
+        versions._cache.clear()
+        with mock.patch.object(self.models, 'utcnow',
+                               return_value=datetime.datetime(2026, 9, 3, 12)):
+            self.assertEqual(api.releases(D(2026, 8, 1), 'nightly'), [
+                {'date': '2026-08-16', 'version': '156.0a1'},
+                {'date': '2026-08-27', 'version': '157.0a1'}])
+            self.assertEqual(api.releases(D(2026, 8, 1), 'beta@current'), [
+                {'date': '2026-08-17', 'version': '155.0b1'},
+                {'date': '2026-08-31', 'version': '156.0b1'}])
+        schedules = {'nightly': {'version': '157.0',
+                                 'merge_day': '2026-09-10 16:00:00+00:00',
+                                 'beta_1': '2026-09-14 13:00:00+00:00'},
+                     'beta': {'version': '156.0',
+                              'release': '2026-09-15 14:00:00+00:00'}}
+        with mock.patch.object(api, '_schedule', schedules.get):
+            nxt = {ch: api.next_release('Firefox', ch, TODAY)
+                   for ch in ('nightly', 'beta', 'release', 'esr')}
+        self.assertEqual(nxt, {
+            'nightly': {'date': D(2026, 9, 10), 'version': '158.0a1'},
+            'beta': {'date': D(2026, 9, 14), 'version': '157.0b1'},
+            'release': {'date': D(2026, 9, 15), 'version': '156.0'},
+            'esr': {'date': D(2026, 9, 15), 'version': 'ESR point release'}})
+        # the next stored cycle is the boundary in both scopes
+        self.models.replace_cycles('Firefox', 'esr', versions.compute_cycles(
+            calendar(), 'esr', D(2026, 6, 1)), datetime.datetime(2026, 9, 3))
+        versions._cache.clear()
+        with mock.patch.object(api, 'next_release', return_value=None):
+            day, marker = api.horizon_for('Firefox', 'release@current', TODAY)
+            self.assertEqual((day, marker['version']),
+                             (D(2026, 9, 15), '156.0'))
+            day, marker = api.horizon_for('Firefox', 'esr', TODAY)
+            self.assertEqual((day, marker['version']),
+                             (D(2026, 9, 15), '140.16 esr'))
 
     def test_plan_splits_history_at_releases(self):
         units = collect.plan('Firefox', 'release@current', TODAY,

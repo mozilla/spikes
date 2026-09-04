@@ -19,7 +19,7 @@ import numpy as np
 
 from spikes import app, db
 from spikes.dashboard import api, collect, models, scoring, update
-from spikes.dashboard import socorro
+from spikes.dashboard import socorro, versions
 
 
 FIXTURES = os.path.join(os.path.dirname(__file__), 'fixtures')
@@ -88,6 +88,7 @@ class DBTestCase(unittest.TestCase):
         self.ctx.push()
         models.drop_all()
         models.create_all()
+        versions._cache.clear()  # cycles cached by a previous test's DB
 
     def tearDown(self):
         db.session.rollback()

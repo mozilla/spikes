@@ -266,14 +266,39 @@ def _load_releases(feed):
     return data, esr
 
 
-def releases(since=None, channel=None, product='Firefox'):
-    """Release dates to mark on the charts (cached for a day).
+def version_label(channel, label):
+    """How a version cycle's label reads on a channel: ``157.0a1`` on
+    nightly, ``156.0b1`` on beta, ``155.0`` on release, ``140.15 esr``."""
+    return {'nightly': '{}.0a1', 'beta': '{}.0b1',
+            'esr': '{} esr'}.get(channel, '{}.0').format(label)
 
-    Major releases of the product's train (merge/ship days, meaningful for
-    nightly, beta and release); the ESR channel gets the ESR point
-    releases.
+
+def cycle_marks(product, channel, since, today):
+    """The channel's own version boundaries up to *today*, from its stored
+    cycles (versions.py): the merge days on nightly, the first betas on
+    beta.  None when no cycles are stored (the calendars never loaded)."""
+    cycles = versions.cycles_for(
+        product, config.channel_key(channel, config.SCOPE_CURRENT))
+    if not cycles:
+        return None
+    return [{'date': c.start.isoformat(),
+             'version': version_label(channel, c.label)}
+            for c in cycles.rows
+            if c.start <= today and (since is None or c.start >= since)]
+
+
+def releases(since=None, channel=None, product='Firefox'):
+    """Version boundaries to mark on the charts (cached for a day).
+
+    Each channel gets its own: the merge days on nightly and the first
+    betas on beta (from the stored version cycles, else the releases),
+    the major releases on release, the ESR point releases on ESR.
     """
     channel = config.split_channel(channel or '')[0]
+    if channel in ('nightly', 'beta'):
+        marks = cycle_marks(product, channel, since, models.utcnow().date())
+        if marks is not None:
+            return marks
     feed = FEEDS.get(product, 'firefox')
     cache = _releases_cache.setdefault(feed, {'at': 0.0, 'data': [],
                                               'esr': []})
@@ -315,13 +340,15 @@ def _schedule(train):
 
 
 def next_release(product, channel, today):
-    """The next train boundary of a channel: the merge day of the nightly
-    version for nightly, the release day of the current beta for beta,
-    release and ESR (Thunderbird ships the same days as Firefox).
-    ``{'date', 'version'}`` or None when unknown or past."""
+    """The next version boundary of a channel, from whattrainisitnow: the
+    nightly version's merge day (the next nightly starts) for nightly, its
+    first beta for beta, the current beta's release day for release and
+    ESR (Thunderbird's versions ship on Firefox's days).  ``{'date',
+    'version'}`` or None when unknown or past."""
     channel = config.split_channel(channel)[0]
-    train, key = ('nightly', 'merge_day') if channel == 'nightly' \
-        else ('beta', 'release')
+    train, key = {'nightly': ('nightly', 'merge_day'),
+                  'beta': ('nightly', 'beta_1')}.get(channel,
+                                                     ('beta', 'release'))
     data = _schedule(train) or {}
     try:
         day = datetime.date.fromisoformat(str(data.get(key) or '')[:10])
@@ -330,33 +357,33 @@ def next_release(product, channel, today):
     if day <= today:
         return None
     major = str(data.get('version') or '').split('.')[0]
-    if not major or product == 'Thunderbird':
-        label = 'merge' if channel == 'nightly' else 'next release'
-    elif channel == 'nightly':
-        label = '{} merge'.format(major)
-    elif channel == 'esr':
+    if channel == 'esr':
         label = 'ESR point release'  # ships the same day as the major
+    elif not major.isdigit():
+        label = {'nightly': 'merge', 'beta': 'next beta'}.get(
+            channel, 'next release')
+    elif channel == 'nightly':
+        label = version_label(channel, int(major) + 1)
     else:
-        label = '{}.0'.format(major)
+        label = version_label(channel, major)
     return {'date': day, 'version': label}
 
 
 def horizon_for(product, channel, today):
-    """``(last forecast day, upcoming release marker or None)`` for the
-    daily chart: up to the next release, else two weeks.  In the
-    ``current`` scope the next version cycle (versions.py) is the
-    boundary when it is known: the forecast restarts there."""
+    """``(last forecast day, upcoming version marker or None)`` for the
+    daily chart: up to the channel's next version boundary, else two
+    weeks.  The boundary is the next stored version cycle (versions.py,
+    the same for both scopes; the ``current`` scope's forecast restarts
+    there), else what the release schedule says."""
     nxt = next_release(product, channel, today)
-    cycles = versions.cycles_for(product, channel)
+    real = config.split_channel(channel)[0]
+    cycles = versions.cycles_for(
+        product, config.channel_key(real, config.SCOPE_CURRENT))
     if cycles:
         start = cycles.next_start(today)
         if start is not None:
-            # the scope restarts with the version that *starts* there (the
-            # calendar's nightly marker names the one that leaves)
-            label = cycles.at(start).label
-            real = config.split_channel(channel)[0]
-            nxt = {'date': start, 'version': '{}.0'.format(label)
-                   if real == 'release' else '{} starts'.format(label)}
+            nxt = {'date': start,
+                   'version': version_label(real, cycles.at(start).label)}
     if nxt is None:
         return today + datetime.timedelta(days=FORECAST_DAYS), None
     day = min(nxt['date'], today + datetime.timedelta(days=FORECAST_MAX_DAYS))
