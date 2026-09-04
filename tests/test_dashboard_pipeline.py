@@ -1020,10 +1020,13 @@ class ApiTest(DBTestCase):
         its spike started (the flag's first run); an unflagged row shows
         its bugs without that verdict."""
         rows, _ = self.channel_rows()
-        since = api.parse_ts(rows['spiking']['flag']['since'])
+        self.assertEqual(rows['spiking']['flag']['day'], TODAY.isoformat())
+        # the spike's start is the first flagged day's midnight, not the
+        # run that flagged it (NOW, noon): a bug from that morning counts
+        since = datetime.datetime.combine(TODAY, datetime.time())
         hour = datetime.timedelta(hours=1)
         models.replace_bugs('spiking', {
-            1001: {'created_at': since - 30 * hour, 'status': 'RESOLVED',
+            1001: {'created_at': since - 6 * hour, 'status': 'RESOLVED',
                    'resolution': 'FIXED', 'summary': 'old one'},
             1002: {'created_at': since + hour, 'status': 'NEW',
                    'summary': 'filed for the spike', 'source': 'bugzilla'},

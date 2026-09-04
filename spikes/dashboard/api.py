@@ -532,19 +532,16 @@ def flag_history(series_ids, today, ndays=EPISODE_DAYS):
     import sqlalchemy as sa
     from spikes import db
     S = models.Score
-    q = sa.select(S.series_id, S.day, S.peak_severity,
-                  S.first_flagged_at).where(
+    q = sa.select(S.series_id, S.day, S.peak_severity).where(
         S.series_id.in_(list(series_ids)), S.day >= since, S.day < today,
         sa.or_(S.peak_severity.in_(list(scoring.UPWARD)),
                S.severity != 'ok', S.is_new.is_(True)))
     res = {}
-    for sid, day, peak, first in db.session.execute(q):
-        h = res.setdefault(sid, {'up': set(), 'any': set(), 'since': {}})
+    for sid, day, peak in db.session.execute(q):
+        h = res.setdefault(sid, {'up': set(), 'any': set()})
         h['any'].add(day)
         if peak in scoring.UPWARD:
             h['up'].add(day)
-        if first is not None:
-            h['since'][day] = first
     return res
 
 
@@ -570,21 +567,15 @@ def flag_day(flag):
     return datetime.date.fromisoformat(flag['day'])
 
 
-def parse_ts(value):
-    """Inverse of :func:`ts` (naive UTC)."""
-    return datetime.datetime.strptime(value[:19], '%Y-%m-%dT%H:%M:%S')
-
-
 def episode_since(history, flag):
-    """When the spike a flag belongs to started: the first flagged run of
-    the first day of its run of consecutive flagged days (followed across
-    UTC midnights; that day's midnight when the run's start is unknown)."""
-    day = flag_day(flag)
-    start = episode_start(history, day)
-    if start == day:
-        return parse_ts(flag['since'])
-    at = (history or {}).get('since', {}).get(start)
-    return at or datetime.datetime.combine(start, datetime.time())
+    """When the spike a flag belongs to started: 00:00 UTC of the first
+    day of its run of consecutive flagged days (followed across UTC
+    midnights).  Not the run that first flagged it: the dashboard notices
+    a spike hours after it begins (and scored the first days of its own
+    history a day late), while a bug is often filed within the hour, so
+    a bug from the spike's first day counts as filed for it."""
+    start = episode_start(history, flag_day(flag))
+    return datetime.datetime.combine(start, datetime.time())
 
 
 def signed_in():

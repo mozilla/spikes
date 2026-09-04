@@ -104,8 +104,8 @@ Lists, counts and sort orders use `flag` (a row whose `flag.day` is not
 today's own state.
 
 `bugs[].after` compares the bug's filing time with the start of the row's
-*episode*: the first run that flagged the first day of the run of
-consecutive flagged days ending on `flag.day` (followed 7 days back).  The
+*episode*: 00:00 UTC of the first day of the run of consecutive flagged
+days ending on `flag.day` (followed 7 days back).  The
 page shows the newest bug filed after the spike (green) or else the newest
 bug (red), the others in a tooltip.
 

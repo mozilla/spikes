@@ -443,12 +443,12 @@ in green when it was filed *after* the spike started (someone is on it),
 in red when the only bugs are from *before* the spike (a known crash,
 spiking again), struck through when resolved, with the other bugs and
 their summaries in the tooltip (`+N`).  "After the spike started" is
-measured from the first run that flagged the first day of the current run
-of consecutive flagged days (`api.episode_since`, followed up to 7 days
-back across UTC midnights): a bug filed once the dashboard had flagged the
-spike counts as after, one filed earlier the same day as before (erring
-towards red: a wrong green would hide a spike).  Rows that are not flagged
-show their bugs without a colour.  A bug Bugzilla hides from anonymous
+measured from 00:00 UTC of the first day of the current run of consecutive
+flagged days (`api.episode_since`, followed up to 7 days back across UTC
+midnights), not from the run that first flagged it: the dashboard notices
+a spike hours after it begins, while a bug is often filed within the hour,
+so a bug from the spike's first day counts as filed for it.  Rows that are
+not flagged show their bugs without a colour.  A bug Bugzilla hides from anonymous
 callers (a security bug: Socorro gives its id, Bugzilla nothing) is
 *restricted*: listed, id only and in grey, for signed-in users, absent from
 what everyone else gets.  This replaced the hand-made "done" marks: a bug filed
