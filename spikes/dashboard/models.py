@@ -230,13 +230,15 @@ class Event(db.Model):
 
 
 class Feed(db.Model):
-    """Fetch bookkeeping of one event feed."""
+    """Fetch bookkeeping of one event feed (and of the version calendars,
+    versions.py)."""
     __tablename__ = 'dashboard_feeds'
 
     name = db.Column(db.String(32), primary_key=True)
     fetched_at = db.Column(db.DateTime, nullable=False)
     ok = db.Column(db.Boolean, nullable=False, default=True)
     items = db.Column(db.Integer, nullable=False, default=0)
+    # the error, or what the fetch served (versions.served_signature)
     message = db.Column(db.String(200))
 
 

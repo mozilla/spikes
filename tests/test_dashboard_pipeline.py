@@ -743,7 +743,7 @@ class ScoringTest(DBTestCase):
                              recent_days=1)
         self.assertEqual([u for u in units
                           if u.kind in collect.HISTORY_KINDS], [])
-        # a single-day query whose index is gone stores nothing
+        # today's query whose index is gone stores nothing
         day = load('socorro_day.json')
         day['errors'] = [{'type': 'missing_index',
                           'index': socorro.index_for(TODAY)}]
@@ -754,6 +754,19 @@ class ScoringTest(DBTestCase):
                                                    NOW)
         self.assertEqual((written, failed, fetcher.failures), (0, 1, 1))
         self.assertIsNone(models.get_day('Firefox', 'nightly', TODAY))
+        # a past day fetched alone (a filter per day) at the retention
+        # edge is stored as unknown, like the days of a chunk
+        old = TODAY - datetime.timedelta(days=100)
+        day['errors'] = [{'type': 'missing_index',
+                          'index': socorro.index_for(old)}]
+        units = [collect.Unit('day', 'Firefox', 'nightly', old,
+                              old + datetime.timedelta(days=1))]
+        written, failed, skipped = collect.execute(
+            units, FakeFetcher({'day': day}), TODAY, NOW)
+        self.assertEqual((written, failed), (1, 0))
+        row = models.get_day('Firefox', 'nightly', old)
+        self.assertIsNone(row.crashes)
+        self.assertTrue(row.complete and row.final)
 
     def test_stale_non_final_day_is_refetched(self):
         old = TODAY - datetime.timedelta(days=12)

@@ -493,6 +493,52 @@ class StoredCyclesTest(DBTestCase):
         self.assertIn(('hourly_total', D(2026, 8, 20)), kinds)
         self.assertNotIn(('day', D(2026, 8, 20)), kinds)
 
+    def test_refresh_when_due_or_reconfigured(self):
+        """The calendars are refreshed every six hours, and at once when
+        the channels the cycles serve change (a scope added: nothing is
+        planned for it until its cycles exist)."""
+        from spikes import db
+        now = datetime.datetime(2026, 9, 3, 12)
+        calls = []
+
+        def fake_refresh(when):
+            calls.append(when)
+            return {'cycles': 3, 'changed_channels': 1}
+
+        def maybe_refresh(when):
+            res = versions.maybe_refresh(when)
+            db.session.commit()  # as a run does after it
+            return res
+        with mock.patch.object(versions, 'refresh', fake_refresh):
+            self.assertIsNotNone(maybe_refresh(now))  # no row yet
+            feed = self.models.load_feeds()[versions.FEED_NAME]
+            self.assertEqual((feed.ok, feed.items), (True, 3))
+            self.assertEqual(feed.message, versions.served_signature())
+            later = now + datetime.timedelta(hours=2)
+            self.assertIsNone(maybe_refresh(later))
+            self.assertIsNotNone(maybe_refresh(
+                now + datetime.timedelta(hours=7)))
+            # another scope (or channel) configured: due at once
+            previous = config.override(scopes=['all', 'current'])
+            try:
+                self.assertIsNotNone(maybe_refresh(later))
+                self.assertIsNone(maybe_refresh(later))
+            finally:
+                config.restore(previous)
+            self.assertEqual(len(calls), 3)
+        # a failed fetch is retried after an hour, whatever the channels
+        with mock.patch.object(versions, 'refresh',
+                               side_effect=RuntimeError('down')):
+            self.assertIn('error', maybe_refresh(
+                now + datetime.timedelta(hours=8)))
+            feed = self.models.load_feeds()[versions.FEED_NAME]
+            self.assertEqual((feed.ok, feed.message), (False, 'down'))
+            self.assertIsNone(maybe_refresh(
+                now + datetime.timedelta(hours=8, minutes=30)))
+        with mock.patch.object(versions, 'refresh', fake_refresh):
+            self.assertIsNotNone(maybe_refresh(
+                now + datetime.timedelta(hours=9, minutes=1)))
+
     def test_helpers_and_link(self):
         self.assertEqual(versions.label_for('Firefox', 'release@current',
                                             TODAY), '155')

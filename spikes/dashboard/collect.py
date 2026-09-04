@@ -240,6 +240,14 @@ def _noise_checker(channel):
 def write_day(unit, parsed, as_of, today):
     """Store a merged ``day`` result."""
     product, channel = unit.product, unit.channel
+    if parsed is NO_INDEX:
+        # Socorro has deleted the day's index (its retention edge): the
+        # day is unknown, not empty, and is not asked for again (as in
+        # write_daily)
+        models.upsert_day(product, channel, unit.day, crashes=None,
+                          cutoff=None, as_of=as_of, final=True,
+                          complete=True, version=unit.label)
+        return
     day = parsed['day'] or unit.start
     grace = config.get('final_grace_hours', 6)
     recent = config.get('day_backfill_days', 7)
@@ -435,6 +443,8 @@ HOURS_LAST = socorro.HOURS - 1
 
 # chunks of past days: a day whose index is gone is stored as unknown
 HISTORY_KINDS = ('daily', 'hourly_total')
+# the result of a past day's ``day`` query whose index is gone
+NO_INDEX = object()
 WRITERS = {'day': write_day, 'recent': write_recent,
            'installs': write_installs, 'daily': write_daily,
            'hourly_total': write_hourly_total}
@@ -464,12 +474,17 @@ def execute(units, fetcher, today, now=None):
 
         def cb(json):
             missing = socorro.missing_indices(json)
+            unit.missing = missing
             if missing and unit.kind not in HISTORY_KINDS and \
                     socorro.index_for(unit.day) in missing:
-                # a single-day query with no index: nothing to store
+                if unit.kind == 'day' and unit.day < today:
+                    # a past day fetched alone (a filter per day) at the
+                    # retention edge: stored as unknown, see write_day
+                    unit.result = NO_INDEX
+                    return
+                # today's query with no index: nothing to store
                 raise ValueError('no index for {}'.format(unit.day))
             unit.result = parser(json)
-            unit.missing = missing
         return cb
 
     _, attempted = fetcher.run([(u.params(), make_cb(u)) for u in units])

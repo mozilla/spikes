@@ -53,6 +53,7 @@ week in every scope.)
 
 import collections
 import datetime
+import hashlib
 import re
 import time
 
@@ -507,21 +508,34 @@ def cycles_key(channel, scope):
         config.channel_key(channel, scope)
 
 
+def served_signature():
+    """Fingerprint of the (product, channel, scope) set the cycles serve,
+    kept in the feed row: a scope or channel added to the configuration
+    makes a refresh due at once, since nothing is planned for a channel
+    without cycles."""
+    keys = sorted('{}/{}'.format(p, cycles_key(c, s))
+                  for s in versioned_scopes()
+                  for p in config.products() for c in config.channels(p))
+    return 'cycles ' + hashlib.sha1('\n'.join(keys).encode()).hexdigest()
+
+
 def maybe_refresh(now):
-    """Refresh when due (every ``versions_refresh_hours``, sooner after a
-    failure).  Records the outcome in ``dashboard_feeds``; returns the
-    summary or None when nothing was due."""
+    """Refresh when due: every ``versions_refresh_hours``, sooner after a
+    failure, at once when the channels served changed.  Records the
+    outcome in ``dashboard_feeds``; returns the summary or None when
+    nothing was due."""
     if not versioned_scopes():
         return None
     feed = models.load_feeds().get(FEED_NAME)
-    if feed is not None:
+    served = served_signature()
+    if feed is not None and (not feed.ok or feed.message == served):
         hours = config.get('versions_refresh_hours', 6) if feed.ok else \
             config.get('events_retry_hours', 1)
         if now - feed.fetched_at < datetime.timedelta(hours=hours):
             return None
     try:
         res = refresh(now)
-        ok, message, items = True, None, res['cycles']
+        ok, message, items = True, served, res['cycles']
     except Exception as ex:  # noqa: BLE001
         db_rollback()
         logger.warning('Dashboard: version calendars unavailable: %s', ex)
