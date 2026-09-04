@@ -940,6 +940,12 @@ class ApiTest(DBTestCase):
                             '&channel=beta')
         self.assertEqual(r.status_code, 404)
 
+    def sign_in(self, email='someone@mozilla.com'):
+        from spikes.dashboard import auth
+        with self.client.session_transaction() as sess:
+            sess[auth.SESSION_KEY] = {'email': email, 'name': 'Someone',
+                                      'picture': None}
+
     def channel_rows(self):
         r = self.client.get('/dashboard/api/channel?product=Firefox'
                             '&channel=release&days=30')
@@ -1025,18 +1031,37 @@ class ApiTest(DBTestCase):
         models.replace_bugs('stable', {1004: {'created_at': since - hour,
                                               'status': 'NEW'}}, NOW)
         db.session.commit()
-        rows, _ = self.channel_rows()
+        rows, etag = self.channel_rows()
         bugs = rows['spiking']['bugs']
-        self.assertEqual([b['id'] for b in bugs], [1002, 1001, 1003])
-        self.assertEqual([b['after'] for b in bugs], [True, False, None])
+        # bug 1003 (nothing from Bugzilla: restricted) is not for everyone
+        self.assertEqual([b['id'] for b in bugs], [1002, 1001])
+        self.assertEqual([b['after'] for b in bugs], [True, False])
         self.assertEqual(bugs[0]['source'], 'bugzilla')
         self.assertEqual(bugs[1]['resolution'], 'FIXED')
         self.assertEqual(bugs[0]['created'], api.ts(since + hour))
+        self.assertFalse(any(b['restricted'] for b in bugs))
         self.assertEqual(rows['stable']['bugs'][0]['after'], None)
         summary = self.client.get('/dashboard/api/summary').get_json()
         alert = [a for a in summary['alerts'] if a['signature'] == 'spiking']
         self.assertEqual(alert[0]['bugs'], bugs)
         self.assertNotIn('done', summary['channels'][0]['counts'])
+        # a signed-in user sees the restricted bug too (id only), under
+        # a different ETag so the anonymous response is not reused
+        self.sign_in()
+        rows, etag_user = self.channel_rows()
+        self.assertNotEqual(etag, etag_user)
+        bugs = rows['spiking']['bugs']
+        self.assertEqual([b['id'] for b in bugs], [1002, 1001, 1003])
+        self.assertEqual((bugs[2]['restricted'], bugs[2]['after'],
+                          bugs[2]['status']), (True, None, None))
+        r = self.client.get('/dashboard/api/channel?product=Firefox'
+                            '&channel=release&days=30',
+                            headers={'If-None-Match': etag})
+        self.assertEqual(r.status_code, 200)
+        r = self.client.get('/dashboard/api/channel?product=Firefox'
+                            '&channel=release&days=30',
+                            headers={'If-None-Match': etag_user})
+        self.assertEqual(r.status_code, 304)
 
     def test_flag_window(self):
         """Yesterday's flags stay listed for 48 h (scores are per UTC day:

@@ -15,8 +15,8 @@ import requests
 from flask import Blueprint, Response, jsonify, render_template, request
 
 from spikes.logger import logger
-from . import (calibration, config, events, intraday, models, scoring,
-               seasonal, socorro, versions)
+from . import (auth, calibration, config, events, intraday, models,
+               scoring, seasonal, socorro, versions)
 
 
 blueprint = Blueprint('dashboard', __name__, template_folder='templates',
@@ -587,19 +587,29 @@ def episode_since(history, flag):
     return at or datetime.datetime.combine(start, datetime.time())
 
 
-def bugs_json(bugs, since):
+def signed_in():
+    """Whether the request comes from a signed-in user (auth.py): they
+    also see the restricted bugs."""
+    return auth.current_user() is not None
+
+
+def bugs_json(bugs, since, restricted_ok=False):
     """The bugs listing a row's signature, newest first, each with
     whether it was filed after the row's spike started (*since*; None
-    when nothing is flagged or Bugzilla hides the bug's filing time)."""
+    when nothing is flagged or the bug's filing time is unknown).
+    Restricted bugs (Bugzilla hides them, only their id is known) are
+    listed only with *restricted_ok*."""
     res = []
     for b in bugs:
+        if b.restricted and not restricted_ok:
+            continue
         after = None
         if since is not None and b.created_at is not None:
             after = b.created_at >= since
         res.append({'id': b.bug_id, 'created': ts(b.created_at),
                     'status': b.status, 'resolution': b.resolution,
                     'summary': b.summary, 'source': b.source,
-                    'after': after})
+                    'restricted': b.restricted, 'after': after})
     return res
 
 
@@ -623,6 +633,7 @@ def rows_json(product, channel, by_series, today, with_yesterday_final,
     history = flag_history(ids, today)
     bugs = models.load_bugs({by_series[sid]['series'].signature
                              for sid in ids})
+    restricted_ok = signed_in()
     rows = []
     for sid in ids:
         e = by_series[sid]
@@ -636,7 +647,8 @@ def rows_json(product, channel, by_series, today, with_yesterday_final,
                              flagged_days=consecutive_before(up, today),
                              flag=flag,
                              bugs=bugs_json(bugs.get(e['series'].signature,
-                                                     []), since)))
+                                                     []), since,
+                                            restricted_ok)))
     return rows
 
 
@@ -902,10 +914,13 @@ def data_version(run, now=None):
 
 def etag_for(run, parts, now=None):
     """ETag from the data version and a digest of the request parts (no
-    raw request string, which may contain quotes, ends up in the header)."""
+    raw request string, which may contain quotes, ends up in the header).
+    A signed-in user gets more (the restricted bugs): their ETags differ,
+    so a cached anonymous response is never reused after signing in."""
     version = data_version(run, now)
     if version is None:
         return None
+    parts = tuple(parts) + ('user' if signed_in() else 'anon',)
     key = '\x00'.join(str(p) for p in parts).encode('utf-8')
     return '{}-{}'.format(version, hashlib.sha1(key).hexdigest()[:16])
 

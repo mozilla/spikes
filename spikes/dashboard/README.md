@@ -448,15 +448,20 @@ of consecutive flagged days (`api.episode_since`, followed up to 7 days
 back across UTC midnights): a bug filed once the dashboard had flagged the
 spike counts as after, one filed earlier the same day as before (erring
 towards red: a wrong green would hide a spike).  Rows that are not flagged
-show their bugs without a colour.  This replaced the hand-made "done" marks: a bug filed
+show their bugs without a colour.  A bug Bugzilla hides from anonymous
+callers (a security bug: Socorro gives its id, Bugzilla nothing) is
+*restricted*: listed, id only and in grey, for signed-in users, absent from
+what everyone else gets.  This replaced the hand-made "done" marks: a bug filed
 for the spike is the signal that it is handled.
 
 ## Sign-in
 
-Reading the dashboard needs no account.  Routes that would change it are
-to be wrapped in `auth.login_required` (none exists at the moment: the
-"done" marks it was added for were replaced by the bug column, the
-mechanism stays for future ones) and only run for a signed-in user whose Google
+Reading the dashboard needs no account; a signed-in user additionally
+sees the restricted bugs (see *Bug column*; the API's ETags differ between
+anonymous and signed-in responses, so a browser never reuses one for the
+other).  Routes that would change the dashboard are to be wrapped in
+`auth.login_required` (none exists at the moment: the "done" marks it was
+added for were replaced by the bug column) and only run for a signed-in user whose Google
 account has a verified address in one of `login_domains`
 (`config/dashboard.json`, `mozilla.com` by default), the same way
 hackbot.moz.tools is restricted to `@mozilla.com` accounts.  The header

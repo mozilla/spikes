@@ -278,6 +278,13 @@ class Bug(db.Model):
     source = db.Column(db.String(8), nullable=False, default='socorro')
     updated_at = db.Column(db.DateTime, nullable=False)
 
+    @property
+    def restricted(self):
+        """Bugzilla returned nothing for the id (a security bug, hidden
+        from anonymous callers): only the id is known, and the API lists
+        it for signed-in users only."""
+        return self.status is None
+
 
 class BugCheck(db.Model):
     """When a signature's bugs were last looked up (bugs.py)."""

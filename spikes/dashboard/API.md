@@ -78,8 +78,10 @@ A `Score` plus:
     {"id": 2069191, "created": "2026-09-04T02:09:30Z",   // newest first (bugs.py)
      "status": "NEW", "resolution": null, "summary": "Crash in [@ ...]",
      "source": "socorro",                         // or "bugzilla" (found by a search)
-     "after": true}                               // filed after the spike started; false:
-  ],                                              // before; null: not flagged, or hidden bug
+     "restricted": false,                         // true: Bugzilla hides the bug (id only,
+     "after": true}                               //   listed for signed-in users only)
+  ],                                              // after: filed after the spike started;
+                                                  //   false: before; null: not flagged/unknown
   "first_seen": "2026-09-01",
   "flagged_days": 2,                              // consecutive previous days with peak >= watch
   "yesterday": {"observed": 120, "expected": 98.0, "z": 1.1, "severity": "ok",

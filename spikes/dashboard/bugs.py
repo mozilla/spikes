@@ -256,6 +256,8 @@ def refresh(today, now, fetcher=None):
     for s in todo:
         if s not in by_socorro:
             continue
+        # an id without details is a bug Bugzilla hides: stored with its
+        # status unknown (models.Bug.restricted)
         bugs = {b: dict(details.get(b, {}), source='socorro')
                 for b in by_socorro[s]}
         if not bugs:
