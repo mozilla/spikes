@@ -10,17 +10,14 @@ process calls :func:`run` every 10 minutes.
 """
 
 import argparse
-import datetime
 import json
 import time
 
 import sqlalchemy as sa
-from libmozdata import socorro as lmdsocorro
-from libmozdata.bugzilla import Bugzilla
 
 from spikes import app, db
 from spikes.logger import logger
-from . import collect, config, events, models, scoring, versions
+from . import bugs, collect, config, events, models, scoring, versions
 from .socorro import Fetcher
 
 
@@ -50,77 +47,6 @@ def lag_guard(summaries, today):
         models.Score.day == today, models.Score.severity == 'drop'
     ).values(severity='ok'))
     return True
-
-
-def fetch_bugs(signatures, fetcher):
-    """``signature -> (open bug, closed bug)`` from Socorro + Bugzilla."""
-    by_signature = {}
-
-    def handler(json, data):
-        for hit in json.get('hits', []):
-            data.setdefault(hit['signature'], set()).add(int(hit['id']))
-
-    plain = [s for s in signatures if not s.startswith('"')]
-    for chunk in models._chunks(plain, 40):
-        # a handful of queries: outside the SuperSearch budget, but not
-        # past the run's deadline
-        if fetcher.deadline is not None and time.time() > fetcher.deadline:
-            return None
-        try:
-            lmdsocorro.Bugs(params={'signatures': chunk}, handler=handler,
-                            handlerdata=by_signature).wait()
-        except Exception as ex:  # keep the run alive
-            logger.warning('Dashboard: bugs query failed: %s', ex)
-            fetcher.failures += 1
-        fetcher.count += 1
-    bugs = sorted({b for v in by_signature.values() for b in v})
-    status = {}
-    if bugs:
-        def bug_handler(bug, data):
-            data[bug['id']] = bug['status']
-        try:
-            Bugzilla(bugids=bugs, include_fields=['id', 'status'],
-                     bughandler=bug_handler, bugdata=status).wait()
-        except Exception as ex:  # keep the run alive
-            logger.warning('Dashboard: bugzilla query failed: %s', ex)
-    res = {}
-    for sgn in signatures:
-        ids = by_signature.get(sgn, set())
-        closed = [b for b in ids
-                  if status.get(b) in ('RESOLVED', 'VERIFIED', 'CLOSED')]
-        opened = [b for b in ids if b in status and b not in closed]
-        res[sgn] = (max(opened) if opened else None,
-                    max(closed) if closed else None)
-    return res
-
-
-def enrich_bugs(today, now, fetcher):
-    """Attach the latest open/closed bug to the flagged signatures."""
-    limit = config.get('bugs_max_signatures', 150)
-    stale = now - datetime.timedelta(hours=12)
-    rows = models.flagged_scores([today], ('major', 'spike', 'watch',
-                                          'drop'))
-    todo = {}
-    for score, series in rows:
-        if series.noise:
-            continue
-        if series.bugs_as_of is not None and series.bugs_as_of > stale:
-            continue
-        # the same signature flagged in several channels or scopes: one
-        # lookup, every series updated
-        todo.setdefault(series.signature, []).append(series)
-    signatures = sorted(todo)[:limit]
-    if not signatures:
-        return 0
-    found = fetch_bugs(signatures, fetcher)
-    if found is None:
-        return 0
-    for sgn in signatures:
-        for series in todo[sgn]:
-            series.bug_open, series.bug_closed = found.get(sgn, (None, None))
-            series.bugs_as_of = now
-    db.session.commit()
-    return len(signatures)
 
 
 def maybe_prune(today, now):
@@ -205,10 +131,10 @@ def run(now=None, budget=None, max_seconds=None):
                                                               today)
         db.session.commit()
         try:
-            info['bugs'] = enrich_bugs(today, now, fetcher)
+            info['bugs'] = bugs.refresh(today, now, fetcher)
         except Exception as ex:  # keep the run alive
             db.session.rollback()
-            logger.exception('Dashboard: bug enrichment failed: %s', ex)
+            logger.exception('Dashboard: bug look-up failed: %s', ex)
         try:
             refreshed = events.maybe_refresh(now)
             if refreshed is not None:

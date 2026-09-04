@@ -768,30 +768,33 @@ class HousekeepingTest(DBTestCase):
     def test_prune_drops_series_left_without_data(self):
         old = TODAY - datetime.timedelta(days=200)
         ids = models.series_ids('Firefox', 'release',
-                                ['gone', 'kept', 'marked', 'fresh'])
+                                ['gone', 'kept', 'fresh'])
         total = models.total_series('Firefox', 'release')
         models.upsert(models.Daily, [
             {'series_id': ids['gone'], 'day': old, 'crashes': 1},
             {'series_id': ids['kept'], 'day': old, 'crashes': 50},
-            {'series_id': ids['marked'], 'day': old, 'crashes': 1},
             {'series_id': ids['fresh'], 'day': TODAY, 'crashes': 1},
             {'series_id': total, 'day': old, 'crashes': 1}],
             ['series_id', 'day'])
         models.upsert(models.Model, [
             {'series_id': sid, 'fitted_at': NOW, 'last_day': TODAY}
             for sid in (ids['gone'], ids['kept'])], ['series_id'])
-        models.add_mark(ids['marked'], True, 'spike', 'someone@mozilla.com',
-                        at=NOW)
+        for sgn in ('gone', 'kept'):
+            models.replace_bugs(sgn, {1: {'status': 'NEW'}}, NOW)
+        models.mark_bugs_checked({'gone': 1, 'kept': 1}, NOW)
         db.session.commit()
         removed = models.prune(TODAY, 120, 3, 365, 10, 60, 30, 30)
         db.session.commit()
         # the low-volume old rows go, and with them the series that has
-        # nothing left; a mark, recent data or volume keep a series
+        # nothing left and its bugs; recent data or volume keep a series
         self.assertEqual(removed, 1)
         self.assertIsNone(models.get_series('Firefox', 'release', 'gone'))
-        for sgn in ('kept', 'marked', 'fresh'):
+        for sgn in ('kept', 'fresh'):
             self.assertIsNotNone(models.get_series('Firefox', 'release',
                                                    sgn), sgn)
+        self.assertEqual(sorted(models.load_bugs(['gone', 'kept'])), ['kept'])
+        self.assertEqual(sorted(models.load_bug_checks(['gone', 'kept'])),
+                         ['kept'])
         self.assertEqual(models.total_series('Firefox', 'release',
                                              create=False), total)
         self.assertEqual(sorted(models.load_models([ids['gone'],
@@ -799,33 +802,6 @@ class HousekeepingTest(DBTestCase):
                          [ids['kept']])
         # nothing more to do on a second pass
         self.assertEqual(models.prune(TODAY, 120, 3, 365, 10, 60, 30, 30), 0)
-
-    def test_bugs_fetched_once_per_signature(self):
-        sgn = 'shared | signature'
-        sids = [models.series_ids('Firefox', ch, [sgn])[sgn]
-                for ch in ('release', 'release@current', 'beta')]
-        for sid in sids:
-            models.upsert(models.Score, [{
-                'series_id': sid, 'day': TODAY, 'as_of': NOW,
-                'partial': True, 'observed': 40, 'expected': 5.0, 'z': 8.0,
-                'severity': 'spike', 'is_new': False, 'storm': False}],
-                ['series_id', 'day'])
-        db.session.commit()
-        calls = []
-
-        def fake_fetch(signatures, fetcher):
-            calls.append(list(signatures))
-            return {s: (123, None) for s in signatures}
-        with mock.patch.object(update, 'fetch_bugs', fake_fetch):
-            n = update.enrich_bugs(TODAY, NOW, None)
-        # one lookup for the three series (two channels, two scopes)...
-        self.assertEqual((n, calls), (1, [[sgn]]))
-        # ... and every one of them carries the bug from this run on
-        for sid, series in models.load_series(sids).items():
-            self.assertEqual((series.bug_open, series.bug_closed,
-                              series.bugs_as_of), (123, None, NOW))
-        with mock.patch.object(update, 'fetch_bugs', fake_fetch):
-            self.assertEqual(update.enrich_bugs(TODAY, NOW, None), 0)
 
 
 class ApiTest(DBTestCase):
@@ -964,12 +940,6 @@ class ApiTest(DBTestCase):
                             '&channel=beta')
         self.assertEqual(r.status_code, 404)
 
-    def sign_in(self, email='someone@mozilla.com'):
-        from spikes.dashboard import auth
-        with self.client.session_transaction() as sess:
-            sess[auth.SESSION_KEY] = {'email': email, 'name': 'Someone',
-                                      'picture': None}
-
     def channel_rows(self):
         r = self.client.get('/dashboard/api/channel?product=Firefox'
                             '&channel=release&days=30')
@@ -1038,123 +1008,35 @@ class ApiTest(DBTestCase):
         self.assertEqual(d['scope'], 'all')
         self.assertEqual(d['model']['cycle_from'], 'calendar')
         self.assertNotIn('major_version', d['signatures'][0]['socorro_url'])
-        # a done mark in one scope is that scope's
-        self.sign_in()
-        r = self.client.post('/dashboard/api/done', json={
-            'product': 'Firefox', 'channel': 'release', 'scope': 'current',
-            'signature': 'spiking', 'done': True})
-        self.assertEqual(r.status_code, 200)
-        rows, _ = self.channel_rows()
-        self.assertIsNone(rows['spiking']['done'])
-        d = self.client.get('/dashboard/api/channel?product=Firefox'
-                            '&channel=release&scope=current').get_json()
-        self.assertIsNotNone({s['signature']: s for s in d['signatures']}
-                             ['spiking']['done'])
 
-    def test_mark_done(self):
-        """A signed-in user marks a flagged spike as done: the row carries
-        the mark, the data version changes (the cached page refetches), and
-        the mark can be undone."""
-        body = {'product': 'Firefox', 'channel': 'release',
-                'signature': 'spiking', 'done': True}
-        r = self.client.post('/dashboard/api/done', json=body)
-        self.assertEqual(r.status_code, 401)
-        self.assertEqual(r.get_json()['login'], '/dashboard/login')
-        rows, etag = self.channel_rows()
-        self.assertIsNotNone(rows['spiking']['flag'])
-        self.assertIsNone(rows['spiking']['done'])
-        before = self.client.get('/dashboard/api/channel?product=Firefox'
-                                 '&channel=release').get_json()['counts']
-        self.assertEqual(before['done'], 0)
-        self.sign_in()
-        r = self.client.post('/dashboard/api/done', json=body)
-        self.assertEqual(r.status_code, 200)
-        done = r.get_json()['done']
-        self.assertEqual(done['by'], 'someone@mozilla.com')
-        self.assertEqual(done['severity'], rows['spiking']['flag']['severity'])
-        self.assertEqual(done['at'], api.ts(NOW))
-        rows, etag2 = self.channel_rows()
-        self.assertEqual(rows['spiking']['done'], done)
-        self.assertNotEqual(etag, etag2)
-        self.assertIsNone(rows['stable']['done'])
-        # the cards count it as done, not under its severity any more
-        sev = done['severity']
-        counts = self.client.get('/dashboard/api/channel?product=Firefox'
-                                 '&channel=release').get_json()['counts']
-        self.assertEqual(counts['done'], 1)
-        self.assertEqual(counts[sev], before[sev] - 1)
+    def test_bugs_on_rows(self):
+        """The bugs of a flagged row say whether they were filed after
+        its spike started (the flag's first run); an unflagged row shows
+        its bugs without that verdict."""
+        rows, _ = self.channel_rows()
+        since = api.parse_ts(rows['spiking']['flag']['since'])
+        hour = datetime.timedelta(hours=1)
+        models.replace_bugs('spiking', {
+            1001: {'created_at': since - 30 * hour, 'status': 'RESOLVED',
+                   'resolution': 'FIXED', 'summary': 'old one'},
+            1002: {'created_at': since + hour, 'status': 'NEW',
+                   'summary': 'filed for the spike', 'source': 'bugzilla'},
+            1003: {'created_at': None, 'status': None}}, NOW)
+        models.replace_bugs('stable', {1004: {'created_at': since - hour,
+                                              'status': 'NEW'}}, NOW)
+        db.session.commit()
+        rows, _ = self.channel_rows()
+        bugs = rows['spiking']['bugs']
+        self.assertEqual([b['id'] for b in bugs], [1002, 1001, 1003])
+        self.assertEqual([b['after'] for b in bugs], [True, False, None])
+        self.assertEqual(bugs[0]['source'], 'bugzilla')
+        self.assertEqual(bugs[1]['resolution'], 'FIXED')
+        self.assertEqual(bugs[0]['created'], api.ts(since + hour))
+        self.assertEqual(rows['stable']['bugs'][0]['after'], None)
         summary = self.client.get('/dashboard/api/summary').get_json()
         alert = [a for a in summary['alerts'] if a['signature'] == 'spiking']
-        self.assertEqual(alert[0]['done'], done)
-        # a stale ETag is not honoured
-        r = self.client.get('/dashboard/api/channel?product=Firefox'
-                            '&channel=release&days=30',
-                            headers={'If-None-Match': etag})
-        self.assertEqual(r.status_code, 200)
-        # undo
-        r = self.client.post('/dashboard/api/done', json=dict(body,
-                                                              done=False))
-        self.assertEqual(r.status_code, 200)
-        self.assertIsNone(r.get_json()['done'])
-        rows, etag3 = self.channel_rows()
-        self.assertIsNone(rows['spiking']['done'])
-        self.assertNotEqual(etag2, etag3)
-        marks = models.load_marks([rows['spiking']['series_id']])
-        self.assertEqual(len(marks), 1)
-        self.assertFalse(marks[rows['spiking']['series_id']].done)
-        # only flagged rows can be marked; bad input is refused
-        r = self.client.post('/dashboard/api/done', json=dict(body,
-                                                              signature='stable'))
-        self.assertEqual(r.status_code, 400)
-        r = self.client.post('/dashboard/api/done', json=dict(body,
-                                                              signature='nope'))
-        self.assertEqual(r.status_code, 404)
-        r = self.client.post('/dashboard/api/done', json=dict(body,
-                                                              done='yes'))
-        self.assertEqual(r.status_code, 400)
-        r = self.client.post('/dashboard/api/done', json=dict(body,
-                                                              channel='nope'))
-        self.assertEqual(r.status_code, 400)
-        # a cross-site POST is refused even when signed in
-        r = self.client.post('/dashboard/api/done', json=body,
-                             headers={'Origin': 'https://evil.example'})
-        self.assertEqual(r.status_code, 403)
-
-    def test_done_follows_the_episode(self):
-        """The mark covers the run of consecutive flagged days it was made
-        in, at the severity it was made for."""
-        sid = 7
-        mark = models.Mark(series_id=sid, done=True, severity='watch',
-                           by='x@mozilla.com',
-                           at=datetime.datetime(2026, 9, 1, 10, 0))
-        d = datetime.date
-        history = {'up': {d(2026, 8, 31), d(2026, 9, 1)},
-                   'any': {d(2026, 8, 31), d(2026, 9, 1)}}
-        # flagged on Aug 31, Sep 1 and today (Sep 2): one episode from Aug 31
-        self.assertEqual(api.episode_start(history, d(2026, 9, 2)),
-                         d(2026, 8, 31))
-        self.assertEqual(api.consecutive_before(history['up'], d(2026, 9, 2)),
-                         2)
-        flag = {'severity': 'watch', 'day': '2026-09-02'}
-        start = api.episode_start(history, d(2026, 9, 2))
-        self.assertIsNotNone(api.done_json(mark, flag, start))
-        # the same flag a week later, after a gap: a new episode, undone
-        self.assertIsNone(api.done_json(mark, flag, d(2026, 9, 8)))
-        # escalation: a watch marked done does not hide a major
-        self.assertIsNone(api.done_json(mark, dict(flag, severity='major'),
-                                        start))
-        # a lower severity, or only "new", stays covered
-        self.assertIsNotNone(api.done_json(mark, dict(flag, severity='ok'),
-                                           start))
-        # an undo, or no flag, shows nothing
-        self.assertIsNone(api.done_json(
-            models.Mark(series_id=sid, done=False, severity='watch',
-                        by='x', at=mark.at), flag, start))
-        self.assertIsNone(api.done_json(mark, None, start))
-        self.assertIsNone(api.done_json(None, flag, start))
-        # no history: the episode is the flag's day
-        self.assertEqual(api.episode_start(None, d(2026, 9, 2)),
-                         d(2026, 9, 2))
+        self.assertEqual(alert[0]['bugs'], bugs)
+        self.assertNotIn('done', summary['channels'][0]['counts'])
 
     def test_flag_window(self):
         """Yesterday's flags stay listed for 48 h (scores are per UTC day:

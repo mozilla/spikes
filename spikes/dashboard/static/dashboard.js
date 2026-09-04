@@ -93,43 +93,6 @@ async function loadAccount() {
     app.account = null; // the header simply shows nothing
   }
   renderAccount();
-  if (app.channel) renderSignatures(); // the "mark done" buttons depend on it
-}
-
-function signedIn() {
-  return !!app.account?.user;
-}
-
-/** Mark (or unmark) a flagged signature as done, then refetch: the mark is part
- * of the data version, so the cached channel and summary are stale. */
-async function markDone(row, done) {
-  const url = new URL('done', API);
-  let res;
-  try {
-    res = await fetch(url, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
-      body: JSON.stringify({ product: row.product || app.selected?.product, channel: row.channel || app.selected?.channel, scope: app.scope, signature: row.signature, done }),
-    });
-  } catch (e) {
-    showError(`Could not mark the signature (${e.message})`);
-    return;
-  }
-  if (res.status === 401) {
-    app.account = { ...(app.account || { enabled: true, domains: [] }), user: null }; // the session ended
-    renderAccount();
-    renderSignatures();
-    showError('Your session has ended: sign in again to mark signatures');
-    return;
-  }
-  if (!res.ok) {
-    let msg = `HTTP ${res.status}`;
-    try { msg += `: ${(await res.json()).error}`; } catch { /* body not JSON */ }
-    showError(`Could not mark the signature (${msg})`);
-    return;
-  }
-  announce(done ? 'Marked done' : 'Mark removed');
-  await refresh();
 }
 
 function renderAccount() {
@@ -309,14 +272,6 @@ function flagAge(row) {
   return Math.round((parseDay(row.day) - parseDay(row.flag.day)) / DAY_MS);
 }
 
-/** "done by someone@mozilla.com on 3 Sep 2026 14:02 (was a spike)". */
-function doneTitle(row) {
-  const d = row.done;
-  if (!d) return '';
-  const was = d.severity && d.severity !== 'ok' ? ` (was a ${d.severity})` : '';
-  return `Marked done by ${d.by || 'someone'} on ${fmtTime(d.at)}${was}`;
-}
-
 function flagWhen(row) {
   const age = flagAge(row);
   return age === 1 ? 'yesterday' : age > 1 ? `${age} days ago` : '';
@@ -333,11 +288,6 @@ function flagTitle(row) {
 
 function visibleAlerts(summary) {
   return (summary.alerts || []).filter((row) => sevOf(row) !== 'ok' || isNew(row));
-}
-
-/** The alerts still to look at: done ones are listed (with their badge) but not counted. */
-function openAlerts(summary) {
-  return visibleAlerts(summary).filter((row) => !row.done);
 }
 
 function rowRank(row) {
@@ -366,7 +316,6 @@ function chipHelp(kind) {
     case 'new': return 'New: not seen above the reporting cut on any of the previous 14 days.';
     case 'storm': case 'crash-loop': return 'Storm / crash loop: many crashes from a handful of installs (few machines crashing repeatedly), or 20+ crashes per install. Not a regression across users, so it is never an alert.';
     case 'noise': return 'Noise: a signature listed in the skiplist (processing artefacts such as shutdown kills or empty dumps). Shown, never alerted on.';
-    case 'done': return 'Done: a signed-in Mozillian marked this spike as handled (bug filed, cause known). Hidden by default. The mark ends with the spike, or when it reaches a higher severity.';
     case 'ok': return 'OK: within the range the seasonal pattern predicts for this weekday and time of day.';
     default: return '';
   }
@@ -415,7 +364,6 @@ function countBadges(counts = {}) {
     if (counts[kind]) wrap.append(countChip(kind, counts[kind]));
   }
   if (counts.storm) wrap.append(badge('storm', plural(counts.storm, 'storm')));
-  if (counts.done) wrap.append(countChip('done', counts.done));
   return wrap;
 }
 
@@ -559,7 +507,7 @@ let lastTabColor = null;
 baseIcon.addEventListener('load', () => { if (lastTabColor) drawFavicon(lastTabColor); });
 
 function overallHealth(s) {
-  const rows = openAlerts(s);
+  const rows = visibleAlerts(s);
   const counts = {};
   for (const r of rows) { const sev = sevOf(r); if (sev !== 'ok') counts[sev] = (counts[sev] || 0) + 1; }
   const worst = ALERT_SEVERITIES.find((kind) => counts[kind]) || 'ok';
@@ -721,7 +669,7 @@ function renderCards(s) {
 
 /** Cross-channel card: what is flagged anywhere right now. */
 function allCard(s) {
-  const rows = openAlerts(s); // done ones only count as done
+  const rows = visibleAlerts(s);
   const worst = rows.map(sevOf).filter((sev) => sev in SEV_RANK && sev !== 'ok')
     .sort((a, b) => SEV_RANK[a] - SEV_RANK[b])[0] || 'ok';
   const card = el('button', { type: 'button', class: 'card card-all', 'data-key': ALL_KEY, 'data-focus': `card:${ALL_KEY}`, 'aria-pressed': 'false' });
@@ -734,7 +682,7 @@ function allCard(s) {
     el('span', { class: 'vs' }, rows.length ? `flagged in ${plural(nchan, 'channel')}` : 'nothing flagged')));
   const totals = {};
   for (const c of s.channels || []) {
-    for (const kind of [...COUNT_KINDS, 'done']) totals[kind] = (totals[kind] || 0) + (c.counts?.[kind] || 0);
+    for (const kind of COUNT_KINDS) totals[kind] = (totals[kind] || 0) + (c.counts?.[kind] || 0);
   }
   card.append(countBadges(totals));
   return card;
@@ -793,16 +741,12 @@ function renderAlerts(s) {
   const rows = visibleAlerts(s);
   const sub = document.querySelector('#flagged-title .sub');
   if (sub) sub.textContent = `flagged in the last ${flagWindowHours()} h`;
-  const open = rows.filter((r) => !r.done);
-  const done = rows.length - open.length;
-  $('flagged-meta').textContent = (open.length ? `${open.length} flagged ${open.length === 1 ? 'signature' : 'signatures'} across ${plural(new Set(open.map(channelKey)).size, 'channel')}` : `Nothing flagged in the last ${flagWindowHours()} h`)
-    + (done ? ` · ${done} done` : '');
+  $('flagged-meta').textContent = rows.length ? `${rows.length} flagged ${rows.length === 1 ? 'signature' : 'signatures'} across ${plural(new Set(rows.map(channelKey)).size, 'channel')}` : `Nothing flagged in the last ${flagWindowHours()} h`;
   const wrap = $('alerts-table');
   const focus = focusedKey(wrap);
   wrap.textContent = '';
   if (!rows.length) return;
-  // done rows are listed last, with their badge: handled, but visible to the team
-  const sorted = rows.slice().sort((a, b) => (a.done ? 1 : 0) - (b.done ? 1 : 0) || rowRank(a) - rowRank(b) || Math.abs(b.excess || 0) - Math.abs(a.excess || 0));
+  const sorted = rows.slice().sort((a, b) => rowRank(a) - rowRank(b) || Math.abs(b.excess || 0) - Math.abs(a.excess || 0));
   wrap.append(buildTable(sorted, { withChannel: true, sortable: false, onRow: (row) => selectChannel(row.product, row.channel, row.signature) }));
   restoreFocus(wrap, focus);
 }
@@ -888,7 +832,7 @@ function renderTiles(ch) {
   const c = ch.counts || {};
   const flagged = displayedSeverities(ALERT_SEVERITIES).reduce((n, kind) => n + (c[kind] || 0), 0);
   wrap.append(tile('Flagged', [String(flagged), el('span', { class: 'vs' }, `of ${fmtInt(c.scored)} scored`)],
-    [[c.new ? `${c.new} new` : null, c.storm ? plural(c.storm, 'storm') : null, c.noise ? `${c.noise} noise` : null, c.done ? `${c.done} done` : null].filter(Boolean).join(' · ') || 'nothing unusual'],
+    [[c.new ? `${c.new} new` : null, c.storm ? plural(c.storm, 'storm') : null, c.noise ? `${c.noise} noise` : null].filter(Boolean).join(' · ') || 'nothing unusual'],
     { counts: countBadges(c) }));
 }
 
@@ -1038,7 +982,6 @@ function readFilters() {
 }
 
 function rowCategory(row) {
-  if (row.done) return 'done';
   if (sevOf(row) !== 'ok' || isNew(row)) return 'flagged';
   return row.storm ? 'storm' : 'unflagged';
 }
@@ -1054,20 +997,17 @@ function visibleRows() {
   const shown = [];
   let unflaggedCount = 0;
   let stormCount = 0;
-  let doneCount = 0;
   for (const row of rows) {
     if ((filters.hideNoise && row.noise) || (row.observed || 0) < filters.minCrashes ||
         (filters.text && !row.signature.toLowerCase().includes(filters.text))) continue;
     const category = rowCategory(row);
     if (category === 'storm') stormCount += 1;
     else if (category === 'unflagged') unflaggedCount += 1;
-    else if (category === 'done') doneCount += 1;
     if ((category === 'flagged' && matchesSeverityFilter(row, filters.severities)) ||
-        (category === 'done' && filters.severities.has('done')) ||
         (category === 'storm' && filters.showStorms) ||
         (category === 'unflagged' && filters.showUnflagged)) shown.push(row);
   }
-  return { shown, unflaggedCount, stormCount, doneCount, showDone: filters.severities.has('done'), total: rows.length };
+  return { shown, unflaggedCount, stormCount, total: rows.length };
 }
 
 const SORTERS = {
@@ -1081,7 +1021,7 @@ const SORTERS = {
   installs: (r) => r.installs,
   since: (r) => (sevOf(r) === 'ok' && !isNew(r) ? null : sinceValue(r)),
   trend: (r) => r.level_change_28,
-  bug: (r) => r.bugs?.open ?? r.bugs?.closed ?? null,
+  bug: (r) => shownBug(r)?.id ?? null,
 };
 const DEFAULT_DIR = { severity: 'asc', channel: 'asc', signature: 'asc', since: 'desc' };
 
@@ -1101,12 +1041,11 @@ function sortRows(rows) {
 }
 
 function renderSignatures() {
-  const { shown, unflaggedCount, stormCount, doneCount, showDone, total } = visibleRows();
+  const { shown, unflaggedCount, stormCount, total } = visibleRows();
   $('unflagged-count').textContent = String(unflaggedCount);
   $('storm-count').textContent = plural(stormCount, 'storm');
-  const hiddenDone = doneCount && !showDone ? ` · ${doneCount} done hidden` : '';
   const metaText = total
-    ? `${shown.length} of ${total} scored signatures shown${shown.length ? '' : ' — no signature matches the current filters'}${hiddenDone}`
+    ? `${shown.length} of ${total} scored signatures shown${shown.length ? '' : ' — no signature matches the current filters'}`
     : 'No scored signatures yet';
   const meta = $('signatures-meta');
   if (meta.textContent !== metaText) meta.textContent = metaText; // role=status: announce changes only
@@ -1144,7 +1083,7 @@ function columns(withChannel) {
     { key: 'installs', label: 'Installs', num: true },
     { key: 'since', label: 'Since' },
     { key: 'trend', label: '28 days' },
-    { key: 'bug', label: 'Bug' },
+    { key: 'bug', label: 'Bug', title: 'Bugs whose crash signature is this one. Green: filed after the spike started. Red: only bugs from before the spike (a known crash, spiking again).' },
   ];
 }
 
@@ -1188,7 +1127,6 @@ function buildRow(row, withChannel, onRow) {
   // severity + badges
   const badges = el('div', { class: 'badge-set' });
   const fresh = isNew(row);
-  if (row.done) badges.append(el('span', { class: 'chip chip-done', title: doneTitle(row) }, 'done'));
   if (sev !== 'ok' || !fresh) badges.append(chip(sev));
   if (fresh) badges.append(chip('new'));
   // a flag carried over from a previous day (scores are per UTC day; the flag
@@ -1196,13 +1134,6 @@ function buildRow(row, withChannel, onRow) {
   if (row.flag && flagAge(row) > 0 && (sev !== 'ok' || fresh)) badges.append(el('span', { class: 'flag-when', title: flagTitle(row) }, flagWhen(row)));
   if (row.storm) badges.append(badge('storm'));
   if (row.noise) badges.append(badge('noise'));
-  // signed-in users mark a flagged spike as handled (POST /api/done)
-  if (!withChannel && signedIn() && (row.done || row.flag)) {
-    const btn = el('button', { type: 'button', class: 'chart-btn done-btn', 'data-focus': `done:${row.signature}`,
-      title: row.done ? 'Remove the done mark' : chipHelp('done') }, row.done ? 'undo' : 'mark done');
-    btn.addEventListener('click', (e) => { e.stopPropagation(); btn.disabled = true; markDone(row, !row.done); });
-    badges.append(btn);
-  }
   tr.append(el('td', {}, badges));
   if (withChannel) {
     const open = el('button', { type: 'button', class: 'chip chip-neutral chip-btn', 'data-focus': `open:${row.signature}`,
@@ -1267,7 +1198,7 @@ function buildRow(row, withChannel, onRow) {
   const sparkCell = el('td', { class: 'spark' });
   if (row.spark?.dates?.length) sparkline(sparkCell, { ...row.spark, severity: sev, partial: row.partial !== false });
   tr.append(sparkCell);
-  tr.append(bugCell(row.bugs));
+  tr.append(bugCell(row));
   tr.addEventListener('click', (e) => {
     if (e.target.closest('a, button, input')) return;
     onRow(row, tr);
@@ -1279,11 +1210,34 @@ function buildRow(row, withChannel, onRow) {
   return tr;
 }
 
-function bugCell(bugs) {
+const RESOLVED = new Set(['RESOLVED', 'VERIFIED', 'CLOSED']);
+
+/** The bug a row shows: the newest one filed after its spike started, else the newest. */
+function shownBug(row) {
+  const bugs = row.bugs || [];
+  return bugs.find((b) => b.after) || bugs[0] || null;
+}
+
+function bugTitle(b) {
+  const filed = b.created ? `filed ${b.created.slice(0, 16).replace('T', ' ')} UTC` : 'filing time not visible (restricted bug)';
+  const when = b.after === true ? ', after the spike started' : b.after === false ? ', before the spike' : '';
+  const state = [b.status, b.resolution].filter(Boolean).join(' ');
+  return `Bug ${b.id}${b.summary ? `: ${b.summary}` : ''}\n${filed}${when}${state ? ` · ${state}` : ''}`;
+}
+
+/** The bug column: the newest bug filed after the spike started (green), else the
+ * newest bug (red while the row is flagged: known before the spike), the others in
+ * the tooltip; struck through when resolved. */
+function bugCell(row) {
   const td = el('td', { class: 'num' });
-  if (bugs?.open) td.append(el('a', { href: `https://bugzilla.mozilla.org/${bugs.open}`, target: '_blank', rel: 'noopener', title: 'Open bug' }, String(bugs.open), el('span', { class: 'visually-hidden' }, ' (open bug)')));
-  else if (bugs?.closed) td.append(el('a', { class: 'bug-closed', href: `https://bugzilla.mozilla.org/${bugs.closed}`, target: '_blank', rel: 'noopener', title: 'Closed bug' }, String(bugs.closed), el('span', { class: 'visually-hidden' }, ' (closed bug)')));
-  else td.append(el('span', { class: 'dash' }, '—'));
+  const bugs = row.bugs || [];
+  const b = shownBug(row);
+  if (!b) { td.append(el('span', { class: 'dash' }, '—')); return td; }
+  const cls = ['bug', b.after === true ? 'bug-after' : b.after === false ? 'bug-before' : null, RESOLVED.has(b.status) ? 'bug-closed' : null].filter(Boolean).join(' ');
+  const hidden = b.after === true ? ' (filed after the spike started)' : b.after === false ? ' (filed before the spike)' : '';
+  td.append(el('a', { class: cls, href: `https://bugzilla.mozilla.org/${b.id}`, target: '_blank', rel: 'noopener', title: bugTitle(b) }, String(b.id), el('span', { class: 'visually-hidden' }, hidden)));
+  const others = bugs.filter((x) => x !== b);
+  if (others.length) td.append(el('span', { class: 'bug-more', title: others.map(bugTitle).join('\n\n') }, ` +${others.length}`));
   return td;
 }
 
@@ -1427,7 +1381,6 @@ function focusSignature(sig) {
   if (row.noise && filters.hideNoise) { $('hide-noise').checked = false; changed = true; }
   if (category === 'storm' && !filters.showStorms) { $('show-storms').checked = true; changed = true; }
   else if (category === 'unflagged' && !filters.showUnflagged) { $('show-unflagged').checked = true; changed = true; }
-  else if (category === 'done' && !filters.severities.has('done')) { document.querySelector('#sig-filters input[value="done"]').checked = true; changed = true; }
   if (filters.text && !sig.toLowerCase().includes(filters.text)) { $('sig-search').value = ''; changed = true; }
   if ((row.observed || 0) < filters.minCrashes) { $('min-crashes').value = '0'; changed = true; }
   if (category === 'flagged' && !matchesSeverityFilter(row, filters.severities)) {

@@ -61,7 +61,7 @@ and 153 the release channel is 152.x only, beta is 153.0bN, nightly
 the current version and has a "Current version / All versions" switch in
 the header (`#current/...` in the address for the current scope; a hash
 without the prefix, as in older links, is the all scope); everything below
-it, cards, tables, charts, thresholds and done marks, is that scope's.
+it, cards, tables, charts and thresholds, is that scope's.
 
 The two scopes are two sets of series, fitted and calibrated separately:
 a (channel, scope) pair is stored under a *channel key*, `release` for the
@@ -195,14 +195,15 @@ day's `cutoff`, and a missing (series, day) value is treated as censored
 
 | table | row | notes |
 |-------|-----|-------|
-| `dashboard_series` | (product, channel, signature) | + first/last seen, `noise`, cached bug ids; the channel total is the series with signature `''` |
+| `dashboard_series` | (product, channel, signature) | + first/last seen, `noise`; the channel total is the series with signature `''` |
 | `dashboard_daily` | (series, day) → crashes, installs | |
 | `dashboard_hourly` | (series, day) → 24 counts | separate table so retention is a range delete |
 | `dashboard_days` | (product, channel, day) | fetch bookkeeping: total, previous total, cutoff, `as_of`, `final`, `complete` |
 | `dashboard_models` | series → cached fit | level, trend, dispersion, `c2`, factors, borrowed components |
 | `dashboard_scores` | (series, day) → live score | updated in place; keeps `first_flagged_at` and the day's peak |
 | `dashboard_runs` | one per run | status (`ok`, `partial`, `failed`, `aborted`), queries, message (pending work, errors) |
-| `dashboard_marks` | one per user action | "done" marks: series, done/undone, severity at the time, who, when; the latest per series wins and the highest id versions the API responses |
+| `dashboard_bugs` | (signature, bug) | the bugs whose crash-signature field lists the signature: filed when, status, resolution, summary, source (`socorro` or `bugzilla`); per signature, shared by every channel and scope |
+| `dashboard_bug_checks` | signature | when its bugs were last looked up, how many were found |
 | `dashboard_cycles` | (product, channel, start) | version cycles of the `current` scope: end, label (`155`, `140.15`), SuperSearch filter; replaced when the calendars change |
 
 `models.create_all()` (called by every run and by the web process before
@@ -213,10 +214,10 @@ to the models since, so additive schema changes deploy without a manual
 Retention (`update.maybe_prune`, once a day after 03:00 UTC): daily rows
 with < 3 crashes after 120 days and < 10 crashes after 365 days are deleted,
 signature hourly splits after 60 days, scores after 30 days; a series left
-without any daily, hourly or score row (and without a done mark) is deleted
-with its cached fit, so the long tail of one-off signatures does not pile up
-in `dashboard_series` (with the two version scopes, one row per channel
-key).  The channel totals (daily and hourly), the `dashboard_days`
+without any daily, hourly or score row is deleted with its cached fit, so
+the long tail of one-off signatures does not pile up in `dashboard_series`
+(with the two version scopes, one row per channel key), and the bugs of a
+signature no series has any more go with it.  The channel totals (daily and hourly), the `dashboard_days`
 bookkeeping (needed to censor missing signature days) and signature days
 with ≥ 10 crashes are kept indefinitely.  Growth is then a few tens of MB per year on the
 `essential-0` plan while the long-term history the yearly component needs
@@ -373,8 +374,20 @@ and the recent score, then gated:
 Fits are cached in `dashboard_models` and refreshed oldest-first when older
 than `refit_hours` (6), at most `max_fits_per_run` per run, so the
 10-minute run only recomputes the cheap score formula.  Yesterday is scored
-as a complete day; bugs (Socorro `Bugs` + Bugzilla status) are fetched for
-flagged signatures and cached on the series for 12 hours.
+as a complete day.
+
+**Bugs** (`bugs.py`).  For every flagged signature the run looks up the
+bugs whose Bugzilla *Crash Signature* field lists it, once per signature
+whatever the channels and scopes it is flagged in, at most
+`bugs_max_signatures` (150) per run and again `bugs_refresh_hours` (2)
+after the previous look-up.  Socorro's `Bugs` API gives the ids (Socorro
+syncs them from Bugzilla every hour), as many signatures per query as fit
+in the URL; when it knows no bug for a signature, a Bugzilla search on the
+crash-signature field runs, several signatures OR-ed in one query, and only
+bugs whose field lists the signature exactly (`[@ ... ]`) count.  The ids'
+details (filed when, status, summary) come from Bugzilla, 100 per query.
+Rows are stored per signature in `dashboard_bugs`; a query that fails
+leaves its signatures for the next run.
 
 ## Platform events
 
@@ -424,27 +437,25 @@ and the sortable signature table (flagged rows by default, sparklines,
 expandable per-signature charts).  Data health (stale run, processing lag,
 backfill in progress) is shown in a banner.
 
-**Done marks.**  A signed-in user (see *Sign-in*) gets a *mark done* button
-on every flagged row of the signature table; the row then wears a green
-✓ `done` badge (also in the cross-channel table) and is hidden unless the
-`done` filter chip, off by default, is on (the meta line says how many are
-hidden).  Like noise, a done row counts as done only: the channel cards,
-the *Flagged* tile and the tab title count what is left to look at and show
-a green `N done` chip; the cross-channel table lists done rows last, with
-their badge.  The mark is meant for the spike, not the signature: it covers the
-run of consecutive flagged days it was made in (`api.episode_start`,
-followed up to 7 days back across UTC midnights) and only up to the
-severity it was made for, so a spike weeks later starts undone and a
-watch marked done does not hide the major it becomes.  *undo* removes it.
-Every action is a row in `dashboard_marks` (who, when, at which severity);
-the highest id is part of the API data version, so a mark invalidates the
-page's cached responses without waiting for a scheduler run.
+**Bug column.**  Every row shows the bug filed for its signature, if any:
+in green when it was filed *after* the spike started (someone is on it),
+in red when the only bugs are from *before* the spike (a known crash,
+spiking again), struck through when resolved, with the other bugs and
+their summaries in the tooltip (`+N`).  "After the spike started" is
+measured from the first run that flagged the first day of the current run
+of consecutive flagged days (`api.episode_since`, followed up to 7 days
+back across UTC midnights): a bug filed once the dashboard had flagged the
+spike counts as after, one filed earlier the same day as before (erring
+towards red: a wrong green would hide a spike).  Rows that are not flagged
+show their bugs without a colour.  This replaced the hand-made "done" marks: a bug filed
+for the spike is the signal that it is handled.
 
 ## Sign-in
 
-Reading the dashboard needs no account.  Routes that change it (today:
-marking a spike as done, `POST /dashboard/api/done`) are wrapped in
-`auth.login_required` and only run for a signed-in user whose Google
+Reading the dashboard needs no account.  Routes that would change it are
+to be wrapped in `auth.login_required` (none exists at the moment: the
+"done" marks it was added for were replaced by the bug column, the
+mechanism stays for future ones) and only run for a signed-in user whose Google
 account has a verified address in one of `login_domains`
 (`config/dashboard.json`, `mozilla.com` by default), the same way
 hackbot.moz.tools is restricted to `@mozilla.com` accounts.  The header

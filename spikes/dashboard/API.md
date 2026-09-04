@@ -74,7 +74,12 @@ A `Score` plus:
   "product": "Firefox", "channel": "nightly",   // present in cross-channel lists
   "series_id": 12,
   "socorro_url": "https://crash-stats.mozilla.org/search/?...",
-  "bugs": {"open": 1234567, "closed": null},     // most recent bug ids, may be null
+  "bugs": [                                       // bugs whose crash signature is this one,
+    {"id": 2069191, "created": "2026-09-04T02:09:30Z",   // newest first (bugs.py)
+     "status": "NEW", "resolution": null, "summary": "Crash in [@ ...]",
+     "source": "socorro",                         // or "bugzilla" (found by a search)
+     "after": true}                               // filed after the spike started; false:
+  ],                                              // before; null: not flagged, or hidden bug
   "first_seen": "2026-09-01",
   "flagged_days": 2,                              // consecutive previous days with peak >= watch
   "yesterday": {"observed": 120, "expected": 98.0, "z": 1.1, "severity": "ok",
@@ -88,10 +93,7 @@ A `Score` plus:
     "observed": 430, "expected": 98.0,            // 00:00 UTC); the numbers are that day's
     "z": 12.0, "excess": 332,
     "peak": null                                  // {"severity", "z", "excess", "at"} when the
-  },                                              // day stepped down from a higher severity
-  "done": {"at": "2026-09-01T14:02:00Z",          // a signed-in user marked the spike as
-           "by": "someone@mozilla.com",           // handled (POST /dashboard/api/done), or
-           "severity": "spike"}                   // null; see below for how long it holds
+  }                                               // day stepped down from a higher severity
 }
 ```
 
@@ -99,11 +101,11 @@ Lists, counts and sort orders use `flag` (a row whose `flag.day` is not
 `day` carries yesterday's spike into today); `severity` and `is_new` stay
 today's own state.
 
-`done` is shown while the mark covers the current *episode*: the run of
-consecutive flagged days ending on `flag.day` (followed 7 days back), and
-only up to the severity the mark was made for.  A new spike after a gap
-starts undone, and a watch marked done does not hide the major it turns
-into.  The page hides done rows unless the `done` filter chip is on.
+`bugs[].after` compares the bug's filing time with the start of the row's
+*episode*: the first run that flagged the first day of the run of
+consecutive flagged days ending on `flag.day` (followed 7 days back).  The
+page shows the newest bug filed after the spike (green) or else the newest
+bug (red), the others in a tooltip.
 
 ### Series block (charts)
 
@@ -157,8 +159,7 @@ separate series, fits and thresholds.  Rows and channels say which scope
 they belong to (`"scope"`), and a `current` channel says which version
 it shows today (`"version": "155"`, `"140.15"` for ESR).  The summary
 lists `"scopes"`, the scopes the server collects; the page hides its
-switch when there is one.  `POST /dashboard/api/done` takes `scope` in
-its body too (a mark is that scope's).
+switch when there is one.
 
 ### `GET /dashboard/api/summary`
 
@@ -180,8 +181,7 @@ its body too (a mark is that scope's).
      "as_of": "...", "history_days": 180,
      "total": Score, "yesterday": Score,           // yesterday may be null
      "counts": {"major": 1, "spike": 2, "watch": 5, "drop": 0, "new": 3,
-                "storm": 1, "scored": 312, "noise": 4,
-                "done": 1},                       // a noise or done row counts there only
+                "storm": 1, "scored": 312, "noise": 4},   // a noise row counts there only
      "thresholds": {"watch": {"z": 4.3}, "spike": {"z": 9.8}, "major": {"z": 27.1}, "drop": {"z": -6.2}},
      "calibration": {                             // how the thresholds were learned (calibration.py)
        "rules": {...},                            // == thresholds
@@ -253,26 +253,6 @@ feeds); the `ETag` only changes when a refresh wrote something.
 ```
 
 404 when the signature is unknown for that channel.
-
-### `POST /dashboard/api/done`
-
-Signed-in Mozilla users only (`401` otherwise, `403` for a cross-site
-request; see `auth.py`).  JSON body:
-
-```jsonc
-{"product": "Firefox", "channel": "release", "signature": "...", "done": true}
-```
-
-Marks a flagged signature as done (`400` when it is not flagged), or
-removes the mark with `"done": false`.  Every call adds a row to
-`dashboard_marks` (who, when, at which severity); the latest wins.  The
-response is the row's new `done` block and the new `data_version`: marks
-are part of the version, so the page's cached channel and summary are
-stale and it refetches them.
-
-```jsonc
-{"done": {"at": "...", "by": "someone@mozilla.com", "severity": "spike"} , "data_version": "..."}
-```
 
 ### `GET /dashboard/api/me`
 

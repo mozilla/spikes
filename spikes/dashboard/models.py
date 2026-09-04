@@ -44,9 +44,6 @@ class Series(db.Model):
     last_seen = db.Column(db.Date)
     # matches config/skiplist.json: displayed, never alerted on
     noise = db.Column(db.Boolean, nullable=False, default=False)
-    bug_open = db.Column(db.Integer)
-    bug_closed = db.Column(db.Integer)
-    bugs_as_of = db.Column(db.DateTime)
 
     __table_args__ = (
         sa.UniqueConstraint('product', 'channel', 'signature',
@@ -265,31 +262,36 @@ class Cycle(db.Model):
     )
 
 
-class Mark(db.Model):
-    """A signed-in user's mark on a series: "done", the spike is handled.
+class Bug(db.Model):
+    """A bug whose crash-signature field lists a signature (bugs.py): per
+    signature, shared by every product, channel and scope."""
+    __tablename__ = 'dashboard_bugs'
 
-    Every change is a new row (the latest per series wins), so the table
-    is also the audit trail, and its highest id versions the API responses
-    (a mark changes what the page shows without a scheduler run).
-    """
-    __tablename__ = 'dashboard_marks'
+    signature = db.Column(db.Text, primary_key=True)
+    bug_id = db.Column(db.Integer, primary_key=True)
+    # filed (UTC); None when Bugzilla hides the bug (security)
+    created_at = db.Column(db.DateTime)
+    status = db.Column(db.String(16))
+    resolution = db.Column(db.String(32))
+    summary = db.Column(db.Text)
+    # 'socorro' (its Bugs API) or 'bugzilla' (a crash-signature search)
+    source = db.Column(db.String(8), nullable=False, default='socorro')
+    updated_at = db.Column(db.DateTime, nullable=False)
 
-    id = db.Column(db.Integer, primary_key=True, autoincrement=True)
-    series_id = db.Column(db.Integer,
-                          db.ForeignKey('dashboard_series.id',
-                                        ondelete='CASCADE'),
-                          nullable=False, index=True)
-    done = db.Column(db.Boolean, nullable=False, default=True)
-    # the severity the row was flagged with when marked ('ok' for a row
-    # that was only new): a mark does not cover a later, higher severity
-    severity = db.Column(db.String(8), nullable=False, default='ok')
-    by = db.Column(db.String(255), nullable=False)
-    at = db.Column(db.DateTime, nullable=False)
+
+class BugCheck(db.Model):
+    """When a signature's bugs were last looked up (bugs.py)."""
+    __tablename__ = 'dashboard_bug_checks'
+
+    signature = db.Column(db.Text, primary_key=True)
+    checked_at = db.Column(db.DateTime, nullable=False)
+    found = db.Column(db.Integer, nullable=False, default=0)
 
 
 TABLES = [Series.__table__, Daily.__table__, Hourly.__table__,
           Day.__table__, Model.__table__, Score.__table__, Run.__table__,
-          Event.__table__, Feed.__table__, Mark.__table__, Cycle.__table__]
+          Event.__table__, Feed.__table__, Cycle.__table__, Bug.__table__,
+          BugCheck.__table__]
 
 
 def create_all():
@@ -646,17 +648,20 @@ def prune(today, prune_after_days, prune_min_crashes, long_after_days,
     db.session.execute(sa.delete(Run).where(Run.started < old))
     # series left without any data (a signature seen a few times half a
     # year ago, its daily rows pruned above) and their cached fits would
-    # otherwise stay forever, one row per channel key; marks are kept
+    # otherwise stay forever, one row per channel key
     empty = sa.select(Series.id).where(
         Series.signature != TOTAL,
         ~sa.exists().where(Daily.series_id == Series.id),
         ~sa.exists().where(Hourly.series_id == Series.id),
-        ~sa.exists().where(Score.series_id == Series.id),
-        ~sa.exists().where(Mark.series_id == Series.id))
+        ~sa.exists().where(Score.series_id == Series.id))
     ids = list(db.session.execute(empty).scalars())
     for chunk in _chunks(ids):
         db.session.execute(sa.delete(Model).where(Model.series_id.in_(chunk)))
         db.session.execute(sa.delete(Series).where(Series.id.in_(chunk)))
+    # bugs of signatures no series has any more
+    for table in (Bug, BugCheck):
+        db.session.execute(sa.delete(table).where(
+            ~sa.exists().where(Series.signature == table.signature)))
     return len(ids)
 
 
@@ -689,34 +694,54 @@ def prune_events(before):
 
 
 # --------------------------------------------------------------------------
-# Marks (done)
+# Bugs (bugs.py)
 # --------------------------------------------------------------------------
 
-def add_mark(series_id, done, severity, by, at=None):
-    mark = Mark(series_id=series_id, done=bool(done), severity=severity,
-                by=by, at=at or utcnow())
-    db.session.add(mark)
-    db.session.commit()
-    return mark
-
-
-def load_marks(series_ids):
-    """``series_id -> latest Mark`` for the series that have one."""
+def load_bugs(signatures):
+    """``signature -> [Bug]``, newest first, for the signatures that have
+    some."""
     res = {}
-    ids = list(series_ids)
-    for chunk in _chunks(ids):
-        latest = sa.select(sa.func.max(Mark.id)).where(
-            Mark.series_id.in_(chunk)).group_by(Mark.series_id)
-        for m in db.session.execute(
-                sa.select(Mark).where(Mark.id.in_(latest))).scalars():
-            res[m.series_id] = m
+    for chunk in _chunks(list(signatures)):
+        for b in db.session.execute(
+                sa.select(Bug).where(Bug.signature.in_(chunk))).scalars():
+            res.setdefault(b.signature, []).append(b)
+    oldest = datetime.datetime.min
+    for bugs in res.values():
+        bugs.sort(key=lambda b: (b.created_at or oldest, b.bug_id),
+                  reverse=True)
     return res
 
 
-def marks_version():
-    """Highest mark id (0 when none): part of the API data version."""
-    return int(db.session.execute(sa.select(sa.func.max(Mark.id))).scalar()
-               or 0)
+def replace_bugs(signature, bugs, now):
+    """Set the bugs of *signature* to *bugs* (``bug id -> details`` with
+    ``created_at``, ``status``, ``resolution``, ``summary``, ``source``)."""
+    q = sa.delete(Bug).where(Bug.signature == signature)
+    if bugs:
+        q = q.where(Bug.bug_id.not_in(list(bugs)))
+    db.session.execute(q)
+    upsert(Bug, [{'signature': signature, 'bug_id': b,
+                  'created_at': d.get('created_at'), 'status': d.get('status'),
+                  'resolution': d.get('resolution'),
+                  'summary': d.get('summary'),
+                  'source': d.get('source', 'socorro'), 'updated_at': now}
+                 for b, d in bugs.items()], ['signature', 'bug_id'])
+
+
+def load_bug_checks(signatures):
+    """``signature -> BugCheck`` for the signatures looked up before."""
+    res = {}
+    for chunk in _chunks(list(signatures)):
+        for c in db.session.execute(sa.select(BugCheck).where(
+                BugCheck.signature.in_(chunk))).scalars():
+            res[c.signature] = c
+    return res
+
+
+def mark_bugs_checked(found, now):
+    """Record the look-up of the signatures in *found* (``signature ->
+    number of bugs``)."""
+    upsert(BugCheck, [{'signature': s, 'checked_at': now, 'found': n}
+                      for s, n in found.items()], ['signature'])
 
 
 # --------------------------------------------------------------------------

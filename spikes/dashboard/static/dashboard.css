@@ -25,7 +25,7 @@
   --st-drop: light-dark(#2a78d6, #3987e5); /* polarity, not "good" */
   --st-new: light-dark(#4a3aa7, #9085e9);  /* violet, with ★ */
   --st-ok: var(--muted);
-  --st-done: light-dark(#2e8b4f, #5fc784); /* handled by a person, with ✓ */
+  --st-bug-after: light-dark(#2e8b4f, #5fc784); /* a bug filed after the spike started */
   --danger-text: light-dark(#d03b3b, #e06060);
   --focus: #2a78d6;
 
@@ -226,24 +226,6 @@ main > section { margin-top: 28px; }
     line-height: 1;
   }
 }
-/* "done": a signed-in user marked the spike as handled */
-.chip-done {
-  --chip-color: var(--st-done);
-
-  &.chip::before, &.chip-toggle span::before {
-    content: "✓";
-    background: none;
-    width: auto;
-    height: auto;
-    color: var(--st-done);
-    font-size: 11px;
-    font-weight: 700;
-    line-height: 1;
-  }
-}
-/* the "mark done" / "undo" button of a flagged row: a real button (the page's
-   chart-btn style, like "Sign out"), not another pill */
-.done-btn { margin-left: 4px; padding: 0 7px; font-size: 11px; line-height: 16px; font-weight: 500; }
 .chip-toggle input, .seg input { position: absolute; opacity: 0; width: 1px; height: 1px; }
 .chip-toggle {
   cursor: pointer;
@@ -757,7 +739,12 @@ table.rows {
   &:focus-visible { outline: var(--focus-ring); }
 }
 .perma-btn { text-decoration: none; }
-.bug-closed { text-decoration: line-through; color: var(--ink-2); }
+/* the bug column: green when filed after the spike started, red when only
+   bugs from before it exist; struck through when resolved */
+.bug-after { color: var(--st-bug-after); font-weight: 600; }
+.bug-before { color: var(--st-major); font-weight: 600; }
+.bug-closed { text-decoration: line-through; }
+.bug-more { color: var(--ink-2); font-size: var(--font-size-caption); }
 .since, .dash { color: var(--ink-2); }
 .row-expander {
   display: inline-block;
