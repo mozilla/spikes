@@ -80,8 +80,10 @@ A `Score` plus:
      "source": "socorro",                         // or "bugzilla" (found by a search)
      "restricted": false,                         // true: Bugzilla hides the bug (id only,
      "after": true}                               //   listed for signed-in users only)
-  ],                                              // after: filed after the spike started;
-                                                  //   false: before; null: not flagged/unknown
+  ],                                              // after: filed for the spike (from the day
+                                                  //   before it started, or since a recent
+                                                  //   signature appeared); false: before it;
+                                                  //   null: not flagged / filing time unknown
   "first_seen": "2026-09-01",
   "flagged_days": 2,                              // consecutive previous days with peak >= watch
   "yesterday": {"observed": 120, "expected": 98.0, "z": 1.1, "severity": "ok",
@@ -105,7 +107,10 @@ today's own state.
 
 `bugs[].after` compares the bug's filing time with the start of the row's
 *episode*: 00:00 UTC of the first day of the run of consecutive flagged
-days ending on `flag.day` (followed 7 days back).  A row without a flag
+days ending on `flag.day` (followed 7 days back), less a day of grace, or
+the day the signature first appeared when that is within the previous 14
+days (a bug filed on a new crash's first report is about the spike it
+grows into).  A row without a flag
 is judged against its most recent spike of the last 30 days; the same
 signature's spike in the channel's other scope counts too, the earlier
 start winning, so both views of a channel agree and the verdict outlives

@@ -452,15 +452,18 @@ expandable per-signature charts).  Data health (stale run, processing lag,
 backfill in progress) is shown in a banner.
 
 **Bug column.**  Every row shows the bug filed for its signature, if any:
-in green when it was filed *after* the spike started (someone is on it),
-in red when the only bugs are from *before* the spike (a known crash,
-spiking again), struck through when resolved, with the other bugs and
-their summaries in the tooltip (`+N`).  "After the spike started" is
-measured from 00:00 UTC of the first day of the current run of consecutive
-flagged days (`api.episode_since`, followed up to 7 days back across UTC
-midnights), not from the run that first flagged it: the dashboard notices
-a spike hours after it begins, while a bug is often filed within the hour,
-so a bug from the spike's first day counts as filed for it.  The verdict
+in green when it was filed *for* the spike (someone is on it), in red when
+the only bugs are from *before* it (a known crash, spiking again), struck
+through when resolved, with the other bugs and their summaries in the
+tooltip (`+N`).  The spike starts at 00:00 UTC of the first day of the
+current run of consecutive flagged days (`api.episode_since`, followed up
+to 7 days back across UTC midnights), not at the run that first flagged
+it: the dashboard notices a spike hours after it begins, while a bug is
+often filed within the hour.  A bug counts as filed for the spike from the
+day before that start on (the crash was ramping up), and for a signature
+that appeared within the previous 14 days from the day it appeared on: a
+bug filed on a new signature's first crash is about the spike it grows
+into (`api.verdict_since`).  The verdict
 outlives the flag: a row no longer flagged is judged against its most
 recent spike within the 30 days the scores are kept.  The same signature's
 spike in the channel's other scope counts too, and the earlier start of

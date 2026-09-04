@@ -1112,7 +1112,7 @@ function columns(withChannel) {
     { key: 'installs', label: 'Installs', num: true },
     { key: 'since', label: 'Since' },
     { key: 'trend', label: '28 days' },
-    { key: 'bug', label: 'Bug', title: 'Bugs whose crash signature is this one. Green: filed after the spike started. Red: only bugs from before the spike (a known crash, spiking again).' },
+    { key: 'bug', label: 'Bug', title: 'Bugs whose crash signature is this one. Green: filed for this spike (once the crash was there). Red: only bugs from before the spike (a known crash, spiking again).' },
   ];
 }
 
@@ -1250,7 +1250,7 @@ function shownBug(row) {
 function bugTitle(b) {
   if (b.restricted) return `Bug ${b.id}: restricted (Bugzilla shows it to its security group only, so its filing time and status are unknown here; listed for signed-in users)`;
   const filed = b.created ? `filed ${b.created.slice(0, 16).replace('T', ' ')} UTC` : 'filing time unknown';
-  const when = b.after === true ? ', after the spike started' : b.after === false ? ', before the spike' : '';
+  const when = b.after === true ? ', for this spike (once the crash was there)' : b.after === false ? ', before the spike: a known crash' : '';
   const state = [b.status, b.resolution].filter(Boolean).join(' ');
   return `Bug ${b.id}${b.summary ? `: ${b.summary}` : ''}\n${filed}${when}${state ? ` · ${state}` : ''}`;
 }
@@ -1264,7 +1264,7 @@ function bugCell(row) {
   const b = shownBug(row);
   if (!b) { td.append(el('span', { class: 'dash' }, '—')); return td; }
   const cls = ['bug', b.after === true ? 'bug-after' : b.after === false ? 'bug-before' : null, RESOLVED.has(b.status) ? 'bug-closed' : null, b.restricted ? 'bug-restricted' : null].filter(Boolean).join(' ');
-  const hidden = b.after === true ? ' (filed after the spike started)' : b.after === false ? ' (filed before the spike)' : b.restricted ? ' (restricted bug)' : '';
+  const hidden = b.after === true ? ' (filed for this spike)' : b.after === false ? ' (filed before the spike)' : b.restricted ? ' (restricted bug)' : '';
   td.append(el('a', { class: cls, href: `https://bugzilla.mozilla.org/${b.id}`, target: '_blank', rel: 'noopener', title: bugTitle(b) }, String(b.id), el('span', { class: 'visually-hidden' }, hidden)));
   const others = bugs.filter((x) => x !== b);
   if (others.length) td.append(el('span', { class: 'bug-more', title: others.map(bugTitle).join('\n\n') }, ` +${others.length}`));

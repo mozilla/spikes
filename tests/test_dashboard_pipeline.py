@@ -1028,13 +1028,46 @@ class ApiTest(DBTestCase):
         since = datetime.datetime.combine(TODAY, datetime.time())
         hour = datetime.timedelta(hours=1)
         models.replace_bugs('spiking', {
-            1001: {'created_at': since - 6 * hour, 'status': 'RESOLVED',
+            1001: {'created_at': since - 30 * hour, 'status': 'RESOLVED',
                    'resolution': 'FIXED', 'summary': 'old one'},
             1002: {'created_at': since + hour, 'status': 'NEW',
                    'summary': 'filed for the spike', 'source': 'bugzilla'},
             1003: {'created_at': None, 'status': None}}, NOW)
         models.replace_bugs('stable', {1004: {'created_at': since - hour,
                                               'status': 'NEW'}}, NOW)
+        db.session.commit()
+        api.forget_caches()
+        rows, etag = self.channel_rows()
+        # a bug filed the day before the spike counts for it (the crash
+        # was ramping up before the dashboard flagged it)
+        models.replace_bugs('spiking', {
+            1005: {'created_at': since - 20 * hour, 'status': 'NEW'},
+            1001: {'created_at': since - 30 * hour, 'status': 'RESOLVED',
+                   'resolution': 'FIXED'}}, NOW)
+        db.session.commit()
+        api.forget_caches()
+        graced = {b['id']: b['after'] for b in
+                  self.channel_rows()[0]['spiking']['bugs']}
+        self.assertEqual(graced, {1005: True, 1001: False})
+        # a signature that appeared a few days before its spike: a bug
+        # filed on its first crash is about the spike it grew into
+        series = models.get_series('Firefox', 'release', 'spiking')
+        series.first_seen = TODAY - datetime.timedelta(days=3)
+        models.replace_bugs('spiking', {
+            1006: {'created_at': since - 60 * hour, 'status': 'NEW'},
+            1007: {'created_at': since - 80 * hour, 'status': 'NEW'}}, NOW)
+        db.session.commit()
+        api.forget_caches()
+        fresh = {b['id']: b['after'] for b in
+                 self.channel_rows()[0]['spiking']['bugs']}
+        self.assertEqual(fresh, {1006: True, 1007: False})
+        series.first_seen = TODAY - datetime.timedelta(days=200)
+        models.replace_bugs('spiking', {
+            1001: {'created_at': since - 30 * hour, 'status': 'RESOLVED',
+                   'resolution': 'FIXED', 'summary': 'old one'},
+            1002: {'created_at': since + hour, 'status': 'NEW',
+                   'summary': 'filed for the spike', 'source': 'bugzilla'},
+            1003: {'created_at': None, 'status': None}}, NOW)
         db.session.commit()
         api.forget_caches()
         rows, etag = self.channel_rows()
@@ -1094,7 +1127,7 @@ class ApiTest(DBTestCase):
         hour = datetime.timedelta(hours=1)
         models.replace_bugs('settled', {
             3001: {'created_at': spike + 30 * hour, 'status': 'NEW'},
-            3002: {'created_at': spike - hour, 'status': 'RESOLVED',
+            3002: {'created_at': spike - 30 * hour, 'status': 'RESOLVED',
                    'resolution': 'FIXED'}}, NOW)
         models.replace_bugs('quiet', {3003: {'created_at': spike + hour,
                                              'status': 'NEW'}}, NOW)
@@ -1125,7 +1158,7 @@ class ApiTest(DBTestCase):
         hour = datetime.timedelta(hours=1)
         models.replace_bugs('spiking', {
             2001: {'created_at': start + hour, 'status': 'NEW'},
-            2002: {'created_at': start - hour, 'status': 'NEW'}}, NOW)
+            2002: {'created_at': start - 30 * hour, 'status': 'NEW'}}, NOW)
         models.replace_bugs('stable', {2003: {'created_at': start + hour,
                                               'status': 'NEW'}}, NOW)
         db.session.commit()

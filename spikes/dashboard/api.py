@@ -623,6 +623,29 @@ def last_episode_since(history):
     return datetime.datetime.combine(start, datetime.time())
 
 
+# a signature that appeared this recently before its spike is a new crash:
+# a bug filed since it appeared (a tool filing on the first crash) is about
+# the spike it grows into
+NEW_SIGNATURE_DAYS = 14
+# a bug filed the day before the spike was flagged counts too: the crash
+# was ramping up before the dashboard noticed
+VERDICT_GRACE_DAYS = 1
+
+
+def verdict_since(since, first_seen):
+    """The time a bug must have been filed after to count as filed for
+    the spike that started at *since*: the day before it, or the day the
+    signature appeared when that is recent."""
+    if since is None:
+        return None
+    ref = since - datetime.timedelta(days=VERDICT_GRACE_DAYS)
+    if first_seen is not None:
+        appeared = datetime.datetime.combine(first_seen, datetime.time())
+        if appeared >= since - datetime.timedelta(days=NEW_SIGNATURE_DAYS):
+            ref = min(ref, appeared)
+    return ref
+
+
 def since_of(history, flag):
     """The spike a row's bugs are judged against: the flagged one, else
     the most recent one in *history*."""
@@ -666,10 +689,11 @@ def sibling_episodes(product, channel, today, now, signatures):
 
 def bugs_json(bugs, since, restricted_ok=False):
     """The bugs listing a row's signature, newest first, each with
-    whether it was filed after the row's spike started (*since*; None
-    when nothing is flagged or the bug's filing time is unknown).
-    Restricted bugs (Bugzilla hides them, only their id is known) are
-    listed only with *restricted_ok*."""
+    whether it was filed for the row's spike (``after``: filed at or
+    after *since*, see :func:`verdict_since`; None when nothing is
+    flagged or the bug's filing time is unknown).  Restricted bugs
+    (Bugzilla hides them, only their id is known) are listed only with
+    *restricted_ok*."""
     res = []
     for b in bugs:
         if b.restricted and not restricted_ok:
@@ -752,7 +776,8 @@ def rows_json(product, channel, by_series, today, with_yesterday_final,
         flag = flags[sid]
         starts = [s for s in (sinces[sid], others.get(e['series'].signature))
                   if s is not None]
-        since = min(starts) if starts else None
+        since = verdict_since(min(starts), e['series'].first_seen) \
+            if starts else None
         up = history[sid]['up'] if sid in history else set()
         rows.append(row_json(e['today'], e['series'], product, channel,
                              spark=spark.get(sid),
