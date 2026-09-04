@@ -7,7 +7,8 @@
   --plane: light-dark(#f9f9f7, #0d0d0d);   /* page plane */
   --ink: light-dark(#0b0b0b, #ffffff);      /* primary ink, observed series */
   --ink-2: light-dark(#52514e, #c3c2b7);    /* secondary ink */
-  --muted: #898781;                         /* axis, labels */
+  --muted: #898781;                         /* axis lines, the ok dot: never text (3.5:1 on light) */
+  --control-border-color: #7d7b74;          /* borders of controls and cards: >= 3:1 on every surface */
   --expected: var(--ink-2);                  /* expected line (dashed) */
   --grid: light-dark(#e1e0d9, #2c2c2a);     /* gridline hairline */
   --axis: light-dark(#c3c2b7, #383835);     /* baseline / axis, release rules */
@@ -17,7 +18,7 @@
   /* the forecast zone past today on the daily chart, and its legend key */
   --forecast: light-dark(rgb(42 120 214 / 6%), rgb(42 120 214 / 12%));
   --forecast-key: light-dark(rgb(42 120 214 / 25%), rgb(42 120 214 / 40%));
-  --yesterday: light-dark(#1baf7a, #199e70);
+  --yesterday: light-dark(#128a5e, #199e70);   /* >= 3:1 on the light surface */
   --hover: light-dark(rgb(11 11 11 / 4%), rgb(255 255 255 / 5%));
   --st-watch: #fab219;   /* warning */
   --st-spike: #ec835a;   /* serious */
@@ -25,13 +26,14 @@
   --st-drop: light-dark(#2a78d6, #3987e5); /* polarity, not "good" */
   --st-new: light-dark(#4a3aa7, #9085e9);  /* violet, with ★ */
   --st-ok: var(--muted);
-  --st-bug-after: light-dark(#2e8b4f, #5fc784); /* a bug filed after the spike started */
+  --st-bug-after: light-dark(#1a6e39, #5fc784);  /* a bug filed for the spike: >= 4.5:1 as text */
+  --st-bug-before: light-dark(#b3261e, #ff8a80); /* only bugs from before it */
   --danger-text: light-dark(#d03b3b, #e06060);
   --focus: #2a78d6;
 
   /* Shared component primitives */
   --border-subtle: 1px solid var(--border);
-  --border-control: 1px solid var(--axis);
+  --border-control: 1px solid var(--control-border-color);
   --border-grid: 1px solid var(--grid);
   --radius-small: 4px;
   --radius-control: 6px;
@@ -330,7 +332,8 @@ dialog.help {
   min-width: 0;
   position: relative;
 
-  &:hover { border-color: var(--axis); }
+  border: var(--border-control); /* a button: its boundary needs 3:1 */
+  &:hover { border-color: var(--ink-2); }
   &:focus-visible { outline: var(--focus-ring); outline-offset: 2px; }
   &.is-selected { border-color: var(--ink); box-shadow: 0 0 0 1px var(--ink); }
   &.card-all { background: var(--plane); }
@@ -686,7 +689,7 @@ table.rows {
       &:focus-visible { outline: var(--focus-ring); outline-offset: 2px; border-radius: 3px; }
     }
     &[aria-sort] button { color: var(--ink); }
-    & .sort-ind { font-size: 10px; color: var(--muted); }
+    & .sort-ind { font-size: 10px; color: var(--ink-2); }
   }
   & th.num, & td.num { text-align: right; font-variant-numeric: tabular-nums; }
   & td.sig {
@@ -721,9 +724,15 @@ table.rows {
 .detail-model, .detail-note { font-size: var(--font-size-detail); color: var(--ink-2); }
 .detail-model { margin: 0 0 6px; }
 .detail-note { margin: 0; }
+/* 24 x 24 targets (WCAG 2.5.8) around small glyphs */
 .copy-btn, .perma-btn {
-  color: var(--muted);
-  padding: 0 4px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 24px;
+  min-height: 24px;
+  padding: 0;
+  color: var(--ink-2);
   font-size: var(--font-size-caption);
   border-radius: var(--radius-small);
   vertical-align: middle;
@@ -742,7 +751,8 @@ table.rows {
 /* the bug column: green when filed after the spike started, red when only
    bugs from before it exist; struck through when resolved */
 .bug-after { color: var(--st-bug-after); font-weight: 600; }
-.bug-before { color: var(--st-major); font-weight: 600; }
+.bug-before { color: var(--st-bug-before); font-weight: 600; }
+.bug-mark { font-weight: 700; } /* the check: the verdict is not colour alone */
 .bug-closed { text-decoration: line-through; }
 .bug-restricted { color: var(--ink-2); font-style: italic; } /* signed-in users only */
 .bug-lock { vertical-align: -1px; margin-right: 3px; }
@@ -750,9 +760,9 @@ table.rows {
 .since, .dash { color: var(--ink-2); }
 .row-expander {
   display: inline-block;
-  width: 18px;
-  height: 18px;
-  line-height: 18px;
+  width: 24px;
+  height: 24px;
+  line-height: 24px;
   text-align: center;
   color: var(--ink-2);
   font-size: 11px;
@@ -769,7 +779,50 @@ table.rows {
 .chip-btn {
   cursor: pointer;
   font: inherit;
+  line-height: 22px; /* a 24 px target with its border */
 
   &:focus-visible { outline: var(--focus-ring); outline-offset: 2px; }
 }
 .table-empty { padding: 20px; color: var(--ink-2); text-align: center; }
+
+/* keyboard users: past the header and the twelve cards in one Tab */
+.skip-link {
+  position: absolute;
+  top: -100px;
+  left: 8px;
+  z-index: 100;
+  padding: 8px 12px;
+  background: var(--surface);
+  color: var(--ink);
+  border: var(--border-control);
+  border-radius: var(--radius-control);
+
+  &:focus { top: 8px; outline: var(--focus-ring); }
+}
+
+/* Windows High Contrast / forced colors: backgrounds are dropped and hovered
+   buttons get the system Highlight, so state needs outlines and the small
+   pills need their own explicit system colours to stay readable */
+@media (forced-colors: active) {
+  .card, .card:hover { background: Canvas; color: CanvasText; border-color: CanvasText; }
+  .card.is-selected { outline: 3px solid Highlight; outline-offset: -3px; }
+  .chip, .chip-toggle span, .flag-when {
+    forced-color-adjust: none;
+    background: Canvas;
+    color: CanvasText;
+    border: 1px solid CanvasText;
+  }
+  .chip::before, .chip-toggle span::before { background: CanvasText; opacity: 1; }
+  .seg input:checked + span, .chip-toggle input:checked + span {
+    forced-color-adjust: none;
+    background: Highlight;
+    color: HighlightText;
+    border-color: Highlight;
+  }
+  .chip-toggle input:checked + span::before { background: HighlightText; }
+  .row-expander, .copy-btn, .perma-btn, .sort-ind { color: ButtonText; background: ButtonFace; }
+  .row-expander:hover, .copy-btn:hover, .perma-btn:hover { color: HighlightText; background: Highlight; }
+  table.rows tr.row:hover { background: Canvas; }
+  table.rows tr.row.is-target { outline: 2px solid Highlight; outline-offset: -2px; }
+  .bug-after, .bug-before, .bug-restricted { color: LinkText; }
+}

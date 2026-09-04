@@ -708,7 +708,8 @@ export function lineChart(container, spec) {
         root.append(svg('circle', { class: 'hollow', cx: px, cy: y(obs), r: 4.5, stroke: color }));
       } else if (sev !== 'ok') {
         root.append(svg('circle', { class: 'ring', cx: px, cy: y(obs), r: 6 }));
-        root.append(svg('circle', { cx: px, cy: y(obs), r: 4, fill: color }));
+        // an ink outline: the marker keeps 3:1 against the surface whatever its colour
+        root.append(svg('circle', { cx: px, cy: y(obs), r: 4, fill: color, stroke: 'var(--ink)', 'stroke-width': 1 }));
       }
     }
 

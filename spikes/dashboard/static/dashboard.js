@@ -504,9 +504,14 @@ function defaultChannel() {
   return ALL;
 }
 
+/** Smooth scrolling unless the reader asked for reduced motion. */
+function scrollBehavior() {
+  return window.matchMedia?.('(prefers-reduced-motion: reduce)').matches ? 'auto' : 'smooth';
+}
+
 /** The toolbar is pinned: showing a view from its start means the page top. */
 function scrollToContent() {
-  if (window.scrollY > 0) window.scrollTo({ top: 0, behavior: 'smooth' });
+  if (window.scrollY > 0) window.scrollTo({ top: 0, behavior: scrollBehavior() });
 }
 
 /** Show either the cross-channel report or the channel detail. */
@@ -1179,7 +1184,8 @@ function buildRow(row, withChannel, onRow) {
     expander.addEventListener('click', (e) => { e.stopPropagation(); onRow(row, tr); });
     sigCell.append(expander);
   }
-  sigCell.append(el('a', { href: row.socorro_url || '#', title: row.signature, target: '_blank', rel: 'noopener', 'data-focus': `link:${row.signature}` }, midTruncate(row.signature, 70)));
+  sigCell.append(el('a', { href: row.socorro_url || '#', title: row.signature, target: '_blank', rel: 'noopener', 'data-focus': `link:${row.signature}` }, midTruncate(row.signature, 70),
+    el('span', { class: 'visually-hidden' }, ' (crash-stats, opens in a new tab)')));
   const copy = el('button', { type: 'button', class: 'copy-btn', 'aria-label': 'Copy signature', title: 'Copy signature', 'data-focus': `copy:${row.signature}` }, '⧉');
   copy.addEventListener('click', async (e) => {
     e.stopPropagation();
@@ -1268,7 +1274,8 @@ function bugCell(row) {
   const hidden = b.after === true ? ' (filed for this spike)' : b.after === false ? ' (filed before the spike)' : b.restricted ? ' (restricted bug)' : '';
   const link = el('a', { class: cls, href: `https://bugzilla.mozilla.org/${b.id}`, target: '_blank', rel: 'noopener', title: bugTitle(b) });
   if (b.restricted) { const lock = iconSvg('lock', 11); lock.classList.add('bug-lock'); link.append(lock); }
-  link.append(String(b.id), el('span', { class: 'visually-hidden' }, hidden));
+  if (b.after === true) link.append(el('span', { class: 'bug-mark', 'aria-hidden': 'true' }, '✓ ')); // not colour alone
+  link.append(String(b.id), el('span', { class: 'visually-hidden' }, `${hidden}, opens in a new tab`));
   td.append(link);
   const others = bugs.filter((x) => x !== b);
   if (others.length) td.append(el('span', { class: 'bug-more', title: others.map(bugTitle).join('\n\n') }, ` +${others.length}`));
@@ -1426,7 +1433,7 @@ function focusSignature(sig) {
   const tr = document.querySelector(`#signature-table tr.row[data-sig="${cssEscape(sig)}"]`);
   if (!tr) return;
   if (!app.expanded.has(sig)) expandRow(row, tr);
-  tr.scrollIntoView({ behavior: 'smooth', block: 'start' }); // scroll-padding keeps it below the toolbar
+  tr.scrollIntoView({ behavior: scrollBehavior(), block: 'start' }); // scroll-padding keeps it below the toolbar
   tr.classList.add('is-target');
   tr.focus({ preventScroll: true });
   setTimeout(() => tr.classList.remove('is-target'), 2500);
