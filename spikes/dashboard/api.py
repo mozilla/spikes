@@ -270,22 +270,41 @@ def _load_releases(feed):
 
 
 def version_label(channel, label):
-    """How a version cycle's label reads on a channel: ``157.0a1`` on
+    """How a ``current`` cycle's label reads on a channel: ``157.0a1`` on
     nightly, ``156.0b1`` on beta, ``155.0`` on release, ``140.15 esr``."""
     return {'nightly': '{}.0a1', 'beta': '{}.0b1',
             'esr': '{} esr'}.get(channel, '{}.0').format(label)
 
 
-def cycle_marks(product, channel, since, today):
+def mark_label(channel_key, label):
+    """How a stored cycle's label reads on the chart: a strict cycle's is
+    the exact version already, a current cycle's major is spelled out per
+    channel."""
+    real, scope = config.split_channel(channel_key)
+    return label if scope == config.SCOPE_STRICT else version_label(real,
+                                                                    label)
+
+
+def chart_cycles(product, channel_key):
+    """The version cycles a channel key's charts are marked with: its own
+    in the strict scope, the current scope's otherwise (the all scope
+    shares them)."""
+    real, scope = config.split_channel(channel_key)
+    if scope != config.SCOPE_STRICT:
+        channel_key = config.channel_key(real, config.SCOPE_CURRENT)
+    return versions.cycles_for(product, channel_key)
+
+
+def cycle_marks(product, channel_key, since, today):
     """The channel's own version boundaries up to *today*, from its stored
     cycles (versions.py): the merge days on nightly, the first betas on
-    beta.  None when no cycles are stored (the calendars never loaded)."""
-    cycles = versions.cycles_for(
-        product, config.channel_key(channel, config.SCOPE_CURRENT))
+    beta, every beta or dot release in the strict scope.  None when no
+    cycles are stored (the calendars never loaded)."""
+    cycles = chart_cycles(product, channel_key)
     if not cycles:
         return None
     return [{'date': c.start.isoformat(),
-             'version': version_label(channel, c.label)}
+             'version': mark_label(channel_key, c.label)}
             for c in cycles.rows
             if c.start <= today and (since is None or c.start >= since)]
 
@@ -295,11 +314,14 @@ def releases(since=None, channel=None, product='Firefox'):
 
     Each channel gets its own: the merge days on nightly and the first
     betas on beta (from the stored version cycles, else the releases),
-    the major releases on release, the ESR point releases on ESR.
+    the major releases on release, the ESR point releases on ESR; in the
+    strict scope every channel marks its exact versions.
     """
-    channel = config.split_channel(channel or '')[0]
-    if channel in ('nightly', 'beta'):
-        marks = cycle_marks(product, channel, since, models.utcnow().date())
+    channel_key = channel or ''
+    channel, scope = config.split_channel(channel_key)
+    if scope == config.SCOPE_STRICT or channel in ('nightly', 'beta'):
+        marks = cycle_marks(product, channel_key, since,
+                            models.utcnow().date())
         if marks is not None:
             return marks
     feed = FEEDS.get(product, 'firefox')
@@ -375,18 +397,17 @@ def next_release(product, channel, today):
 def horizon_for(product, channel, today):
     """``(last forecast day, upcoming version marker or None)`` for the
     daily chart: up to the channel's next version boundary, else two
-    weeks.  The boundary is the next stored version cycle (versions.py,
-    the same for both scopes; the ``current`` scope's forecast restarts
-    there), else what the release schedule says."""
+    weeks.  The boundary is the next stored version cycle (versions.py:
+    the next beta or dot release in the strict scope, else the next
+    version, shared by the all and current scopes; a versioned scope's
+    forecast restarts there), else what the release schedule says."""
     nxt = next_release(product, channel, today)
-    real = config.split_channel(channel)[0]
-    cycles = versions.cycles_for(
-        product, config.channel_key(real, config.SCOPE_CURRENT))
+    cycles = chart_cycles(product, channel)
     if cycles:
         start = cycles.next_start(today)
         if start is not None:
             nxt = {'date': start,
-                   'version': version_label(real, cycles.at(start).label)}
+                   'version': mark_label(channel, cycles.at(start).label)}
     if nxt is None:
         return today + datetime.timedelta(days=FORECAST_DAYS), None
     day = min(nxt['date'], today + datetime.timedelta(days=FORECAST_MAX_DAYS))
@@ -662,12 +683,13 @@ def signed_in():
 
 def sibling_episodes(product, channel, today, now, signatures):
     """``signature -> spike start`` in the other scope of the same channel
-    (its all-versions or current-version half), for those of *signatures*
-    flagged there (now or lately).  The two views describe one spike: a
-    row takes the earlier of its own start and this one, so both give a
-    bug the same verdict (the ``current`` series of a signature is often
-    younger than the spike the ``all`` series shows: backfilled after it
-    began, its first flagged day is not the spike's first day)."""
+    (the all scope for a versioned one, the current scope for the all
+    one), for those of *signatures* flagged there (now or lately).  The
+    views describe one spike: a row takes the earlier of its own start and
+    this one, so both give a bug the same verdict (the ``current`` series
+    of a signature is often younger than the spike the ``all`` series
+    shows: backfilled after it began, its first flagged day is not the
+    spike's first day)."""
     real, scope = config.split_channel(channel)
     other = config.SCOPE_CURRENT if scope == config.SCOPE_ALL \
         else config.SCOPE_ALL
@@ -831,7 +853,7 @@ def channel_summary(product, channel, today, now, all_rows=True,
     real, scope = config.split_channel(channel)
     return {
         'product': product, 'channel': real, 'scope': scope,
-        # the version current today (``current`` scope), e.g. "155"
+        # the version current today (versioned scopes): "155", "156.0b3"
         'version': versions.label_for(product, channel, today),
         'day': day_str(today),
         'as_of': ts(entry['today'].as_of),
@@ -974,7 +996,7 @@ def model_block(fit, today, cached=None, borrowed=None):
             'today_factors': fit.factors_at(today),
             'cycle_day': fit.phase_of('cycle', today) + 1,
             # what the 28-day cycle counts: the calendar (all versions) or
-            # the days since the version's release (current scope)
+            # the days since the version's release (versioned scopes)
             'cycle_from': 'release' if fit.components is not
             seasonal.COMPONENTS else 'calendar',
             'borrowed': s['borrowed']}

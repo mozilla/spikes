@@ -30,13 +30,21 @@ const SEV_RANK = { major: 0, spike: 1, watch: 2, new: 3, drop: 4, ok: 5 };
 const CHART_HEIGHT = 280;
 const ALL = { all: true }; // the cross-channel view
 const ALL_KEY = "all";
-const SCOPE_PREFIX = "current"; // `#current/...`: the current-version scope
+// the version scopes with a hash prefix (`#current/...`); `all` has none
+const VERSIONED_SCOPES = new Set(["current", "strict"]);
+const SCOPE_TAG = { current: "current versions", strict: "strict versions" };
+const SCOPE_NOTE = {
+  current:
+    "Only the version current on each day (the cycle restarts at every release)",
+  strict:
+    "Only the exact version current on each day (the cycle restarts at every beta or dot release; on nightly, the day's builds only)",
+};
 
 const app = {
   summary: null,
   channel: null, // payload of the selected channel
   selected: null, // ALL or { product, channel }
-  scope: "current", // version scope: 'current' or 'all'
+  scope: "current", // version scope: 'current', 'strict' or 'all'
   days: 90,
   granularity: "day",
   sort: { key: "severity", dir: "asc" },
@@ -631,7 +639,8 @@ function channelKey(c) {
 }
 
 /** `#all`, `#Product/channel` or `#Product/channel/<encoded signature>`,
- * each optionally prefixed with `current/`: { scope, ... } or null. */
+ * each optionally prefixed with a versioned scope (`current/`, `strict/`):
+ * { scope, ... } or null. */
 function parseHash() {
   const raw = location.hash.slice(1);
   if (!raw) {
@@ -639,8 +648,8 @@ function parseHash() {
   }
   let parts = raw.split("/");
   let scope = "all";
-  if (parts.length > 1 && parts[0] === SCOPE_PREFIX) {
-    scope = "current";
+  if (parts.length > 1 && VERSIONED_SCOPES.has(parts[0])) {
+    scope = parts[0];
     parts = parts.slice(1);
   }
   const [product, channel, ...rest] = parts.map(decodeURIComponent);
@@ -659,7 +668,7 @@ function parseHash() {
 }
 
 function scopePrefix() {
-  return app.scope === "all" ? "" : `${SCOPE_PREFIX}/`;
+  return app.scope === "all" ? "" : `${app.scope}/`;
 }
 
 function channelHash(product, channel, signature = null) {
@@ -847,9 +856,9 @@ async function setScope(scope, { fromHash = false } = {}) {
   await refresh();
 }
 
-/** The version a current-scope channel shows today ("155", "140.15"). */
+/** The version a versioned-scope channel shows today ("155", "156.0b3"). */
 function versionTag(c) {
-  return c?.scope === "current" && c.version ? c.version : null;
+  return c?.version && c.scope !== "all" ? c.version : null;
 }
 
 function renderSummary() {
@@ -995,8 +1004,8 @@ function allCard(s) {
       chip(overallHealth(s).worst)
     ),
     // on its own line: next to the title it would push the chip out of the card
-    app.scope === "current"
-      ? el("div", { class: "version-tag card-scope" }, "current versions")
+    SCOPE_TAG[app.scope]
+      ? el("div", { class: "version-tag card-scope" }, SCOPE_TAG[app.scope])
       : null,
     el("div", { class: "tile-label" }, `Flagged, last ${flagWindowHours()} h`),
     el(
@@ -1175,17 +1184,16 @@ function renderDetail() {
     version
       ? el(
           "span",
-          {
-            class: "version-tag",
-            title:
-              "Only the version current on each day (the cycle restarts at every release)",
-          },
+          { class: "version-tag", title: SCOPE_NOTE[ch.scope] },
           `version ${version}`
         )
       : null
   );
+  const scopeNote = SCOPE_TAG[ch.scope]
+    ? ` · ${SCOPE_TAG[ch.scope].replace(/s$/, "")} only`
+    : "";
   $("detail-meta").textContent =
-    `${fmtDateLong(parseDay(ch.day))} · data as of ${fmtTime(ch.as_of)}${ch.scope === "current" ? " · current version only" : ""}`;
+    `${fmtDateLong(parseDay(ch.day))} · data as of ${fmtTime(ch.as_of)}${scopeNote}`;
   renderTiles(ch);
   renderDrivers(ch);
   renderCharts(ch);

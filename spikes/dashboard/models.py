@@ -244,15 +244,17 @@ class Cycle(db.Model):
     """A version cycle of a channel: the days on which one version was
     the current one (see versions.py).  Computed by the scheduler from the
     release calendars; the web process only reads them (crash-stats links,
-    the cycle phase of the ``current`` scope's fits)."""
+    the cycle phase of the versioned scopes' fits)."""
     __tablename__ = 'dashboard_cycles'
 
     id = db.Column(db.Integer, primary_key=True, autoincrement=True)
     product = db.Column(db.String(32), nullable=False)
-    channel = db.Column(db.String(32), nullable=False)  # the real channel
+    # the real channel (``current`` scope) or ``beta@strict`` (see
+    # versions.cycles_key)
+    channel = db.Column(db.String(32), nullable=False)
     start = db.Column(db.Date, nullable=False)
     end = db.Column(db.Date)                            # None: open
-    label = db.Column(db.String(32), nullable=False)    # "155", "140.15"
+    label = db.Column(db.String(32), nullable=False)    # "155", "156.0b3"
     params = db.Column(db.JSON, nullable=False)         # SuperSearch filter
     updated_at = db.Column(db.DateTime, nullable=False)
 

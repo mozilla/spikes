@@ -70,22 +70,27 @@ def channels(product=None):
 
 SCOPE_ALL = 'all'
 SCOPE_CURRENT = 'current'
+SCOPE_STRICT = 'strict'
 SCOPE_SEP = '@'
 
 
 def scopes():
-    """Version scopes collected for every channel: ``all`` (every version
-    reporting on the channel) and ``current`` (only the version that is
-    current on each day, see versions.py).  The ``current`` scope is a
-    second set of series per channel with its own fits and thresholds."""
-    return list(get('scopes', [SCOPE_ALL, SCOPE_CURRENT]))
+    """Version scopes collected for every channel (see versions.py):
+    ``all`` (every version reporting on the channel), ``current`` (only the
+    version current on each day: 155.x on release between the releases of
+    155 and 156, 156.0bN on beta) and ``strict`` (only the exact version
+    current on each day: 155.0.1 once it ships, 156.0b3 and no longer b2).
+    Every scope is a separate set of series per channel with its own fits
+    and thresholds."""
+    return list(get('scopes', [SCOPE_ALL, SCOPE_CURRENT, SCOPE_STRICT]))
 
 
 def channel_key(channel, scope=SCOPE_ALL):
     """The channel *key* a (channel, scope) pair is stored under:
-    ``release`` for the ``all`` scope, ``release@current`` otherwise.  The
-    key is what every table, planner and scorer calls "channel"; only the
-    Socorro filters, the release calendar and the page tell them apart."""
+    ``release`` for the ``all`` scope, ``release@current`` or
+    ``release@strict`` otherwise.  The key is what every table, planner and
+    scorer calls "channel"; only the Socorro filters, the release calendar
+    and the page tell them apart."""
     return channel if scope == SCOPE_ALL else channel + SCOPE_SEP + scope
 
 
@@ -97,7 +102,7 @@ def split_channel(key):
 
 def pairs(scope=None):
     """All (product, channel key) pairs, in display order: the ``all``
-    scope of every channel first, then the ``current`` scope (or only
+    scope of every channel first, then the other scopes in order (or only
     *scope*)."""
     wanted = scopes() if scope is None else [scope]
     return [(p, channel_key(c, sc)) for sc in wanted

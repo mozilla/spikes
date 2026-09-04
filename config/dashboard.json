@@ -4,7 +4,7 @@
                  "Fenix": ["nightly", "beta", "release"],
                  "Thunderbird": ["nightly", "beta", "release", "esr"]},
     "login_domains": ["mozilla.com"],
-    "scopes": ["all", "current"],
+    "scopes": ["all", "current", "strict"],
     "esr_overlap_weeks": 12,
     "versions_refresh_hours": 6,
 

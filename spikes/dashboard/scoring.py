@@ -555,7 +555,7 @@ def score_channel(product, channel, today, now, fits_budget=None,
     if day_row is None or day_row.as_of is None:
         return None
     as_of = day_row.as_of
-    # the ``current`` scope counts the cycle from the version's release
+    # the versioned scopes count the cycle from the version's release
     scope = config.split_channel(channel)[1]
     comps = versions.components_for(product, channel)
     history_days = config.get('history_days', 180)
@@ -597,11 +597,11 @@ def score_channel(product, channel, today, now, fits_budget=None,
             cached_total.fitted_at = now - datetime.timedelta(
                 hours=config.get('refit_hours', 6))
     # volume floors: a share of the channel's expected day; in the
-    # ``current`` scope of the de-seasonalised level (the day after a
+    # versioned scopes of the de-seasonalised level (the day after a
     # release expects a few percent of a normal day: a floor taken from it
     # would flag every two-crash signature)
     min_crashes, min_installs = calibration.volume_floors(
-        cached_total.level if scope == config.SCOPE_CURRENT
+        cached_total.level if scope != config.SCOPE_ALL
         else cached_total.expected(today), config.volume_share())
     hourly_total = models.load_hourly(
         [total_id], [today - datetime.timedelta(days=i)

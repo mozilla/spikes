@@ -979,7 +979,7 @@ class ApiTest(DBTestCase):
             r = self.client.get('/dashboard/api/summary')
             d = r.get_json()
             self.assertEqual(d['scope'], 'all')
-            self.assertEqual(d['scopes'], ['all', 'current'])
+            self.assertEqual(d['scopes'], config.scopes())
             self.assertEqual([c['channel'] for c in d['channels']],
                              ['release'])
             self.assertEqual(d['channels'][0]['scope'], 'all')

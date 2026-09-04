@@ -154,8 +154,8 @@ bug (red), the others in a tooltip.
               "cycle": [/* 28 values */]},
   "today_factors": {"weekly": 1.13, "cycle": 0.97},
   "cycle_day": 12,                    // day 1..28 of the 28-day cycle
-  "cycle_from": "calendar",           // what it counts: "calendar", or "release" (current scope:
-                                      // days since the version's release, the rollout ramp)
+  "cycle_from": "calendar",           // what it counts: "calendar", or "release" (current and strict
+                                      // scopes: days since the version's release, the rollout ramp)
   "borrowed": ["weekly", "cycle"]     // components taken from the channel (signatures)
 }
 ```
@@ -164,13 +164,14 @@ bug (red), the others in a tooltip.
 
 ### Version scope
 
-Every endpoint below takes `scope=all` (default) or `scope=current` (only
-the version current on each day, see the README): the two scopes are
+Every endpoint below takes `scope=all` (default), `scope=current` (only
+the version current on each day) or `scope=strict` (only the exact version
+current on each day: 155.0.1, 156.0b3; see the README): the scopes are
 separate series, fits and thresholds.  Rows and channels say which scope
-they belong to (`"scope"`), and a `current` channel says which version
-it shows today (`"version": "155"`, `"140.15"` for ESR).  The summary
-lists `"scopes"`, the scopes the server collects; the page hides its
-switch when there is one.
+they belong to (`"scope"`), and a `current` or `strict` channel says which
+version it shows today (`"version": "155"`, `"140.15"` for ESR; `"156.0b3"`,
+`"140.15.1esr"` in the strict scope).  The summary lists `"scopes"`, the
+scopes the server collects; the page hides its switch when there is one.
 
 ### `GET /dashboard/api/summary`
 
@@ -188,7 +189,7 @@ switch when there is one.
   "flag_window_hours": 48,            // how long a previous day's flag stays listed
   "channels": [
     {"product": "Firefox", "channel": "release", "scope": "all", "version": null,
-     "day": "2026-09-02",               // version: "155" in the current scope
+     "day": "2026-09-02",               // version: "155" in the current scope, "155.0.1" in the strict one
      "as_of": "...", "history_days": 180,
      "total": Score, "yesterday": Score,           // yesterday may be null
      "counts": {"major": 1, "spike": 2, "watch": 5, "drop": 0, "new": 3,

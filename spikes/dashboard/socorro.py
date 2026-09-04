@@ -141,7 +141,7 @@ def base_params(product, channel, version=None):
     """Common filters.  *channel* is a channel key (``release`` or
     ``release@current``, see config.channel_key); *version* the SuperSearch
     filter of the version cycle (``{'major_version': 155}`` or exact
-    ``version`` strings, see versions.py) for the ``current`` scope."""
+    ``version`` strings, see versions.py) for the versioned scopes."""
     release_channel, _ = config.split_channel(channel)
     params = {'product': product,
               'release_channel': release_channel,
@@ -161,7 +161,7 @@ def query_params(kind, product, channel, start, end, version=None):
         kind (str): one of :data:`KINDS`.
         product, channel (str): channel is a channel key.
         start, end (datetime.date): half-open range (one day for ``day``).
-        version (dict): version filter of the cycle (``current`` scope).
+        version (dict): version filter of the cycle (versioned scopes).
     """
     params = base_params(product, channel, version)
     params['date'] = date_range(start, end)
@@ -196,7 +196,7 @@ def query_params(kind, product, channel, start, end, version=None):
 
 def link_params(product, channel, day, signature=None):
     """Parameters of a crash-stats search page for a day (same filters,
-    including the version of the day for the ``current`` scope)."""
+    including the version of the day in the versioned scopes)."""
     from . import versions
     params = base_params(product, channel,
                          versions.params_for(product, channel, day))

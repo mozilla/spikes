@@ -22,8 +22,9 @@
       </div>
       <div class="header-right">
         <div id="scope-controls" class="seg scope-seg" role="group" aria-label="Versions" hidden>
-          <label><input type="radio" name="scope" value="current" checked><span>Current version</span></label>
-          <label><input type="radio" name="scope" value="all"><span>All versions</span></label>
+          <label title="Only the version current on each day: 155.x, 156.0bN"><input type="radio" name="scope" value="current" checked><span>Current version</span></label>
+          <label title="Only the exact version current on each day: 155.0.1, 156.0b3 (nothing from b2); on nightly the day's builds"><input type="radio" name="scope" value="strict"><span>Strict version</span></label>
+          <label title="Every version reporting on the channel"><input type="radio" name="scope" value="all"><span>All versions</span></label>
         </div>
         <p id="freshness" class="freshness"></p>
         <a href="https://github.com/mozilla/spikes" class="github-link" title="Source on GitHub" aria-label="Source on GitHub (opens in a new tab)" target="_blank" rel="noopener">

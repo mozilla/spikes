@@ -17,7 +17,9 @@ returns the fetch *units* still needed, most urgent first:
    older day left non-final, with the merged ``day`` query;
 3. older days without any data, in ``daily_chunk_days`` chunks of the
    ``daily`` + ``hourly_total`` queries (history for the seasonal model),
-   and days whose channel total still lacks its hourly split.
+   and days whose channel total still lacks its hourly split; a channel
+   whose filter changes every day (the strict scope's nightly: the day's
+   builds) gets one ``day`` query per day instead.
 
 A day becomes final once it has been fetched at least ``final_grace_hours``
 after its end *and* its total did not change since the previous fetch
@@ -43,7 +45,7 @@ from . import config, models, socorro, versions
 class Unit:
     """A query to run: ``kind`` over ``[start, end)`` (dates, or naive UTC
     datetimes for ``recent``).  *cycle* is the version cycle the range
-    lies in (``current`` scope, see versions.py): its filter goes into the
+    lies in (versioned scopes, see versions.py): its filter goes into the
     query and its label into the day bookkeeping."""
 
     def __init__(self, kind, product, channel, start, end, cycle=None):
@@ -75,9 +77,10 @@ class Unit:
         return 1
 
     def params(self):
-        return socorro.query_params(
-            self.kind, self.product, self.channel, self.start, self.end,
-            self.cycle.params if self.cycle is not None else None)
+        version = versions.cycle_params(self.cycle.params, self.day) \
+            if self.cycle is not None else None
+        return socorro.query_params(self.kind, self.product, self.channel,
+                                    self.start, self.end, version)
 
 
 def is_final(day, as_of, crashes, prev_crashes, today, grace_hours,
@@ -105,7 +108,7 @@ def plan(product, channel, today, history_days=None, recent_days=None,
         now = models.utcnow()
     first = today - datetime.timedelta(days=history_days)
     rows = {r.day: r for r in models.load_days(product, channel, first)}
-    # the ``current`` scope: nothing to plan before the version cycles are
+    # a versioned scope: nothing to plan before the version cycles are
     # known, and a day fetched under a cycle that has since been corrected
     # (a boundary moved) counts as missing
     cycles = versions.cycles_for(product, channel)
@@ -162,18 +165,26 @@ def plan(product, channel, today, history_days=None, recent_days=None,
         elif day not in have_hourly and not rows[day].complete:
             missing_hourly.append(day)
         day += one
-    for start, end in _chunks_of(missing, chunk_days):
-        units.append(Unit('daily', product, channel, start, end))
-        units.append(Unit('hourly_total', product, channel, start, end))
-    for start, end in _chunks_of(missing_hourly, chunk_days):
-        units.append(Unit('hourly_total', product, channel, start, end))
+    if cycles is not None and cycles.per_day:
+        # a filter per day (the day's builds): one merged query per day,
+        # which brings the hourly total along
+        units.extend(Unit('day', product, channel, d, d + one)
+                     for d in missing)
+        units.extend(Unit('hourly_total', product, channel, d, d + one)
+                     for d in missing_hourly)
+    else:
+        for start, end in _chunks_of(missing, chunk_days):
+            units.append(Unit('daily', product, channel, start, end))
+            units.append(Unit('hourly_total', product, channel, start, end))
+        for start, end in _chunks_of(missing_hourly, chunk_days):
+            units.append(Unit('hourly_total', product, channel, start, end))
     if cycles is not None:
         units = with_cycles(units, cycles)
     return units
 
 
 def with_cycles(units, cycles):
-    """Attach the version cycle to every unit of a ``current``-scope
+    """Attach the version cycle to every unit of a versioned-scope
     channel: single-day units get their day's cycle, history chunks are
     split where the version changes; days without a known cycle are not
     fetched."""
