@@ -3,7 +3,17 @@
 # You can obtain one at http://mozilla.org/MPL/2.0/.
 
 import json
+import os
 import re
+
+
+# the config files live at the repository root, whatever the working
+# directory of the process (gunicorn, the scheduler, a script elsewhere)
+ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), '..'))
+
+
+def _path(name):
+    return os.path.join(ROOT, 'config', name)
 
 
 __SKIPLIST = None
@@ -18,7 +28,7 @@ class BadRegEx(Exception):
 def get_skiplist():
     global __SKIPLIST
     if not __SKIPLIST:
-        with open('./config/skiplist.json', 'r') as In:
+        with open(_path('skiplist.json'), 'r') as In:
             data = json.load(In)
         __SKIPLIST = {}
         for k, v in data.items():
@@ -42,7 +52,7 @@ def get_skiplist_channel(chan):
 def get_thresholds():
     global __THRESHOLDS
     if not __THRESHOLDS:
-        with open('./config/thresholds.json', 'r') as In:
+        with open(_path('thresholds.json'), 'r') as In:
             __THRESHOLDS = json.load(In)
     return __THRESHOLDS
 
@@ -50,7 +60,7 @@ def get_thresholds():
 def get_global():
     global __GLOBAL
     if not __GLOBAL:
-        with open('./config/global.json', 'r') as In:
+        with open(_path('global.json'), 'r') as In:
             __GLOBAL = json.load(In)
     return __GLOBAL
 
