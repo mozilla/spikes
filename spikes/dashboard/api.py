@@ -611,6 +611,33 @@ def signed_in():
     return auth.current_user() is not None
 
 
+def sibling_episodes(product, channel, today, now, signatures):
+    """``signature -> spike start`` in the other scope of the same channel
+    (its all-versions or current-version half), for those of *signatures*
+    flagged there.  A row not flagged in its own scope borrows that spike,
+    so the two views of a channel give a bug the same verdict (the
+    ``current`` series of a signature may be too young to have been
+    flagged for a spike the ``all`` series shows)."""
+    real, scope = config.split_channel(channel)
+    other = config.SCOPE_CURRENT if scope == config.SCOPE_ALL \
+        else config.SCOPE_ALL
+    if other not in config.scopes():
+        return {}
+    by_series = channel_scores(product, config.channel_key(real, other),
+                               today)
+    wanted = {e['series'].signature: sid for sid, e in by_series.items()
+              if e['series'].signature in signatures}
+    if not wanted:
+        return {}
+    history = flag_history(list(wanted.values()), today)
+    res = {}
+    for sgn, sid in wanted.items():
+        flag = flag_of(by_series[sid], now)
+        if flag is not None:
+            res[sgn] = episode_since(history.get(sid), flag)
+    return res
+
+
 def bugs_json(bugs, since, restricted_ok=False):
     """The bugs listing a row's signature, newest first, each with
     whether it was filed after the row's spike started (*since*; None
@@ -652,11 +679,17 @@ def rows_json(product, channel, by_series, today, with_yesterday_final,
     bugs = models.load_bugs({by_series[sid]['series'].signature
                              for sid in ids})
     restricted_ok = signed_in()
+    flags = {sid: flag_of(by_series[sid], now) for sid in ids}
+    # rows with bugs but no flag of their own: the other scope's spike
+    borrowed = sibling_episodes(product, channel, today, now, {
+        by_series[sid]['series'].signature for sid in ids
+        if flags[sid] is None and by_series[sid]['series'].signature in bugs})
     rows = []
     for sid in ids:
         e = by_series[sid]
-        flag = flag_of(e, now)
-        since = episode_since(history.get(sid), flag) if flag else None
+        flag = flags[sid]
+        since = episode_since(history.get(sid), flag) if flag \
+            else borrowed.get(e['series'].signature)
         up = history[sid]['up'] if sid in history else set()
         rows.append(row_json(e['today'], e['series'], product, channel,
                              spark=spark.get(sid),

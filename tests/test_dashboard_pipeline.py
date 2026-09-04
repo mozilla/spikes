@@ -1067,6 +1067,46 @@ class ApiTest(DBTestCase):
                             headers={'If-None-Match': etag_user})
         self.assertEqual(r.status_code, 304)
 
+    def test_bug_verdict_borrowed_from_the_other_scope(self):
+        """A row not flagged in its scope colours its bugs after the same
+        signature's spike in the channel's other scope: the current-version
+        series is young, the spike shows in the all scope."""
+        seed_channel('Firefox', 'release@current', TODAY, NOW, seed=1)
+        scoring.score_channel('Firefox', 'release@current', TODAY, NOW)
+        # unflag 'spiking' in the current scope only
+        sid = models.get_series('Firefox', 'release@current', 'spiking').id
+        for day in (TODAY, TODAY - datetime.timedelta(days=1)):
+            models.upsert(models.Score, [{
+                'series_id': sid, 'day': day, 'as_of': NOW, 'partial': False,
+                'observed': 100, 'expected': 100.0, 'z': 0.0,
+                'severity': 'ok', 'peak_severity': None, 'is_new': False,
+                'storm': False, 'first_flagged_at': None,
+                'last_flagged_at': None}], ['series_id', 'day'])
+        start = datetime.datetime.combine(TODAY, datetime.time())
+        hour = datetime.timedelta(hours=1)
+        models.replace_bugs('spiking', {
+            2001: {'created_at': start + hour, 'status': 'NEW'},
+            2002: {'created_at': start - hour, 'status': 'NEW'}}, NOW)
+        models.replace_bugs('stable', {2003: {'created_at': start + hour,
+                                              'status': 'NEW'}}, NOW)
+        db.session.commit()
+        pairs = {None: [('Firefox', 'release'),
+                        ('Firefox', 'release@current')],
+                 'all': [('Firefox', 'release')],
+                 'current': [('Firefox', 'release@current')]}
+        with mock.patch.object(api.config, 'pairs',
+                               side_effect=lambda scope=None: pairs[scope]):
+            d = self.client.get('/dashboard/api/channel?product=Firefox'
+                                '&channel=release&scope=current&days=30'
+                                ).get_json()
+        rows = {s['signature']: s for s in d['signatures']}
+        self.assertIsNone(rows['spiking']['flag'])
+        self.assertEqual([(b['id'], b['after'])
+                          for b in rows['spiking']['bugs']],
+                         [(2001, True), (2002, False)])
+        # 'stable' spikes in neither scope: no verdict
+        self.assertEqual(rows['stable']['bugs'][0]['after'], None)
+
     def test_flag_window(self):
         """Yesterday's flags stay listed for 48 h (scores are per UTC day:
         without this the page is empty in the European morning)."""
