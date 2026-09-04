@@ -156,7 +156,8 @@ bug (red), the others in a tooltip.
   "cycle_day": 12,                    // day 1..28 of the 28-day cycle
   "cycle_from": "calendar",           // what it counts: "calendar", or "release" (current and strict
                                       // scopes: days since the version's release, the rollout ramp)
-  "borrowed": ["weekly", "cycle"]     // components taken from the channel (signatures)
+  "borrowed": ["weekly", "cycle"]     // components taken from the channel (signatures; a strict
+                                      // channel total takes "weekly" from the current scope's)
 }
 ```
 

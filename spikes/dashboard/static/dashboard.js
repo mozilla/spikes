@@ -1493,7 +1493,7 @@ function componentLine(name, c, model) {
     return `${label}: not enough history (${c.cycles} / ${c.min_cycles} cycles)`;
   }
   const src = model.borrowed?.includes(name)
-    ? ", borrowed from the channel"
+    ? ", borrowed from the current-version channel"
     : "";
   return `${label}: active (${c.cycles} cycles${src})`;
 }

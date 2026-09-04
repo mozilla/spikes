@@ -123,8 +123,18 @@ factors, see the model section) and a signature borrows that ramp from its
 channel from day one.  In the strict scope the ramp is the three or four
 days of a beta or the week of a dot release, learned from that scope's own
 series (the phases a short cycle never reaches keep their prior and are
-never used); the level, the weekly factors and the thresholds are its own
-too.
+never used); the level and the thresholds are its own too.  Its **weekday
+factors are borrowed from the current scope's channel total**
+(`scoring.weekly_prior_for`, `seasonal.WeeklyPrior`): on the strict series
+every release falls on the same weekdays (betas ship on Monday, Wednesday
+and Friday, releases on Tuesday, so a strict release cycle is exactly one
+week), weekday and rollout phase carry the same information and the fit
+would split the release-day dip between them at random, flagging a
+release-free Friday as a major spike.  In the current scope a release day
+is one weekday in four, so its weekday medians are the genuine usage
+pattern.  Nightly's day's-builds series has a weekday pattern of its own
+(weekend builds) and fits it itself; strict signatures always take the
+weekday factors from their channel total.
 Like any component it needs three cycles of history (84 days) before it
 is active: with the default 180-day backfill that is the case from the
 first complete backfill on; until then the expectation of a fresh cycle's

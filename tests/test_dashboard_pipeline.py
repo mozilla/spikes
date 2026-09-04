@@ -968,6 +968,46 @@ class ApiTest(DBTestCase):
         return {s['signature']: s for s in r.get_json()['signatures']}, \
             r.headers['ETag']
 
+    def test_strict_total_borrows_weekdays(self):
+        """A strict channel total takes its weekday factors from the
+        current scope's total (its own days are its release cadence), its
+        signatures from it; nightly's day's builds keep their own."""
+        from spikes.dashboard import versions
+        seed_channel('Firefox', 'release@current', TODAY, NOW, seed=1)
+        scoring.score_channel('Firefox', 'release@current', TODAY, NOW)
+        db.session.commit()
+        prior = scoring.weekly_prior_for('Firefox', 'release@strict')
+        self.assertTrue(prior.active['weekly'])
+        cur_id = models.total_series('Firefox', 'release@current')
+        cur = models.load_models([cur_id])[cur_id]
+        np.testing.assert_allclose(prior.factors['weekly'],
+                                   cur.factors['weekly'])
+        self.assertIsNone(scoring.weekly_prior_for('Firefox', 'release'))
+        self.assertIsNone(scoring.weekly_prior_for('Firefox',
+                                                   'release@current'))
+        self.assertEqual(scoring.signature_borrow('release@strict'),
+                         ('weekly',))
+        self.assertEqual(scoring.signature_borrow('release@current'), ())
+        seed_channel('Firefox', 'release@strict', TODAY, NOW, seed=2)
+        scoring.score_channel('Firefox', 'release@strict', TODAY, NOW)
+        db.session.commit()
+        strict_id = models.total_series('Firefox', 'release@strict')
+        strict = models.load_models([strict_id])[strict_id]
+        self.assertEqual(strict.borrowed, ['weekly'])
+        np.testing.assert_allclose(strict.factors['weekly'],
+                                   cur.factors['weekly'])
+        sid = models.get_series('Firefox', 'release@strict', 'stable').id
+        self.assertIn('weekly', models.load_models([sid])[sid].borrowed)
+        # a filter per day (nightly's day's builds): its own weekdays
+        models.replace_cycles('Firefox', 'nightly@strict', [
+            {'start': TODAY - datetime.timedelta(days=30), 'end': None,
+             'label': '157.0a1',
+             'params': {'version': ['157.0a1'], 'build_day': True}}], NOW)
+        db.session.commit()
+        versions._cache.clear()
+        self.assertIsNone(scoring.weekly_prior_for('Firefox',
+                                                   'nightly@strict'))
+
     def test_scope(self):
         """``scope=current`` serves the current-version channels (their own
         series, keyed ``channel@current``), with the version current

@@ -460,8 +460,27 @@ def _informative_cycles(y, comp, own_min):
     return float(np.sum(y[finite] >= own_min)) / comp.period_days
 
 
+class WeeklyPrior:
+    """A prior carrying only the weekly factors of another fit, for a
+    series whose own weekdays cannot be told from its release cadence (the
+    strict version scope: betas ship on Monday, Wednesday and Friday,
+    releases on Tuesday, so its release-day dips would pass for weekday
+    effects).  Built from a :class:`Fit` or from cached factors."""
+
+    def __init__(self, weekly, active=True, c2=0.0):
+        self.active = {'weekly': bool(active) and weekly is not None}
+        self.factors = {'weekly': np.asarray(weekly if weekly is not None
+                                             else np.ones(7))}
+        self.c2 = c2
+
+    @classmethod
+    def from_fit(cls, fit):
+        return cls(fit.factors.get('weekly'), fit.active.get('weekly'),
+                   fit.c2)
+
+
 def fit(dates, y, level_window=14, iterations=3, prior=None,
-        own_min=10, trend_min_level=50, components=None):
+        own_min=10, trend_min_level=50, components=None, borrow=()):
     """Fit the seasonal model.
 
     Args:
@@ -474,6 +493,8 @@ def fit(dates, y, level_window=14, iterations=3, prior=None,
         own_min (float): a day counts as informative for the own seasonal
             estimate when it has at least this many crashes.
         trend_min_level (float): below this level the slope is ignored.
+        borrow (iterable): components always taken from the prior, own
+            data notwithstanding.
 
     Returns:
         Fit
@@ -504,7 +525,7 @@ def fit(dates, y, level_window=14, iterations=3, prior=None,
         if prior_ok:
             res.factors[name] = np.asarray(prior.factors[name]).copy()
             n_eff = _informative_cycles(y, comp, own_min) if own_ok else 0.0
-            if n_eff >= comp.borrow_cycles:
+            if name not in borrow and n_eff >= comp.borrow_cycles:
                 weights[name] = n_eff / (n_eff + PRIOR_K)
             else:
                 weights[name] = 0.0

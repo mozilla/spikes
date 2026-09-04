@@ -875,7 +875,7 @@ def channel_summary(product, channel, today, now, all_rows=True,
 
 def daily_block(product, channel, series_id, today, days, granularity,
                 score_today, prior_fit=None, history_days=None,
-                horizon=None, rules=None):
+                horizon=None, rules=None, borrow=()):
     """Recompute the fit of a series and return the ``daily`` block and
     the fitted model (see API.md).
 
@@ -899,7 +899,8 @@ def daily_block(product, channel, series_id, today, days, granularity,
                        prior=prior_fit,
                        own_min=config.get('own_factors_min_crashes', 10),
                        trend_min_level=config.get('trend_min_level', 50),
-                       components=versions.components_for(product, channel))
+                       components=versions.components_for(product, channel),
+                       borrow=borrow)
     c2 = fit.c2
     # append today (partial) and the forecast (damped trend)
     future = []
@@ -1282,8 +1283,11 @@ def channel_payload(product, channel, today, now, days, granularity):
     total_score = by_series[total_id]['today']
     horizon, upcoming = horizon_for(product, channel, today)
     rules = channel_rules(total_score)
+    total_args = scoring.total_fit_args(product, channel)
     daily, fit = daily_block(product, channel, total_id, today, days,
                              granularity, total_score,
+                             prior_fit=total_args['prior'],
+                             borrow=total_args['borrow'],
                              history_days=config.fit_history_days(),
                              horizon=horizon, rules=rules)
     marks = releases(today - datetime.timedelta(days=days), channel, product)
@@ -1354,11 +1358,15 @@ def signature_view():
     horizon, upcoming = horizon_for(product, channel, today)
     total_score = by_series.get(total_id, {}).get('today')
     rules = channel_rules(total_score)
+    total_args = scoring.total_fit_args(product, channel)
     _, prior = daily_block(product, channel, total_id, today, days, 'day',
-                           total_score, history_days=config.fit_history_days(),
+                           total_score, prior_fit=total_args['prior'],
+                           borrow=total_args['borrow'],
+                           history_days=config.fit_history_days(),
                            rules=rules)
     daily, fit = daily_block(product, channel, series.id, today, days,
                              granularity, entry['today'], prior_fit=prior,
+                             borrow=scoring.signature_borrow(channel),
                              horizon=horizon, rules=rules)
     yesterday = today - datetime.timedelta(days=1)
     rows = rows_json(product, channel, by_series, today,

@@ -188,14 +188,14 @@ def build_history(daily, day_rows, start, end):
 
 
 def fit_series(daily, day_rows, start, end, prior, min_crashes, now,
-               components=None):
+               components=None, borrow=()):
     """Fit one series and return a :class:`Cached`."""
     dates, y, installs = build_history(daily, day_rows, start, end)
     fit = seasonal.fit(dates, y, level_window=config.get('level_window', 14),
                        prior=prior,
                        own_min=config.get('own_factors_min_crashes', 10),
                        trend_min_level=config.get('trend_min_level', 50),
-                       components=components)
+                       components=components, borrow=borrow)
     recent = [v for v in y[-config.get('new_days', 14):] if np.isfinite(v)]
     seen = sum(1 for v in recent if v >= max(3, min_crashes / 2.0))
     share = None
@@ -204,6 +204,52 @@ def fit_series(daily, day_rows, start, end, prior, min_crashes, now,
                                                     28):]
         share = float(np.median([v for _, v in vals]))
     return fit, Cached.from_fit(fit, end, share, seen, now)
+
+
+def weekly_prior_for(product, channel):
+    """The weekday factors a strict channel total borrows
+    (:class:`seasonal.WeeklyPrior`): those of its current-scope total, in
+    which a release day is one weekday in four.  On the strict series
+    itself every release falls on the same weekdays (betas on Monday,
+    Wednesday and Friday, releases on Tuesday), so weekday and rollout
+    phase cannot be told apart and the fit would split the release-day
+    dip between them at random.  None for the other scopes, for a filter
+    that changes every day (nightly's day's builds have their own weekday
+    pattern) and before the current total has been fitted."""
+    real, scope = config.split_channel(channel)
+    if scope != config.SCOPE_STRICT or \
+            config.SCOPE_CURRENT not in config.scopes():
+        return None
+    cycles = versions.cycles_for(product, channel)
+    if cycles is not None and cycles.per_day:
+        return None
+    total_id = models.total_series(
+        product, config.channel_key(real, config.SCOPE_CURRENT), create=False)
+    if total_id is None:
+        return None
+    row = models.load_models([total_id]).get(total_id)
+    if row is None:
+        return None
+    cached = Cached.from_row(row)
+    return seasonal.WeeklyPrior(
+        cached.factors.get('weekly'),
+        cached.components.get('weekly', {}).get('active'), cached.c2)
+
+
+def total_fit_args(product, channel):
+    """``prior`` and ``borrow`` of a channel total's fit (see
+    :func:`weekly_prior_for`)."""
+    prior = weekly_prior_for(product, channel)
+    return {'prior': prior, 'borrow': ('weekly',) if prior is not None
+            else ()}
+
+
+def signature_borrow(channel):
+    """Components a signature always takes from its channel total: the
+    weekday factors in the strict scope (its own days are its release
+    cadence too)."""
+    scope = config.split_channel(channel)[1]
+    return ('weekly',) if scope == config.SCOPE_STRICT else ()
 
 
 # --------------------------------------------------------------------------
@@ -588,9 +634,11 @@ def score_channel(product, channel, today, now, fits_budget=None,
     if cached_total is None or True:
         # the channel fit is cheap and is the prior of every signature:
         # always recompute it so borrowed factors are fresh
+        total_args = total_fit_args(product, channel)
         total_fit, cached_total = fit_series(
-            total_daily, day_rows, start_total, yesterday, None, 1, now,
-            components=comps)
+            total_daily, day_rows, start_total, yesterday,
+            total_args['prior'], 1, now, components=comps,
+            borrow=total_args['borrow'])
         models.upsert(models.Model, [cached_total.to_row(total_id)],
                       ['series_id'])
         if stale_fits:
@@ -648,10 +696,11 @@ def score_channel(product, channel, today, now, fits_budget=None,
             fitted_at = now - datetime.timedelta(
                 hours=config.get('refit_hours', 6))
         rows = []
+        borrow = signature_borrow(channel)
         for sid in to_fit:
             fit, c = fit_series(histories.get(sid, {}), day_rows, start,
                                 yesterday, total_fit, min_crashes, fitted_at,
-                                components=comps)
+                                components=comps, borrow=borrow)
             fits_by_id[sid] = fit
             cached[sid] = c
             rows.append(c.to_row(sid))

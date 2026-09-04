@@ -233,6 +233,42 @@ class FitTest(unittest.TestCase):
         self.assertTrue(g.active['weekly'])
         self.assertFalse(g.active['cycle'])
 
+    def test_weekly_prior_for_a_weekly_release_cadence(self):
+        """A series whose version ships every Tuesday (the strict scope's
+        release channel): weekday and rollout phase carry the same
+        information, so the weekday factors are borrowed from a fit where
+        they are identifiable and only the ramp is learned."""
+        dates, y = simulate()
+        prior = S.WeeklyPrior.from_fit(S.fit(dates, y))
+        np.testing.assert_allclose(prior.factors['weekly'], WEEKLY,
+                                   atol=0.08)
+        rng = np.random.default_rng(7)
+        first_tuesday = next(d for d in dates if d.weekday() == 1)
+        starts = [first_tuesday + datetime.timedelta(days=7 * k)
+                  for k in range(30)]
+        phase = release_phase(starts)
+        comps = S.with_cycle_phase(phase)
+        mu = 20000.0 * WEEKLY[[d.weekday() for d in dates]] * \
+            RAMP[phase(dates)]
+        z = rng.negative_binomial(400, 400 / (400 + mu)).astype(float)
+        f = S.fit(dates, z, prior=prior, components=comps,
+                  borrow=('weekly',))
+        self.assertEqual(f.borrowed, {'weekly'})
+        np.testing.assert_allclose(f.factors['weekly'],
+                                   prior.factors['weekly'])
+        # the ramp is recovered: release day a few percent, a full day by
+        # the end of the week (relative to each other)
+        ramp = f.factors['cycle'][:7]
+        self.assertLess(ramp[0] / ramp[6], 0.1)
+        np.testing.assert_allclose(ramp[1:7] / ramp[6], RAMP[1:7] / RAMP[6],
+                                   atol=0.12)
+        tuesday = dates[-1] + datetime.timedelta(
+            days=(1 - dates[-1].weekday()) % 7 or 7)
+        self.assertLess(f.forecast(tuesday), 0.15 * f.next_level)
+        # a prior without weekly factors is no prior
+        empty = S.WeeklyPrior(None, True)
+        self.assertFalse(empty.active['weekly'])
+
     def test_high_volume_series_keeps_own_pattern(self):
         dates, y = simulate()
         prior = S.fit(dates, y)
