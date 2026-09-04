@@ -448,12 +448,14 @@ measured from 00:00 UTC of the first day of the current run of consecutive
 flagged days (`api.episode_since`, followed up to 7 days back across UTC
 midnights), not from the run that first flagged it: the dashboard notices
 a spike hours after it begins, while a bug is often filed within the hour,
-so a bug from the spike's first day counts as filed for it.  A row not
-flagged in its scope borrows the spike of the same signature in the
-channel's other scope (the `current` series of a signature is often too
-young to have been flagged for a spike the `all` series shows), so both
-views of a channel give a bug the same colour; rows flagged nowhere show
-their bugs without one.  A bug Bugzilla hides from anonymous
+so a bug from the spike's first day counts as filed for it.  The verdict
+outlives the flag: a row no longer flagged is judged against its most
+recent spike within the 30 days the scores are kept, and one without any
+borrows the spike of the same signature in the channel's other scope (the
+`current` series of a signature is often too young to have been flagged
+for a spike the `all` series shows), so both views of a channel give a bug
+the same colour; rows flagged nowhere in that time show their bugs without
+one.  A bug Bugzilla hides from anonymous
 callers (a security bug: Socorro gives its id, Bugzilla nothing) is
 *restricted*: listed, id only and in grey, for signed-in users, absent from
 what everyone else gets.  This replaced the hand-made "done" marks: a bug filed

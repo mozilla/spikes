@@ -106,8 +106,9 @@ today's own state.
 `bugs[].after` compares the bug's filing time with the start of the row's
 *episode*: 00:00 UTC of the first day of the run of consecutive flagged
 days ending on `flag.day` (followed 7 days back).  A row without a flag
-takes the episode of the same signature in the channel's other scope when
-it is flagged there, so both views of a channel agree.  The
+is judged against its most recent spike of the last 30 days, else against
+the same signature's in the channel's other scope, so both views of a
+channel agree and the verdict outlives the flag window.  The
 page shows the newest bug filed after the spike (green) or else the newest
 bug (red), the others in a tooltip.
 

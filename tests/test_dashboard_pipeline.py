@@ -1067,6 +1067,43 @@ class ApiTest(DBTestCase):
                             headers={'If-None-Match': etag_user})
         self.assertEqual(r.status_code, 304)
 
+    def test_bug_verdict_outlives_the_flag(self):
+        """A row no longer flagged keeps judging its bugs against its most
+        recent spike (within the score retention); one never flagged has
+        no verdict."""
+        ids = models.series_ids('Firefox', 'release', ['settled', 'quiet'])
+        day = datetime.timedelta(days=1)
+
+        def score(sgn, when, **kw):
+            row = {'series_id': ids[sgn], 'day': when, 'as_of': NOW,
+                   'partial': False, 'observed': 10, 'expected': 10.0,
+                   'z': 0.0, 'severity': 'ok', 'is_new': False,
+                   'storm': False}
+            row.update(kw)
+            models.upsert(models.Score, [row], ['series_id', 'day'])
+        for sgn in ('settled', 'quiet'):
+            score(sgn, TODAY)
+        # a two-day spike that ended twelve days ago
+        score('settled', TODAY - 13 * day, severity='spike',
+              peak_severity='spike')
+        score('settled', TODAY - 12 * day, severity='watch',
+              peak_severity='watch')
+        spike = datetime.datetime.combine(TODAY - 13 * day, datetime.time())
+        hour = datetime.timedelta(hours=1)
+        models.replace_bugs('settled', {
+            3001: {'created_at': spike + 30 * hour, 'status': 'NEW'},
+            3002: {'created_at': spike - hour, 'status': 'RESOLVED',
+                   'resolution': 'FIXED'}}, NOW)
+        models.replace_bugs('quiet', {3003: {'created_at': spike + hour,
+                                             'status': 'NEW'}}, NOW)
+        db.session.commit()
+        rows, _ = self.channel_rows()
+        self.assertIsNone(rows['settled']['flag'])
+        self.assertEqual([(b['id'], b['after'])
+                          for b in rows['settled']['bugs']],
+                         [(3001, True), (3002, False)])
+        self.assertEqual(rows['quiet']['bugs'][0]['after'], None)
+
     def test_bug_verdict_borrowed_from_the_other_scope(self):
         """A row not flagged in its scope colours its bugs after the same
         signature's spike in the channel's other scope: the current-version

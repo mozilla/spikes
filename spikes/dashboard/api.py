@@ -549,6 +549,9 @@ def sparks(product, channel, series_ids, today, cached_models, ndays=28):
 
 
 EPISODE_DAYS = 7  # how far back a run of flagged days is followed
+# how far back the last spike is looked for when a row is not flagged now
+# (the bug verdict outlives the flag window); scores are kept 30 days
+VERDICT_DAYS = 30
 
 
 def flag_history(series_ids, today, ndays=EPISODE_DAYS):
@@ -605,6 +608,26 @@ def episode_since(history, flag):
     return datetime.datetime.combine(start, datetime.time())
 
 
+def last_episode_since(history):
+    """Start of the most recent run of flagged days in *history*, for a
+    row not flagged now: the verdict on its bugs outlives the flag
+    window, until the spike leaves the score retention.  None when the
+    signature was not flagged in that time."""
+    days = history['any'] if history else set()
+    if not days:
+        return None
+    start = episode_start(history, max(days))
+    return datetime.datetime.combine(start, datetime.time())
+
+
+def since_of(history, flag):
+    """The spike a row's bugs are judged against: the flagged one, else
+    the most recent one in *history*."""
+    if flag is not None:
+        return episode_since(history, flag)
+    return last_episode_since(history)
+
+
 def signed_in():
     """Whether the request comes from a signed-in user (auth.py): they
     also see the restricted bugs."""
@@ -629,12 +652,12 @@ def sibling_episodes(product, channel, today, now, signatures):
               if e['series'].signature in signatures}
     if not wanted:
         return {}
-    history = flag_history(list(wanted.values()), today)
+    history = flag_history(list(wanted.values()), today, VERDICT_DAYS)
     res = {}
     for sgn, sid in wanted.items():
-        flag = flag_of(by_series[sid], now)
-        if flag is not None:
-            res[sgn] = episode_since(history.get(sid), flag)
+        since = since_of(history.get(sid), flag_of(by_series[sid], now))
+        if since is not None:
+            res[sgn] = since
     return res
 
 
@@ -675,21 +698,22 @@ def rows_json(product, channel, by_series, today, with_yesterday_final,
     cached = {sid: scoring.Cached.from_row(m, comps)
               for sid, m in models.load_models(ids).items()}
     spark = sparks(product, channel, ids, today, cached)
-    history = flag_history(ids, today)
+    history = flag_history(ids, today, VERDICT_DAYS)
     bugs = models.load_bugs({by_series[sid]['series'].signature
                              for sid in ids})
     restricted_ok = signed_in()
     flags = {sid: flag_of(by_series[sid], now) for sid in ids}
-    # rows with bugs but no flag of their own: the other scope's spike
+    sinces = {sid: since_of(history.get(sid), flags[sid]) for sid in ids}
+    # rows with bugs and no spike of their own in the window: the other
+    # scope's
     borrowed = sibling_episodes(product, channel, today, now, {
         by_series[sid]['series'].signature for sid in ids
-        if flags[sid] is None and by_series[sid]['series'].signature in bugs})
+        if sinces[sid] is None and by_series[sid]['series'].signature in bugs})
     rows = []
     for sid in ids:
         e = by_series[sid]
         flag = flags[sid]
-        since = episode_since(history.get(sid), flag) if flag \
-            else borrowed.get(e['series'].signature)
+        since = sinces[sid] or borrowed.get(e['series'].signature)
         up = history[sid]['up'] if sid in history else set()
         rows.append(row_json(e['today'], e['series'], product, channel,
                              spark=spark.get(sid),
