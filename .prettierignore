@@ -1,0 +1,12 @@
+# Prettier formats the dashboard's JavaScript and the lint config only.
+*
+!*.js
+!*.mjs
+!*.json
+!spikes/
+!spikes/dashboard/
+!spikes/dashboard/static/
+!spikes/dashboard/static/*.js
+node_modules/
+package-lock.json
+tests/

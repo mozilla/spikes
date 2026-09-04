@@ -6,3 +6,4 @@ __pycache__/
 .coverage
 .ruff_cache/
 mozdata.ini
+node_modules/

@@ -21,6 +21,14 @@ jobs:
       - name: Lint
         run: uv run ruff check .
 
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Lint JavaScript
+        run: npm ci && npm run lint
+
       - name: Test
         run: uv run coverage run -m unittest discover tests/
 

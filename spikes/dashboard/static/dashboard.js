@@ -1,233 +1,316 @@
-// dashboard.js — crash-spikes dashboard: fetch, state, rendering, interactions.
+// Dashboard page: data fetching, state, rendering and interactions.
 import {
-  lineChart, barChart, sparkline, miniFactors, el,
-  fmtInt, fmtCompact, fmtSigned, fmtRatio, fmtZ, parseDay, fmtDateLong,
+  barChart,
+  clamp,
+  DAY_MS,
+  el,
+  fill,
+  fmtCompact,
+  fmtDateLong,
+  fmtInt,
+  fmtRatio,
+  fmtSigned,
+  fmtZ,
+  lineChart,
+  miniFactors,
+  parseDay,
+  sparkline,
+  WDAYS,
   zoneLabel,
-} from './charts.js';
-import { iconSvg } from './icons.js';
+} from "./charts.js";
+import { iconSvg } from "./icons.js";
 
-const API = new URL('../api/', import.meta.url);
+const API = new URL("../api/", import.meta.url);
 const REFRESH_MS = 5 * 60 * 1000;
 const FOCUS_REFRESH_MS = 60 * 1000;
-const DAY_MS = 86400000;
-const ALERT_SEVERITIES = ['major', 'spike', 'watch', 'drop'];
-const COUNT_SEVERITIES = [...ALERT_SEVERITIES, 'new'];
-const COUNT_KINDS = [...COUNT_SEVERITIES, 'storm'];
+const ALERT_SEVERITIES = ["major", "spike", "watch", "drop"];
+const COUNT_SEVERITIES = [...ALERT_SEVERITIES, "new"];
+const COUNT_KINDS = [...COUNT_SEVERITIES, "storm"];
 const SEV_RANK = { major: 0, spike: 1, watch: 2, new: 3, drop: 4, ok: 5 };
-const WDAYS = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
 const CHART_HEIGHT = 280;
-
-// Channel branding (mozilla-central / comm-central): Nightly and Daily have
-// their own logos; Firefox beta wears the Developer Edition logo (the
-// beta channel itself ships the release one); Fenix is Firefox for Android.
-function logoFor(product, channel) {
-  const family = product === 'Thunderbird' ? 'thunderbird'
-    : product === 'Firefox' || product === 'Fenix' ? 'firefox' : null;
-  if (!family) return null;
-  const suffix = channel === 'nightly' || channel === 'beta' ? `-${channel}` : '';
-  return `logo-${family}${suffix}.svg`;
-}
-
-// the view the page opens on: the version current on each day (the hash can
-// ask for the other scope, `all`: every version reporting on the channel)
-const DEFAULT_SCOPE = 'current';
+const ALL = { all: true }; // the cross-channel view
+const ALL_KEY = "all";
+const SCOPE_PREFIX = "current"; // `#current/...`: the current-version scope
 
 const app = {
   summary: null,
-  channel: null,
-  selected: null,
-  scope: DEFAULT_SCOPE, // version scope: 'all' or 'current'
+  channel: null, // payload of the selected channel
+  selected: null, // ALL or { product, channel }
+  scope: "current", // version scope: 'current' or 'all'
   days: 90,
-  granularity: 'day',
-  sort: { key: 'severity', dir: 'asc' },
-  expanded: new Map(), // signature -> { tr, panel, charts, data }
+  granularity: "day",
+  sort: { key: "severity", dir: "asc" },
+  expanded: new Map(), // signature -> expanded row state (see expandRow)
   charts: {},
   lastFetch: 0,
-  pendingFocus: null,
-  hideDrops: false,
-  events: [], // platform events (badges on the charts), grouped per day and source
+  pendingFocus: null, // signature to focus once its channel is rendered
+  hideDrops: false, // drops are demoted while Socorro lags
+  events: [], // platform events, grouped per day and source
   eventsData: null,
   account: null, // /api/me: { enabled, user: { email, name, picture } | null, domains }
 };
 
-const $ = (id) => document.getElementById(id);
+const $ = id => document.getElementById(id);
+const sum = arr => arr.reduce((a, b) => a + b, 0);
 
-// ---------------------------------------------------------------- fetching
-// Conditional requests: the ETag of every URL is remembered and sent back;
-// a 304 (nothing new since the last scheduler run) reuses the cached JSON.
+// -------------------------------------------------------------------- fetching
+// Conditional requests: each URL's ETag is sent back and a 304 (no scheduler
+// run since) reuses the cached JSON, so identity tells unchanged data.
+// Concurrent requests of one URL share a fetch; prefetchJSON relies on it to
+// load a deep-linked channel alongside the summary instead of after it.
 const etags = new Map(); // url -> { etag, data }
+const inflight = new Map(); // url -> promise
 
 function requestURL(endpoint, params = {}) {
   const url = new URL(endpoint, API);
-  if (endpoint !== 'events' && app.scope !== 'all') params = { scope: app.scope, ...params };
-  for (const [k, v] of Object.entries(params)) if (v != null) url.searchParams.set(k, v);
+  if (endpoint !== "events" && app.scope !== "all") {
+    url.searchParams.set("scope", app.scope);
+  }
+  for (const [k, v] of Object.entries(params)) {
+    if (v != null) {
+      url.searchParams.set(k, v);
+    }
+  }
   return url.toString();
 }
 
-// A request started ahead of its consumer (the deep-linked channel, fetched
-// alongside the summary instead of after it): the next fetchJSON of the same
-// URL takes it over instead of asking again.
-const prefetched = new Map(); // url -> { promise, at }
-const PREFETCH_MS = 30000;
-
-function prefetchJSON(endpoint, params = {}) {
-  const key = requestURL(endpoint, params);
-  const promise = fetchURL(key);
-  promise.catch(() => {}); // its consumer reports the failure
-  prefetched.set(key, { promise, at: Date.now() });
-}
-
-async function fetchJSON(endpoint, params = {}) {
-  const key = requestURL(endpoint, params);
-  const early = prefetched.get(key);
-  if (early) {
-    prefetched.delete(key);
-    if (Date.now() - early.at < PREFETCH_MS) return early.promise;
+function fetchJSON(endpoint, params) {
+  const url = requestURL(endpoint, params);
+  let promise = inflight.get(url);
+  if (!promise) {
+    promise = fetchURL(url).finally(() => inflight.delete(url));
+    inflight.set(url, promise);
   }
-  return fetchURL(key);
+  return promise;
 }
 
-async function fetchURL(key) {
-  const url = new URL(key);
-  const known = etags.get(key);
-  const headers = { Accept: 'application/json' };
-  if (known?.etag) headers['If-None-Match'] = known.etag;
-  const res = await fetch(url, { headers, cache: 'no-store' });
+function prefetchJSON(endpoint, params) {
+  fetchJSON(endpoint, params).catch(() => {}); // its consumer reports the failure
+}
+
+async function fetchURL(url) {
+  const known = etags.get(url);
+  const headers = { Accept: "application/json" };
+  if (known) {
+    headers["If-None-Match"] = known.etag;
+  }
+  const res = await fetch(url, { headers, cache: "no-store" });
   if (res.status === 304 && known) {
     app.lastFetch = Date.now();
     return known.data;
   }
   if (!res.ok) {
     let msg = `HTTP ${res.status}`;
-    try { msg += `: ${(await res.json()).error}`; } catch { /* body not JSON */ }
+    try {
+      msg += `: ${(await res.json()).error}`;
+    } catch {
+      // body not JSON
+    }
     throw new Error(msg);
   }
   app.lastFetch = Date.now();
   const data = await res.json();
-  const etag = res.headers.get('ETag');
-  if (etag) etags.set(key, { etag, data });
+  const etag = res.headers.get("ETag");
+  if (etag) {
+    etags.set(url, { etag, data });
+  }
   return data;
 }
 
-// ---------------------------------------------------------------- account
-// Reading needs no account; changing the dashboard needs a Mozilla Google
-// account (auth.py).  The header shows a "Sign in" link, or who is signed in.
+// --------------------------------------------------------------------- account
+// Reading needs no account.  The header shows "Sign in" (a Mozilla Google
+// account, see auth.py) or who is signed in.
 async function loadAccount() {
   try {
-    const res = await fetch(new URL('me', API), { headers: { Accept: 'application/json' }, cache: 'no-store' });
-    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    const res = await fetch(new URL("me", API), {
+      headers: { Accept: "application/json" },
+      cache: "no-store",
+    });
+    if (!res.ok) {
+      throw new Error(`HTTP ${res.status}`);
+    }
     app.account = await res.json();
   } catch {
-    app.account = null; // the header simply shows nothing
+    app.account = null;
   }
   renderAccount();
 }
 
 function renderAccount() {
-  const box = $('account');
+  const box = $("account");
   const a = app.account;
-  box.textContent = '';
   box.hidden = !(a?.enabled || a?.user);
-  if (box.hidden) return;
-  const here = location.pathname + location.search + location.hash; // come back to this view
-  if (!a.user) {
-    const url = new URL('../login', API);
-    url.searchParams.set('next', here);
-    const who = (a.domains || []).map((d) => `@${d}`).join(' or ');
-    box.append(el('a', { class: 'account-link', href: url.toString(), title: `Sign in with a ${who} Google account to change the dashboard` }, 'Sign in'));
+  if (box.hidden) {
+    box.textContent = "";
     return;
   }
-  if (a.user.picture) box.append(el('img', { class: 'avatar', src: a.user.picture, alt: '', width: 24, height: 24, referrerpolicy: 'no-referrer' }));
-  box.append(el('span', { class: 'account-name', title: a.user.email }, a.user.name || a.user.email));
-  const form = el('form', { class: 'account-form', method: 'post', action: new URL('../logout', API).toString() });
-  form.append(el('input', { type: 'hidden', name: 'next', value: here }));
-  form.append(el('button', { type: 'submit', class: 'chart-btn' }, 'Sign out'));
-  box.append(form);
+  const here = location.pathname + location.search + location.hash; // back to this view afterwards
+  if (!a.user) {
+    const url = new URL("../login", API);
+    url.searchParams.set("next", here);
+    const who = (a.domains || []).map(d => `@${d}`).join(" or ");
+    fill(
+      box,
+      el(
+        "a",
+        {
+          class: "account-link",
+          href: url.toString(),
+          title: `Sign in with a ${who} Google account to change the dashboard`,
+        },
+        "Sign in"
+      )
+    );
+    return;
+  }
+  fill(
+    box,
+    a.user.picture
+      ? el("img", {
+          class: "avatar",
+          src: a.user.picture,
+          alt: "",
+          width: 24,
+          height: 24,
+          referrerpolicy: "no-referrer",
+        })
+      : null,
+    el(
+      "span",
+      { class: "account-name", title: a.user.email },
+      a.user.name || a.user.email
+    ),
+    el(
+      "form",
+      {
+        class: "account-form",
+        method: "post",
+        action: new URL("../logout", API).toString(),
+      },
+      el("input", { type: "hidden", name: "next", value: here }),
+      el("button", { type: "submit", class: "chart-btn" }, "Sign out")
+    )
+  );
 }
 
 function showError(msg) {
-  const line = $('error-line');
+  const line = $("error-line");
   line.textContent = msg;
   line.hidden = !msg;
 }
 
-/** Polite screen-reader announcement (a persistent live region). */
+/** Screen-reader announcement through the persistent live region. */
 function announce(msg) {
-  const r = $('sr-status');
-  if (!r) return;
-  r.textContent = '';
-  setTimeout(() => { r.textContent = msg; }, 50);
+  const region = $("sr-status");
+  region.textContent = "";
+  setTimeout(() => {
+    region.textContent = msg;
+  }, 50);
 }
 
-/** Key of the focused control inside *container* (data-focus attribute), for restoring
- * focus after the container is rebuilt. */
+/** data-focus key of the focused control in `container`, for restoreFocus(). */
 function focusedKey(container) {
-  const a = document.activeElement;
-  if (!a || !container.contains(a)) return null;
-  return a.closest('[data-focus]')?.dataset.focus || null;
+  const active = document.activeElement;
+  return container.contains(active)
+    ? active.closest("[data-focus]")?.dataset.focus || null
+    : null;
 }
 
 function restoreFocus(container, key) {
-  if (!key) return;
-  const target = [...container.querySelectorAll('[data-focus]')].find((n) => n.dataset.focus === key);
-  target?.focus({ preventScroll: true });
+  if (key) {
+    container
+      .querySelector(`[data-focus="${CSS.escape(key)}"]`)
+      ?.focus({ preventScroll: true });
+  }
 }
 
+// --------------------------------------------------------------------- loading
 async function refresh({ initial = false } = {}) {
   if (initial) {
-    loadAccount(); // independent of the data; not awaited
+    loadAccount(); // independent of the data
     const h = parseHash();
-    if (h?.scope) app.scope = h.scope; // `#current/...` deep links
-    // the deep-linked channel loads alongside the summary, not after it
-    if (h && !isAll(h) && h.product) prefetchJSON('channel', { product: h.product, channel: h.channel, days: app.days, granularity: app.granularity });
+    if (h) {
+      app.scope = h.scope;
+    }
+    if (h?.product) {
+      prefetchJSON("channel", channelParams(h.product, h.channel));
+    }
   }
   try {
     let summary;
     try {
-      summary = await fetchJSON('summary');
+      summary = await fetchJSON("summary");
     } catch (e) {
       // a server that collects only the all scope rejects the default one
-      if (!initial || app.scope === 'all') throw e;
-      app.scope = 'all';
-      summary = await fetchJSON('summary');
+      if (!initial || app.scope === "all") {
+        throw e;
+      }
+      app.scope = "all";
+      summary = await fetchJSON("summary");
     }
-    // A 304 returns the cached object, so identity is enough to avoid a redraw.
-    const changed = summary !== app.summary;
-    if (changed) {
+    if (summary === app.summary) {
+      renderFreshness(summary); // "N min ago" keeps counting
+    } else {
       app.summary = summary;
       renderSummary();
-    } else renderFreshness(app.summary); // "N min ago" keeps counting
+    }
     await refreshEvents();
     const target = app.selected || defaultChannel();
     if (isAll(target)) {
-      if (!app.selected) selectAll();
+      if (!app.selected) {
+        selectAll();
+      }
     } else if (target) {
-      if (!app.selected && target.signature) app.pendingFocus = target.signature; // deep link to a signature
+      if (!app.selected && target.signature) {
+        app.pendingFocus = target.signature;
+      }
       await loadChannel(target.product, target.channel);
     }
-    showError('');
+    showError("");
   } catch (e) {
-    const asOf = app.summary?.as_of ? ` — showing data from ${fmtTime(app.summary.as_of)}` : '';
-    showError(initial && !app.summary ? `Could not load the dashboard (${e.message})` : `Could not refresh (${e.message})${asOf}`);
+    const asOf = app.summary?.as_of
+      ? ` — showing data from ${fmtTime(app.summary.as_of)}`
+      : "";
+    showError(
+      initial && !app.summary
+        ? `Could not load the dashboard (${e.message})`
+        : `Could not refresh (${e.message})${asOf}`
+    );
   }
 }
 
+function channelParams(product, channel) {
+  return { product, channel, days: app.days, granularity: app.granularity };
+}
+
+function isSelected(product, channel) {
+  return (
+    channelSelected() &&
+    app.selected.product === product &&
+    app.selected.channel === channel
+  );
+}
+
 async function loadChannel(product, channel) {
-  const changed = !app.selected || isAll(app.selected) || app.selected.product !== product || app.selected.channel !== channel;
-  app.selected = { product, channel };
-  if (changed) {
+  if (!isSelected(product, channel)) {
+    app.selected = { product, channel };
     clearExpanded();
     updateHash();
     highlightCard();
   }
-  const req = { product, channel, days: app.days, granularity: app.granularity };
-  const data = await fetchJSON('channel', req);
-  // a newer selection or range change owns the view: drop this response
-  if (!app.selected || isAll(app.selected) || app.selected.product !== req.product ||
-      app.selected.channel !== req.channel || app.days !== req.days || app.granularity !== req.granularity) return;
+  const params = channelParams(product, channel);
+  const data = await fetchJSON("channel", params);
+  // a newer selection or range owns the view: drop this response
+  if (
+    !isSelected(product, channel) ||
+    app.days !== params.days ||
+    app.granularity !== params.granularity
+  ) {
+    return;
+  }
   if (data === app.channel) {
     showView();
-    return; // same data, same view: leave the DOM alone
+    return;
   }
   app.channel = data;
   showView(); // final layout before renderDetail() may scroll to a row
@@ -235,291 +318,417 @@ async function loadChannel(product, channel) {
   await refreshExpanded();
 }
 
-// ---------------------------------------------------------------- platform events
-/** Badges on the charts (Windows updates, drivers, OS releases): one small payload for
- * the whole page, refreshed with the summary; unchanged data costs a 304. */
+// ------------------------------------------------------------- platform events
+/** Badges on the charts (Windows updates, drivers, OS releases): one payload
+ * for the whole page, refreshed with the summary. */
 async function refreshEvents() {
   let data;
   try {
-    data = await fetchJSON('events', { days: 800 });
+    data = await fetchJSON("events", { days: 800 });
   } catch {
     return; // the charts work without badges
   }
-  if (data === app.eventsData) return;
+  if (data === app.eventsData) {
+    return;
+  }
   app.eventsData = data;
   app.events = data.events || [];
-  if (app.channel && app.selected && !isAll(app.selected)) {
+  if (app.channel && channelSelected()) {
     renderCharts(app.channel);
-    for (const st of app.expanded.values()) if (st.data && st.panel) renderSignaturePanel(st);
+    for (const st of app.expanded.values()) {
+      if (st.data && st.panel) {
+        renderSignaturePanel(st);
+      }
+    }
   }
 }
 
-const DESKTOP_PLATFORMS = ['windows', 'mac', 'linux'];
-
-/** Platforms whose events matter for a product: Fenix runs on Android, the rest on desktop. */
-function platformsFor(product) {
-  return product === 'Fenix' ? ['android'] : DESKTOP_PLATFORMS;
-}
-
+/** Events of the platforms a product runs on. */
 function eventsFor(product) {
-  const platforms = platformsFor(product);
-  return app.events.filter((g) => platforms.includes(g.platform));
+  const platforms =
+    product === "Fenix" ? ["android"] : ["windows", "mac", "linux"];
+  return app.events.filter(g => platforms.includes(g.platform));
 }
 
-// ---------------------------------------------------------------- helpers
-function fmtTime(iso) {
-  const d = new Date(iso);
-  return `${String(d.getUTCHours()).padStart(2, '0')}:${String(d.getUTCMinutes()).padStart(2, '0')} UTC`;
-}
+// --------------------------------------------------------------------- helpers
+const fmtClock = iso => new Date(iso).toISOString().slice(11, 16);
+const fmtTime = iso => `${fmtClock(iso)} UTC`;
 
 function fmtAgo(iso, nowIso) {
   const now = nowIso ? new Date(nowIso).getTime() : Date.now();
-  const min = Math.round((now - new Date(iso).getTime()) / 60000);
-  if (min < 1) return 'just now';
-  if (min < 90) return `${min} min ago`;
-  if (min < 48 * 60) return `${Math.round(min / 60)} h ago`;
+  const min = Math.round((now - new Date(iso).getTime()) / 60_000);
+  if (min < 1) {
+    return "just now";
+  }
+  if (min < 90) {
+    return `${min} min ago`;
+  }
+  if (min < 48 * 60) {
+    return `${Math.round(min / 60)} h ago`;
+  }
   return `${Math.round(min / 1440)} days ago`;
 }
 
+/** UTC midnight of the day on screen. */
 function todayMs() {
-  return parseDay(app.channel?.day || app.summary?.channels?.[0]?.day || new Date().toISOString().slice(0, 10));
+  return parseDay(
+    app.channel?.day ||
+      app.summary?.channels?.[0]?.day ||
+      new Date().toISOString().slice(0, 10)
+  );
 }
 
-/** Severity shown: the row's flag (today's live state, or what a previous day reached
- * within the flag window) after the data-health rule (drops are demoted when Socorro lags). */
+/** Severity shown for a score: its flag (today's, or a previous day's within
+ * the flag window), with drops demoted while Socorro lags. */
 function sevOf(score) {
-  const s = score?.flag?.severity || score?.severity || 'ok';
-  return s === 'drop' && app.hideDrops ? 'ok' : s;
+  const s = score?.flag?.severity || score?.severity || "ok";
+  return s === "drop" && app.hideDrops ? "ok" : s;
 }
 
 function isNew(row) {
   return !!(row?.flag ? row.flag.is_new : row?.is_new);
 }
 
-/** Days between the row's day and the day its flag comes from (0 = today's own state). */
+function isFlagged(row) {
+  return sevOf(row) !== "ok" || isNew(row);
+}
+
+/** Days between the row's day and its flag's day (0 = today's own state). */
 function flagAge(row) {
-  if (!row?.flag || !row.day || row.flag.day === row.day) return 0;
+  if (!row?.flag || !row.day || row.flag.day === row.day) {
+    return 0;
+  }
   return Math.round((parseDay(row.day) - parseDay(row.flag.day)) / DAY_MS);
 }
 
 function flagWhen(row) {
   const age = flagAge(row);
-  return age === 1 ? 'yesterday' : age > 1 ? `${age} days ago` : '';
+  if (age === 1) {
+    return "yesterday";
+  }
+  return age > 1 ? `${age} days ago` : "";
 }
 
-/** "major yesterday: 430 vs 98 expected (z +12.9)" for a carried-over flag. */
+/** "major yesterday (2026-09-03): 430 vs 98 expected (z +12.9)" */
 function flagTitle(row) {
   const f = row.flag;
-  let t = `${f.severity}${isNew(row) ? ', new' : ''} ${flagWhen(row)} (${f.day}): ${fmtInt(f.observed)} vs ${fmtInt(f.expected)} expected`;
-  if (f.z != null) t += ` (z ${fmtZ(f.z)})`;
-  if (f.peak?.z != null) t += `, peak z ${fmtZ(f.peak.z)}`;
+  let t = `${f.severity}${isNew(row) ? ", new" : ""} ${flagWhen(row)} (${f.day}): ${fmtInt(f.observed)} vs ${fmtInt(f.expected)} expected`;
+  if (f.z != null) {
+    t += ` (z ${fmtZ(f.z)})`;
+  }
+  if (f.peak?.z != null) {
+    t += `, peak z ${fmtZ(f.peak.z)}`;
+  }
   return t;
 }
 
 function visibleAlerts(summary) {
-  return (summary.alerts || []).filter((row) => sevOf(row) !== 'ok' || isNew(row));
+  return (summary.alerts || []).filter(isFlagged);
 }
 
 function rowRank(row) {
   const s = sevOf(row);
-  if (s === 'ok' && isNew(row)) return SEV_RANK.new;
-  return SEV_RANK[s] ?? SEV_RANK.ok;
+  return s === "ok" && isNew(row) ? SEV_RANK.new : (SEV_RANK[s] ?? SEV_RANK.ok);
 }
 
-/** The severity thresholds of the channel on screen (learned per channel, see the ? view). */
+/** Severity thresholds of the channel on screen (learned per channel). */
 function currentRules() {
-  if (app.channel?.thresholds) return app.channel.thresholds;
-  const all = app.summary?.thresholds || {};
-  const keys = Object.keys(all);
-  return keys.length === 1 ? all[keys[0]] : null;
+  if (app.channel?.thresholds) {
+    return app.channel.thresholds;
+  }
+  const all = Object.values(app.summary?.thresholds || {});
+  return all.length === 1 ? all[0] : null;
 }
+
+const STORM_HELP =
+  "Storm / crash loop: many crashes from a handful of installs (few machines crashing repeatedly), or 20+ crashes per install. Not a regression across users, so it is never an alert.";
+const CHIP_HELP = {
+  new: "New: not seen above the reporting cut on any of the previous 14 days.",
+  storm: STORM_HELP,
+  "crash-loop": STORM_HELP,
+  noise:
+    "Noise: a signature listed in the skiplist (processing artefacts such as shutdown kills or empty dumps). Shown, never alerted on.",
+  ok: "OK: within the range the seasonal pattern predicts for this weekday and time of day.",
+};
 
 /** Plain-language meaning of a chip, with the thresholds the server uses. */
 function chipHelp(kind) {
+  if (CHIP_HELP[kind]) {
+    return CHIP_HELP[kind];
+  }
   const t = currentRules() || {};
-  const rule = (k) => (t[k] ? `at least ${t[k].z} standard deviations above the seasonal expectation (this channel's learned threshold, see ?)` : 'above the seasonal expectation by this channel\'s learned threshold (see ?)');
+  const above = t[kind]
+    ? `at least ${t[kind].z} standard deviations above the seasonal expectation (this channel's learned threshold, see ?)`
+    : "above the seasonal expectation by this channel's learned threshold (see ?)";
   switch (kind) {
-    case 'major': return `Major spike: crashes today are ${rule('major')}, and the number of distinct installs rose as much. The strongest alert.`;
-    case 'spike': return `Spike: crashes today are ${rule('spike')}, and the number of distinct installs rose as much.`;
-    case 'watch': return `Watch: crashes today are ${rule('watch')}. Worth a look, not yet a confirmed spike.`;
-    case 'drop': return `Drop: crashes today are ${t.drop ? `at least ${Math.abs(t.drop.z)} standard deviations below the seasonal expectation (this channel's learned threshold)` : 'well below the seasonal expectation'} (a fix landed, or a data problem).`;
-    case 'new': return 'New: not seen above the reporting cut on any of the previous 14 days.';
-    case 'storm': case 'crash-loop': return 'Storm / crash loop: many crashes from a handful of installs (few machines crashing repeatedly), or 20+ crashes per install. Not a regression across users, so it is never an alert.';
-    case 'noise': return 'Noise: a signature listed in the skiplist (processing artefacts such as shutdown kills or empty dumps). Shown, never alerted on.';
-    case 'ok': return 'OK: within the range the seasonal pattern predicts for this weekday and time of day.';
-    default: return '';
+    case "major":
+      return `Major spike: crashes today are ${above}, and the number of distinct installs rose as much. The strongest alert.`;
+    case "spike":
+      return `Spike: crashes today are ${above}, and the number of distinct installs rose as much.`;
+    case "watch":
+      return `Watch: crashes today are ${above}. Worth a look, not yet a confirmed spike.`;
+    case "drop": {
+      const below = t.drop
+        ? `at least ${Math.abs(t.drop.z)} standard deviations below the seasonal expectation (this channel's learned threshold)`
+        : "well below the seasonal expectation";
+      return `Drop: crashes today are ${below} (a fix landed, or a data problem).`;
+    }
+    default:
+      return "";
   }
 }
 
 function chip(sev, text) {
-  return el('span', { class: `chip chip-${sev}`, title: chipHelp(sev) }, text ?? sev);
+  return el(
+    "span",
+    { class: `chip chip-${sev}`, title: chipHelp(sev) },
+    text ?? sev
+  );
 }
 
 function countChip(sev, n) {
-  return el('span', { class: `chip chip-${sev} chip-count`, title: chipHelp(sev) }, el('span', { class: 'n' }, String(n)), sev);
+  return el(
+    "span",
+    { class: `chip chip-${sev} chip-count`, title: chipHelp(sev) },
+    el("span", { class: "n" }, String(n)),
+    sev
+  );
 }
 
 function badge(kind, text) {
-  return el('span', { class: 'chip chip-neutral', title: chipHelp(kind) }, text ?? kind);
+  return el(
+    "span",
+    { class: "chip chip-neutral", title: chipHelp(kind) },
+    text ?? kind
+  );
 }
 
 function dots(confidence) {
-  const n = Math.max(0, Math.min(3, confidence || 0));
-  if (!n) return null;
-  return el('span', { class: 'dots', role: 'img', 'aria-label': `confidence ${n} of 3` }, '●'.repeat(n));
+  const n = clamp(confidence || 0, 0, 3);
+  return n
+    ? el(
+        "span",
+        { class: "dots", role: "img", "aria-label": `confidence ${n} of 3` },
+        "●".repeat(n)
+      )
+    : null;
 }
 
 function deltaText(score) {
-  if (score.z == null && score.excess == null) return 'not scored';
+  if (score.z == null && score.excess == null) {
+    return "not scored";
+  }
   const ratio = fmtRatio(score.ratio);
-  return `${fmtSigned(score.excess)}${ratio ? ` (${ratio})` : ''}`;
+  return `${fmtSigned(score.excess)}${ratio ? ` (${ratio})` : ""}`;
 }
 
 function plural(n, word) {
-  return `${n} ${word}${n === 1 ? '' : 's'}`;
+  return `${n} ${word}${n === 1 ? "" : "s"}`;
 }
 
-/** How long a flag stays listed after the last run that raised it (server setting). */
+/** Hours a flag stays listed after the last run that raised it. */
 function flagWindowHours() {
   return app.summary?.flag_window_hours || 48;
 }
 
 function displayedSeverities(kinds = COUNT_SEVERITIES) {
-  return app.hideDrops ? kinds.filter((kind) => kind !== 'drop') : kinds;
+  return app.hideDrops ? kinds.filter(kind => kind !== "drop") : kinds;
 }
 
 function countBadges(counts = {}) {
-  const wrap = el('div', { class: 'card-counts' });
-  for (const kind of displayedSeverities()) {
-    if (counts[kind]) wrap.append(countChip(kind, counts[kind]));
-  }
-  if (counts.storm) wrap.append(badge('storm', plural(counts.storm, 'storm')));
-  return wrap;
+  const shown = displayedSeverities().filter(kind => counts[kind]);
+  return el(
+    "div",
+    { class: "card-counts" },
+    ...shown.map(kind => countChip(kind, counts[kind])),
+    counts.storm ? badge("storm", plural(counts.storm, "storm")) : null
+  );
 }
 
-/** "channel excess mostly from crash loops (72 %)" for storm-driven totals, else null. */
+/** "channel excess mostly from crash loops (72 %)" when storm-driven. */
 function stormNote(total) {
-  if (!total?.storm_driven) return null;
-  const share = total.storm_share != null ? ` (${Math.round(total.storm_share * 100)} %)` : '';
+  if (!total?.storm_driven) {
+    return null;
+  }
+  const share =
+    total.storm_share != null
+      ? ` (${Math.round(total.storm_share * 100)} %)`
+      : "";
   return `channel excess mostly from crash loops${share}`;
 }
 
 function installsTitle(score) {
-  if (score.installs == null) return 'installs unknown';
+  if (score.installs == null) {
+    return "installs unknown";
+  }
   let t = `${fmtInt(score.installs)} installs`;
-  if (score.expected_installs != null) t += ` vs ${score.expected_installs.toLocaleString('en-US', { maximumFractionDigits: 1 })} expected`;
-  if (score.z_installs != null) t += ` (z ${fmtZ(score.z_installs)})`;
-  if (score.installs_ratio != null) t += ` · ${score.installs_ratio} crashes per install`;
+  if (score.expected_installs != null) {
+    t += ` vs ${score.expected_installs.toLocaleString("en-US", { maximumFractionDigits: 1 })} expected`;
+  }
+  if (score.z_installs != null) {
+    t += ` (z ${fmtZ(score.z_installs)})`;
+  }
+  if (score.installs_ratio != null) {
+    t += ` · ${score.installs_ratio} crashes per install`;
+  }
   return t;
 }
 
 function midTruncate(s, max = 70) {
-  if (s.length <= max) return s;
+  if (s.length <= max) {
+    return s;
+  }
   const head = Math.ceil((max - 1) * 0.6);
-  return `${s.slice(0, head)}…${s.slice(s.length - (max - 1 - head))}`;
+  return `${s.slice(0, head)}…${s.slice(-(max - 1 - head))}`;
 }
 
-/** When the row's flag was first raised: today's own, or the carried-over day's. */
+/** When the row's flag was first raised (today's or the carried-over day's). */
 function sinceOf(row) {
   return row.flag?.since || row.since || null;
 }
 
 function sinceText(row) {
   const days = row.flagged_days || 0;
-  if (days >= 2) return `${days + 1} days`;
-  if (days === 1) return 'yesterday';
+  if (days >= 2) {
+    return `${days + 1} days`;
+  }
+  if (days === 1) {
+    return "yesterday";
+  }
   const since = sinceOf(row);
-  if (!since) return '—';
+  if (!since) {
+    return "—";
+  }
   const ms = new Date(since).getTime();
   const dayStart = todayMs();
-  if (ms >= dayStart) return `${fmtTime(since).replace(' UTC', '')} today`;
-  if (ms >= dayStart - DAY_MS) return `yesterday ${fmtTime(since).replace(' UTC', '')}`;
+  if (ms >= dayStart) {
+    return `${fmtClock(since)} today`;
+  }
+  if (ms >= dayStart - DAY_MS) {
+    return `yesterday ${fmtClock(since)}`;
+  }
   return `${Math.round((dayStart - ms) / DAY_MS) + 1} days`;
 }
 
+/** Sort key: how long the row has been flagged, in ms. */
 function sinceValue(row) {
   const since = sinceOf(row);
   const ms = since ? new Date(since).getTime() : todayMs() + DAY_MS;
   return (row.flagged_days || 0) * DAY_MS + (todayMs() + DAY_MS - ms);
 }
 
-const ALL = { all: true };
-const ALL_KEY = 'all';
-
+// ---------------------------------------------------------- selection and hash
 function isAll(sel) {
-  return !!sel && sel.all === true;
+  return sel?.all === true;
+}
+
+function channelSelected() {
+  return !!app.selected && !isAll(app.selected);
 }
 
 function channelKey(c) {
   return isAll(c) ? ALL_KEY : `${c.product}/${c.channel}`;
 }
 
-const SCOPE_PREFIX = 'current'; // `#current/...`: the current-version scope
-
-/** `#all`, `#Product/channel` or `#Product/channel/<encoded signature>`
- * (the signature part is percent-encoded, so its own slashes are safe), each
- * optionally prefixed with `current/` for the current-version scope; the scope
- * is returned in `scope` (`all` when absent). */
+/** `#all`, `#Product/channel` or `#Product/channel/<encoded signature>`,
+ * each optionally prefixed with `current/`: { scope, ... } or null. */
 function parseHash() {
   const raw = location.hash.slice(1);
-  if (!raw) return null;
-  let parts = raw.split('/');
-  let scope = 'all';
-  if (parts.length > 1 && parts[0] === SCOPE_PREFIX) { scope = 'current'; parts = parts.slice(1); }
-  if (parts.length === 1 && decodeURIComponent(parts[0]) === ALL_KEY) return { ...ALL, scope };
-  if (parts.length < 2 || !parts[0] || !parts[1]) return null;
-  const res = { product: decodeURIComponent(parts[0]), channel: decodeURIComponent(parts[1]), scope };
-  if (parts.length > 2 && parts.slice(2).join('/')) res.signature = decodeURIComponent(parts.slice(2).join('/'));
+  if (!raw) {
+    return null;
+  }
+  let parts = raw.split("/");
+  let scope = "all";
+  if (parts.length > 1 && parts[0] === SCOPE_PREFIX) {
+    scope = "current";
+    parts = parts.slice(1);
+  }
+  const [product, channel, ...rest] = parts.map(decodeURIComponent);
+  if (parts.length === 1 && product === ALL_KEY) {
+    return { ...ALL, scope };
+  }
+  if (!product || !channel) {
+    return null;
+  }
+  const res = { product, channel, scope };
+  const signature = rest.join("/");
+  if (signature) {
+    res.signature = signature;
+  }
   return res;
 }
 
 function scopePrefix() {
-  return app.scope === 'all' ? '' : `${SCOPE_PREFIX}/`;
+  return app.scope === "all" ? "" : `${SCOPE_PREFIX}/`;
 }
 
 function channelHash(product, channel, signature = null) {
-  let hash = `#${scopePrefix()}${encodeURIComponent(product)}/${encodeURIComponent(channel)}`;
-  if (signature) hash += `/${encodeURIComponent(signature)}`;
-  return hash;
+  const parts = [product, channel, signature]
+    .filter(Boolean)
+    .map(encodeURIComponent);
+  return `#${scopePrefix()}${parts.join("/")}`;
 }
 
 function updateHash(signature = null) {
-  if (!app.selected) return;
-  if (!isAll(app.selected) && !signature) {
-    // keep a signature deep link in the address bar while its channel is shown
-    const current = parseHash();
-    if (current && !isAll(current) && current.signature && channelKey(current) === channelKey(app.selected)) return;
+  if (!app.selected) {
+    return;
   }
-  const hash = isAll(app.selected) ? `#${scopePrefix()}${ALL_KEY}` : channelHash(app.selected.product, app.selected.channel, signature);
-  if (location.hash !== hash) history.replaceState(null, '', hash);
+  let hash;
+  if (isAll(app.selected)) {
+    hash = `#${scopePrefix()}${ALL_KEY}`;
+  } else {
+    // a signature deep link stays in the address bar while its channel is shown
+    const current = parseHash();
+    if (
+      !signature &&
+      current?.signature &&
+      channelKey(current) === channelKey(app.selected)
+    ) {
+      return;
+    }
+    hash = channelHash(app.selected.product, app.selected.channel, signature);
+  }
+  if (location.hash !== hash) {
+    history.replaceState(null, "", hash);
+  }
 }
 
-/** The view to open on load: the hash if valid, else the cross-channel report. */
+/** The view to open on load: the hash if it names a known channel, else ALL. */
 function defaultChannel() {
   const channels = app.summary?.channels || [];
-  if (!channels.length) return null;
-  const fromHash = parseHash();
-  if (isAll(fromHash)) return ALL;
-  if (fromHash && channels.some((c) => c.product === fromHash.product && c.channel === fromHash.channel)) return { product: fromHash.product, channel: fromHash.channel, signature: fromHash.signature }; // may carry a signature
+  if (!channels.length) {
+    return null;
+  }
+  const h = parseHash();
+  if (
+    h &&
+    !isAll(h) &&
+    channels.some(c => c.product === h.product && c.channel === h.channel)
+  ) {
+    return { product: h.product, channel: h.channel, signature: h.signature };
+  }
   return ALL;
 }
 
-/** Smooth scrolling unless the reader asked for reduced motion. */
 function scrollBehavior() {
-  return window.matchMedia?.('(prefers-reduced-motion: reduce)').matches ? 'auto' : 'smooth';
+  return matchMedia("(prefers-reduced-motion: reduce)").matches
+    ? "auto"
+    : "smooth";
 }
 
-/** The toolbar is pinned: showing a view from its start means the page top. */
+/** The toolbar is pinned: the start of a view is the page top. */
 function scrollToContent() {
-  if (window.scrollY > 0) window.scrollTo({ top: 0, behavior: scrollBehavior() });
+  if (window.scrollY > 0) {
+    window.scrollTo({ top: 0, behavior: scrollBehavior() });
+  }
 }
 
-/** Show either the cross-channel report or the channel detail. */
+/** Show the cross-channel report or the channel detail. */
 function showView() {
   const hasData = (app.summary?.channels || []).length > 0;
   const all = isAll(app.selected);
-  $('flagged').hidden = !hasData || !all;
-  $('detail').hidden = !hasData || all || !app.channel;
+  $("flagged").hidden = !hasData || !all;
+  $("detail").hidden = !hasData || all || !app.channel;
 }
 
 function selectAll() {
@@ -528,68 +737,91 @@ function selectAll() {
   clearExpanded();
   updateHash();
   highlightCard();
-  if (app.summary) renderAlerts(app.summary);
+  if (app.summary) {
+    renderAlerts(app.summary);
+  }
   showView();
 }
 
-// ---------------------------------------------------------------- tab status
-// The browser tab shows the overall health: the Mozilla support favicon with
-// a small status swatch at the bottom right, and a short title prefix.
-const TAB_COLORS = { major: '#d03b3b', spike: '#ec835a', watch: '#fab219', drop: '#2a78d6', ok: '#0ca30c', stale: '#898781' };
+// ------------------------------------------------------------------ tab status
+// The tab shows the overall health: a disc on the favicon and a title prefix.
+const TAB_COLORS = {
+  major: "#d03b3b",
+  spike: "#ec835a",
+  watch: "#fab219",
+  drop: "#2a78d6",
+  ok: "#0ca30c",
+  stale: "#898781",
+};
 const baseIcon = new Image();
-baseIcon.src = new URL('favicon.png', import.meta.url).href;
-let lastTabColor = null;
-baseIcon.addEventListener('load', () => { if (lastTabColor) drawFavicon(lastTabColor); });
+baseIcon.src = new URL("favicon.png", import.meta.url).href;
+let tabColor = null;
+baseIcon.addEventListener("load", () => {
+  if (tabColor) {
+    drawFavicon(tabColor);
+  }
+});
 
+/** Worst visible severity, count per severity, whether the data is stale. */
 function overallHealth(s) {
-  const rows = visibleAlerts(s);
   const counts = {};
-  for (const r of rows) { const sev = sevOf(r); if (sev !== 'ok') counts[sev] = (counts[sev] || 0) + 1; }
-  const worst = ALERT_SEVERITIES.find((kind) => counts[kind]) || 'ok';
-  const stale = s.data_health && s.data_health.status !== 'ok' && s.data_health.status !== 'backfilling';
+  for (const row of visibleAlerts(s)) {
+    const sev = sevOf(row);
+    if (sev !== "ok") {
+      counts[sev] = (counts[sev] || 0) + 1;
+    }
+  }
+  const worst = ALERT_SEVERITIES.find(kind => counts[kind]) || "ok";
+  const health = s.data_health;
+  const stale =
+    !!health && health.status !== "ok" && health.status !== "backfilling";
   return { worst, counts, stale };
 }
 
 function drawFavicon(color) {
   const size = 32;
-  const canvas = document.createElement('canvas');
+  const canvas = document.createElement("canvas");
   canvas.width = canvas.height = size;
-  const ctx = canvas.getContext('2d');
-  if (!ctx) return;
+  const ctx = canvas.getContext("2d");
+  if (!ctx) {
+    return;
+  }
   if (baseIcon.complete && baseIcon.naturalWidth) {
-    // the logo rotated a quarter turn counter-clockwise
-    ctx.save();
+    // the logo, a quarter turn counter-clockwise
     ctx.translate(size / 2, size / 2);
     ctx.rotate(-Math.PI / 2);
     ctx.drawImage(baseIcon, -size / 2, -size / 2, size, size);
-    ctx.restore();
+    ctx.resetTransform();
   }
-  // small status disc, top right
-  const r = 6;
-  const cx = size - r - 1;
-  const cy = r + 1;
+  const r = 6; // status disc, top right
   ctx.beginPath();
-  ctx.arc(cx, cy, r, 0, Math.PI * 2);
+  ctx.arc(size - r - 1, r + 1, r, 0, Math.PI * 2);
   ctx.fillStyle = color;
   ctx.fill();
-  const link = $('favicon');
-  if (link) link.href = canvas.toDataURL('image/png');
+  $("favicon").href = canvas.toDataURL("image/png");
 }
 
 function renderTabStatus(s) {
   const h = overallHealth(s);
-  const label = h.stale ? 'stale' : h.worst === 'ok' ? 'OK'
-    : ALERT_SEVERITIES.filter((kind) => h.counts[kind]).slice(0, 2).map((kind) => `${h.counts[kind]} ${kind}`).join(' · ');
+  let label = "OK";
+  if (h.stale) {
+    label = "stale";
+  } else if (h.worst !== "ok") {
+    label = ALERT_SEVERITIES.filter(kind => h.counts[kind])
+      .slice(0, 2)
+      .map(kind => `${h.counts[kind]} ${kind}`)
+      .join(" · ");
+  }
   document.title = `${label} – Crash spikes`;
-  lastTabColor = h.stale ? TAB_COLORS.stale : TAB_COLORS[h.worst];
-  drawFavicon(lastTabColor);
+  tabColor = TAB_COLORS[h.stale ? "stale" : h.worst];
+  drawFavicon(tabColor);
 }
 
-// ---------------------------------------------------------------- header
-/** "All versions | Current version": shown when the server collects both scopes. */
+// ---------------------------------------------------------------------- header
+/** "Current version | All versions", when the server collects both scopes. */
 function renderScopeControls(s) {
-  const box = $('scope-controls');
-  const scopes = s.scopes || ['all'];
+  const box = $("scope-controls");
+  const scopes = s.scopes || ["all"];
   box.hidden = scopes.length < 2;
   for (const input of box.querySelectorAll('input[name="scope"]')) {
     input.checked = input.value === app.scope;
@@ -597,106 +829,143 @@ function renderScopeControls(s) {
   }
 }
 
-/** Switch scope.  From the toggle the selected channel is kept (the hash gets
- * its prefix); from a hash change the hash owns the selection, so it is re-read
- * by `defaultChannel()` (a deep link to another channel or signature works). */
+/** Switch scope.  From the toggle the selection is kept (the hash gets its
+ * prefix); from a hash change the hash owns the selection and is re-read by
+ * defaultChannel(). */
 async function setScope(scope, { fromHash = false } = {}) {
-  if (scope === app.scope) return;
+  if (scope === app.scope) {
+    return;
+  }
   app.scope = scope;
   clearExpanded();
   app.channel = null;
-  if (fromHash) app.selected = null;
-  else updateHash(); // the cached summary/channel of the other scope stay in `etags`
-  try {
-    await refresh();
-  } catch (e) {
-    showError(`Could not load the ${scope === 'all' ? 'all versions' : 'current version'} view (${e.message})`);
+  if (fromHash) {
+    app.selected = null;
+  } else {
+    updateHash();
   }
+  await refresh();
 }
 
-/** "155" / "140.15" of the version a current-scope channel shows today, or null. */
+/** The version a current-scope channel shows today ("155", "140.15"). */
 function versionTag(c) {
-  return c?.scope === 'current' && c.version ? c.version : null;
+  return c?.scope === "current" && c.version ? c.version : null;
 }
 
 function renderSummary() {
   const s = app.summary;
   renderScopeControls(s);
-  app.hideDrops = s.data_health?.status === 'stale_upstream';
-  for (const label of document.querySelectorAll('#sig-filters .chip-toggle')) {
-    const input = label.querySelector('input');
-    if (input) label.title = chipHelp(input.value);
+  const hideDrops = s.data_health?.status === "stale_upstream";
+  if (hideDrops !== app.hideDrops) {
+    app.hideDrops = hideDrops;
+    rowCache = new WeakMap(); // rows show severities
+  }
+  for (const label of document.querySelectorAll("#sig-filters .chip-toggle")) {
+    label.title = chipHelp(label.querySelector("input").value);
   }
   renderTabStatus(s);
   renderFreshness(s);
   renderBanner(s);
   renderCards(s);
-  if (isAll(app.selected)) renderAlerts(s);
+  if (isAll(app.selected)) {
+    renderAlerts(s);
+  }
 }
 
 function renderFreshness(s) {
-  const p = $('freshness');
-  p.textContent = '';
-  if (!s.as_of) { p.textContent = 'No data yet'; return; }
+  const p = $("freshness");
+  if (!s.as_of) {
+    p.textContent = "No data yet";
+    return;
+  }
   const run = s.last_run || {};
-  p.append(`Data as of ${fmtTime(s.as_of)} (${fmtAgo(s.as_of)}) · last run `);
-  const status = (run.status || 'unknown').toUpperCase();
-  p.append(run.status === 'ok' ? status : el('span', { class: 'bad', title: run.message || '' }, status));
-  if (run.queries != null) p.append(` · ${run.queries} ${run.queries === 1 ? 'query' : 'queries'}`);
-  if (run.failures) p.append(`, ${run.failures} failed`);
+  const status = (run.status || "unknown").toUpperCase();
+  fill(
+    p,
+    `Data as of ${fmtTime(s.as_of)} (${fmtAgo(s.as_of)}) · last run `,
+    run.status === "ok"
+      ? status
+      : el("span", { class: "bad", title: run.message || "" }, status),
+    run.queries != null
+      ? ` · ${run.queries} ${run.queries === 1 ? "query" : "queries"}`
+      : null,
+    run.failures ? `, ${run.failures} failed` : null
+  );
 }
 
 function renderBanner(s) {
-  const banner = $('banner');
-  const health = s.data_health || { status: 'ok' };
-  banner.textContent = '';
-  banner.className = 'banner';
-  if (health.status === 'ok') return;
-  let text = '';
-  if (health.status === 'stale_upstream') {
-    text = `Socorro processing appears delayed${health.since ? ` since ${fmtTime(health.since)}` : ''} — drops are hidden`;
-  } else if (health.status === 'backfilling') {
-    const days = Math.max(0, ...(s.channels || []).map((c) => c.history_days || 0));
-    text = `Backfilling history: ${days} ${days === 1 ? 'day' : 'days'} loaded`;
-    banner.classList.add('is-info');
-  } else if (health.status === 'stale_local') {
-    const finished = s.last_run?.status === 'ok' ? s.last_run.finished : null;
-    text = `Data is stale: last successful run ${finished ? fmtAgo(finished, s.now) : (s.as_of ? fmtAgo(s.as_of, s.now) : 'unknown')}`;
-    banner.classList.add('is-critical');
+  const banner = $("banner");
+  const health = s.data_health || { status: "ok" };
+  banner.className = "banner";
+  if (health.status === "ok") {
+    banner.textContent = "";
+    return;
+  }
+  let text;
+  if (health.status === "stale_upstream") {
+    text = `Socorro processing appears delayed${health.since ? ` since ${fmtTime(health.since)}` : ""} — drops are hidden`;
+  } else if (health.status === "backfilling") {
+    const days = Math.max(
+      0,
+      ...(s.channels || []).map(c => c.history_days || 0)
+    );
+    text = `Backfilling history: ${plural(days, "day")} loaded`;
+    banner.classList.add("is-info");
+  } else if (health.status === "stale_local") {
+    const run = s.last_run;
+    const lastGood = (run?.status === "ok" && run.finished) || s.as_of;
+    text = `Data is stale: last successful run ${lastGood ? fmtAgo(lastGood, s.now) : "unknown"}`;
+    banner.classList.add("is-critical");
   } else {
     text = `Data health: ${health.status}`;
   }
-  banner.append(el('strong', {}, text));
-  if (health.detail) banner.append(el('span', {}, health.detail));
-  if (s.last_run?.status !== 'ok' && s.last_run?.message) banner.append(el('span', {}, `Last run: ${s.last_run.message}`));
+  fill(
+    banner,
+    el("strong", {}, text),
+    health.detail ? el("span", {}, health.detail) : null,
+    s.last_run?.status !== "ok" && s.last_run?.message
+      ? el("span", {}, `Last run: ${s.last_run.message}`)
+      : null
+  );
 }
 
-// ---------------------------------------------------------------- overview cards
+// -------------------------------------------------------------- overview cards
 function renderCards(s) {
-  const wrap = $('channel-cards');
+  const wrap = $("channel-cards");
   const channels = s.channels || [];
   const focus = focusedKey(wrap);
-  $('empty-state').hidden = channels.length > 0;
-  wrap.textContent = '';
+  $("empty-state").hidden = channels.length > 0;
+  const groups = [];
   if (channels.length) {
-    const all = el('div', { class: 'card-group card-group-all' }, el('div', { class: 'card-group-title', 'aria-hidden': 'true' }, '\u00a0'));
-    all.append(el('div', { class: 'card-row' }, allCard(s)));
-    wrap.append(all);
-
-    const groups = new Map();
-    for (const channel of channels) {
-      if (!groups.has(channel.product)) groups.set(channel.product, []);
-      groups.get(channel.product).push(channel);
-    }
-    for (const [product, productChannels] of groups) {
-      const group = el('div', { class: 'card-group', role: 'group', 'aria-label': product, style: `--n:${productChannels.length}` });
-      group.append(el('div', { class: 'card-group-title', 'aria-hidden': 'true' }, product));
-      const row = el('div', { class: 'card-row' });
-      for (const channel of productChannels) row.append(channelCard(channel));
-      group.append(row);
-      wrap.append(group);
+    groups.push(
+      el(
+        "div",
+        { class: "card-group card-group-all" },
+        el("div", { class: "card-group-title", "aria-hidden": "true" }, " "),
+        el("div", { class: "card-row" }, allCard(s))
+      )
+    );
+    for (const [product, list] of Map.groupBy(channels, c => c.product)) {
+      groups.push(
+        el(
+          "div",
+          {
+            class: "card-group",
+            role: "group",
+            "aria-label": product,
+            style: `--n:${list.length}`,
+          },
+          el(
+            "div",
+            { class: "card-group-title", "aria-hidden": "true" },
+            product
+          ),
+          el("div", { class: "card-row" }, ...list.map(channelCard))
+        )
+      );
     }
   }
+  wrap.replaceChildren(...groups);
   highlightCard();
   restoreFocus(wrap, focus);
   showView();
@@ -705,111 +974,218 @@ function renderCards(s) {
 /** Cross-channel card: what is flagged anywhere right now. */
 function allCard(s) {
   const rows = visibleAlerts(s);
-  const worst = rows.map(sevOf).filter((sev) => sev in SEV_RANK && sev !== 'ok')
-    .sort((a, b) => SEV_RANK[a] - SEV_RANK[b])[0] || 'ok';
-  const card = el('button', { type: 'button', class: 'card card-all', 'data-key': ALL_KEY, 'data-focus': `card:${ALL_KEY}`, 'aria-pressed': 'false' });
-  card.append(el('div', { class: 'card-head' }, el('span', { class: 'card-title' }, 'All channels'), chip(worst)));
-  // on its own line: next to the title it wraps and pushes the chip out of the card
-  if (app.scope === 'current') card.append(el('div', { class: 'version-tag card-scope' }, 'current versions'));
-  card.append(el('div', { class: 'tile-label' }, `Flagged, last ${flagWindowHours()} h`));
-  const nchan = new Set(rows.map((r) => `${r.product}/${r.channel}`)).size;
-  card.append(el('div', { class: 'card-value' }, fmtInt(rows.length),
-    el('span', { class: 'vs' }, rows.length ? `flagged in ${plural(nchan, 'channel')}` : 'nothing flagged')));
+  const nchan = new Set(rows.map(channelKey)).size;
   const totals = {};
-  for (const c of s.channels || []) {
-    for (const kind of COUNT_KINDS) totals[kind] = (totals[kind] || 0) + (c.counts?.[kind] || 0);
+  for (const kind of COUNT_KINDS) {
+    totals[kind] = sum((s.channels || []).map(c => c.counts?.[kind] || 0));
   }
-  card.append(countBadges(totals));
-  return card;
+  return el(
+    "button",
+    {
+      type: "button",
+      class: "card card-all",
+      "data-key": ALL_KEY,
+      "data-focus": `card:${ALL_KEY}`,
+      "aria-pressed": "false",
+    },
+    el(
+      "div",
+      { class: "card-head" },
+      el("span", { class: "card-title" }, "All channels"),
+      chip(overallHealth(s).worst)
+    ),
+    // on its own line: next to the title it would push the chip out of the card
+    app.scope === "current"
+      ? el("div", { class: "version-tag card-scope" }, "current versions")
+      : null,
+    el("div", { class: "tile-label" }, `Flagged, last ${flagWindowHours()} h`),
+    el(
+      "div",
+      { class: "card-value" },
+      fmtInt(rows.length),
+      el(
+        "span",
+        { class: "vs" },
+        rows.length
+          ? `flagged in ${plural(nchan, "channel")}`
+          : "nothing flagged"
+      )
+    ),
+    countBadges(totals)
+  );
 }
 
 function channelCard(c) {
   const t = c.total || {};
-  const sev = sevOf(t);
   const key = channelKey(c);
-  const card = el('button', { type: 'button', class: 'card', 'data-key': key, 'data-focus': `card:${key}`, 'aria-pressed': 'false' });
-  // the product is the group's title; keep it in the button's name
   const version = versionTag(c);
-  card.append(el('div', { class: 'card-head' },
-    el('span', { class: 'card-title' }, el('span', { class: 'visually-hidden' }, `${c.product} `), c.channel,
-      version ? el('span', { class: 'version-tag', title: `Only version ${version}, the one current today` }, version) : null),
-    chip(sev)));
-  card.append(el('div', { class: 'tile-label' }, 'Today so far'));
-  card.append(el('div', { class: 'card-value' }, fmtInt(t.observed), el('span', { class: 'vs' }, `vs ${fmtInt(t.expected)} expected`)));
-  card.append(el('div', { class: 'card-delta' }, deltaText(t), dots(t.confidence)));
   const note = stormNote(t);
-  if (note) card.append(el('div', { class: 'card-note' }, note));
-  card.append(countBadges(c.counts));
-  // product logo, bottom right (decorative: the product is in the name)
   const logo = logoFor(c.product, c.channel);
-  if (logo) card.append(el('img', { class: 'card-logo', src: new URL(logo, import.meta.url).href, alt: '', 'aria-hidden': 'true', width: 20, height: 20 }));
-  return card;
+  return el(
+    "button",
+    {
+      type: "button",
+      class: "card",
+      "data-key": key,
+      "data-focus": `card:${key}`,
+      "aria-pressed": "false",
+    },
+    el(
+      "div",
+      { class: "card-head" },
+      // the product is the group's title; keep it in the button's name
+      el(
+        "span",
+        { class: "card-title" },
+        el("span", { class: "visually-hidden" }, `${c.product} `),
+        c.channel,
+        version
+          ? el(
+              "span",
+              {
+                class: "version-tag",
+                title: `Only version ${version}, the one current today`,
+              },
+              version
+            )
+          : null
+      ),
+      chip(sevOf(t))
+    ),
+    el("div", { class: "tile-label" }, "Today so far"),
+    el(
+      "div",
+      { class: "card-value" },
+      fmtInt(t.observed),
+      el("span", { class: "vs" }, `vs ${fmtInt(t.expected)} expected`)
+    ),
+    el("div", { class: "card-delta" }, deltaText(t), dots(t.confidence)),
+    note ? el("div", { class: "card-note" }, note) : null,
+    countBadges(c.counts),
+    // decorative: the product is already in the name
+    logo
+      ? el("img", {
+          class: "card-logo",
+          src: new URL(logo, import.meta.url).href,
+          alt: "",
+          "aria-hidden": "true",
+          width: 20,
+          height: 20,
+        })
+      : null
+  );
+}
+
+/** Channel logo.  Nightly and Daily have their own; Firefox beta wears the
+ * Developer Edition one (the beta channel itself ships the release logo). */
+function logoFor(product, channel) {
+  const family = {
+    Firefox: "firefox",
+    Fenix: "firefox",
+    Thunderbird: "thunderbird",
+  }[product];
+  if (!family) {
+    return null;
+  }
+  const suffix =
+    channel === "nightly" || channel === "beta" ? `-${channel}` : "";
+  return `logo-${family}${suffix}.svg`;
 }
 
 function highlightCard() {
-  for (const card of document.querySelectorAll('.card')) {
-    const on = !!app.selected && card.dataset.key === channelKey(app.selected);
-    card.classList.toggle('is-selected', on);
-    card.setAttribute('aria-pressed', String(on));
+  const key = app.selected ? channelKey(app.selected) : null;
+  for (const card of document.querySelectorAll(".card")) {
+    const on = card.dataset.key === key;
+    card.classList.toggle("is-selected", on);
+    card.setAttribute("aria-pressed", String(on));
   }
 }
 
 async function selectChannel(product, channel, signature = null) {
-  if (app.selected && !isAll(app.selected) && app.selected.product === product && app.selected.channel === channel && app.channel) {
-    if (signature) focusSignature(signature);
-    else scrollToContent();
+  if (isSelected(product, channel) && app.channel) {
+    if (signature) {
+      focusSignature(signature);
+    } else {
+      scrollToContent();
+    }
     return;
   }
-  app.pendingFocus = signature; // consumed by the render of the loaded channel
+  app.pendingFocus = signature; // consumed when the channel renders
   try {
     await loadChannel(product, channel);
-    showError('');
-    if (!signature) scrollToContent();
+    showError("");
+    if (!signature) {
+      scrollToContent();
+    }
   } catch (e) {
     app.pendingFocus = null;
     showError(`Could not load ${product} ${channel} (${e.message})`);
   }
 }
 
-// ---------------------------------------------------------------- flagged now
+// ----------------------------------------------------------------- flagged now
 function renderAlerts(s) {
   const rows = visibleAlerts(s);
-  const sub = document.querySelector('#flagged-title .sub');
-  if (sub) sub.textContent = `flagged in the last ${flagWindowHours()} h`;
-  $('flagged-meta').textContent = rows.length ? `${rows.length} flagged ${rows.length === 1 ? 'signature' : 'signatures'} across ${plural(new Set(rows.map(channelKey)).size, 'channel')}` : `Nothing flagged in the last ${flagWindowHours()} h`;
-  const wrap = $('alerts-table');
+  const hours = flagWindowHours();
+  document.querySelector("#flagged-title .sub").textContent =
+    `flagged in the last ${hours} h`;
+  $("flagged-meta").textContent = rows.length
+    ? `${plural(rows.length, "flagged signature")} across ${plural(new Set(rows.map(channelKey)).size, "channel")}`
+    : `Nothing flagged in the last ${hours} h`;
+  const wrap = $("alerts-table");
   const focus = focusedKey(wrap);
-  wrap.textContent = '';
-  if (!rows.length) return;
-  const sorted = rows.slice().sort((a, b) => rowRank(a) - rowRank(b) || Math.abs(b.excess || 0) - Math.abs(a.excess || 0));
-  wrap.append(buildTable(sorted, { withChannel: true, sortable: false, onRow: (row) => selectChannel(row.product, row.channel, row.signature) }));
+  const sorted = rows.toSorted(
+    (a, b) =>
+      rowRank(a) - rowRank(b) ||
+      Math.abs(b.excess || 0) - Math.abs(a.excess || 0)
+  );
+  const onRow = row => selectChannel(row.product, row.channel, row.signature);
+  fill(
+    wrap,
+    rows.length
+      ? buildTable(sorted, { withChannel: true, sortable: false, onRow })
+      : null
+  );
   restoreFocus(wrap, focus);
 }
 
-// ---------------------------------------------------------------- channel detail
-/** The "All" range is only offered once more than 180 days of history exist
- * (Socorro keeps 6 months; the dashboard accumulates its own history). */
+// -------------------------------------------------------------- channel detail
+/** The "All" range needs more than 180 days of history (Socorro keeps 6
+ * months; the dashboard accumulates its own). */
 function renderRangeOptions(ch) {
   const history = ch.model?.history_days || ch.history_days || 0;
-  const all = $('range-all');
+  const all = $("range-all");
   all.hidden = history <= 180;
   if (all.hidden && app.days > 180) {
     app.days = 180;
-    const radio = document.querySelector('#range-controls input[name="days"][value="180"]');
-    if (radio) radio.checked = true;
+    document.querySelector(
+      '#range-controls input[name="days"][value="180"]'
+    ).checked = true;
   }
 }
 
 function renderDetail() {
   const ch = app.channel;
-  const section = $('detail');
-  section.hidden = false;
+  $("detail").hidden = false;
   renderRangeOptions(ch);
-  const title = $('detail-title');
-  title.textContent = `${ch.product} ${ch.channel}`;
   const version = versionTag(ch);
-  if (version) title.append(el('span', { class: 'version-tag', title: 'Only the version current on each day (the cycle restarts at every release)' }, `version ${version}`));
-  $('detail-meta').textContent = `${fmtDateLong(parseDay(ch.day))} · data as of ${fmtTime(ch.as_of)}${ch.scope === 'current' ? ' · current version only' : ''}`;
+  fill(
+    $("detail-title"),
+    `${ch.product} ${ch.channel}`,
+    version
+      ? el(
+          "span",
+          {
+            class: "version-tag",
+            title:
+              "Only the version current on each day (the cycle restarts at every release)",
+          },
+          `version ${version}`
+        )
+      : null
+  );
+  $("detail-meta").textContent =
+    `${fmtDateLong(parseDay(ch.day))} · data as of ${fmtTime(ch.as_of)}${ch.scope === "current" ? " · current version only" : ""}`;
   renderTiles(ch);
   renderDrivers(ch);
   renderCharts(ch);
@@ -822,74 +1198,150 @@ function renderDetail() {
   }
 }
 
-function tile(label, valueNodes, subNodes, { chipNode, note, counts } = {}) {
-  const t = el('div', { class: 'tile' });
-  t.append(el('div', { class: 'tile-head' }, el('span', { class: 'tile-label' }, label), chipNode));
-  t.append(el('div', { class: 'tile-value' }, ...valueNodes));
-  if (subNodes) t.append(el('div', { class: 'tile-sub' }, ...subNodes));
-  if (note) t.append(el('div', { class: 'tile-note' }, note));
-  if (counts) t.append(counts);
-  return t;
+function tile(label, value, sub, { chipNode, note, counts } = {}) {
+  return el(
+    "div",
+    { class: "tile" },
+    el(
+      "div",
+      { class: "tile-head" },
+      el("span", { class: "tile-label" }, label),
+      chipNode
+    ),
+    el("div", { class: "tile-value" }, ...value),
+    sub ? el("div", { class: "tile-sub" }, ...sub) : null,
+    note ? el("div", { class: "tile-note" }, note) : null,
+    counts
+  );
 }
+
+const vs = text => el("span", { class: "vs" }, text);
 
 function renderTiles(ch) {
-  const wrap = $('tiles');
-  wrap.textContent = '';
   const t = ch.total || {};
   const sev = sevOf(t);
-  // Today so far
-  wrap.append(tile('Today so far',
-    [fmtCompact(t.observed), el('span', { class: 'vs' }, `vs ${fmtCompact(t.expected)} expected`)],
-    t.z == null ? ['too early to score'] : [deltaText(t), dots(t.confidence)],
-    { chipNode: chip(sev), note: stormNote(t) || (t.since && sev !== 'ok' ? `flagged since ${fmtTime(t.since)}` : null) }));
-  // Projected
-  if (t.projected != null) {
-    wrap.append(tile('Projected today',
-      [fmtCompact(t.projected), el('span', { class: 'vs' }, `vs ${fmtCompact(t.expected_day)} expected`)],
-      [`${fmtCompact(t.projected_lo)}–${fmtCompact(t.projected_hi)} likely · ${Math.round((t.elapsed_fraction || 0) * 100)} % of the day's crashes usually in by now`]));
+  const elapsed = `${Math.round((t.elapsed_fraction || 0) * 100)} % of the day's crashes`;
+  const c = ch.counts || {};
+  const flagged = sum(
+    displayedSeverities(ALERT_SEVERITIES).map(kind => c[kind] || 0)
+  );
+  const extras = [
+    c.new ? `${c.new} new` : null,
+    c.storm ? plural(c.storm, "storm") : null,
+    c.noise ? `${c.noise} noise` : null,
+  ].filter(Boolean);
+
+  let projected;
+  if (t.projected == null) {
+    projected = tile(
+      "Projected today",
+      ["—"],
+      [`Too early to project (${elapsed} are usually in by now)`]
+    );
   } else {
-    wrap.append(tile('Projected today', ['—'],
-      [`Too early to project (${Math.round((t.elapsed_fraction || 0) * 100)} % of the day's crashes are usually in by now)`]));
+    projected = tile(
+      "Projected today",
+      [
+        fmtCompact(t.projected),
+        vs(`vs ${fmtCompact(t.expected_day)} expected`),
+      ],
+      [
+        `${fmtCompact(t.projected_lo)}–${fmtCompact(t.projected_hi)} likely · ${elapsed} usually in by now`,
+      ]
+    );
   }
-  // Yesterday
+  let yesterday;
   const y = ch.yesterday;
   if (y) {
-    const finalNote = y.final == null ? null : y.final ? '(final)' : '(still updating)';
+    let finalNote = null;
+    if (y.final != null) {
+      finalNote = y.final ? " (final)" : " (still updating)";
+    }
     const ysev = sevOf(y);
-    wrap.append(tile('Yesterday',
-      [fmtCompact(y.observed), el('span', { class: 'vs' }, `vs ${fmtCompact(y.expected)} expected`)],
-      [deltaText(y), dots(y.confidence), finalNote ? ` ${finalNote}` : null],
-      { chipNode: ysev !== 'ok' ? chip(ysev) : null }));
+    yesterday = tile(
+      "Yesterday",
+      [fmtCompact(y.observed), vs(`vs ${fmtCompact(y.expected)} expected`)],
+      [deltaText(y), dots(y.confidence), finalNote],
+      { chipNode: ysev === "ok" ? null : chip(ysev) }
+    );
   } else {
-    wrap.append(tile('Yesterday', ['—'], ['No data for yesterday yet']));
+    yesterday = tile("Yesterday", ["—"], ["No data for yesterday yet"]);
   }
-  // Flagged
-  const c = ch.counts || {};
-  const flagged = displayedSeverities(ALERT_SEVERITIES).reduce((n, kind) => n + (c[kind] || 0), 0);
-  wrap.append(tile('Flagged', [String(flagged), el('span', { class: 'vs' }, `of ${fmtInt(c.scored)} scored`)],
-    [[c.new ? `${c.new} new` : null, c.storm ? plural(c.storm, 'storm') : null, c.noise ? `${c.noise} noise` : null].filter(Boolean).join(' · ') || 'nothing unusual'],
-    { counts: countBadges(c) }));
+  fill(
+    $("tiles"),
+    tile(
+      "Today so far",
+      [fmtCompact(t.observed), vs(`vs ${fmtCompact(t.expected)} expected`)],
+      t.z == null ? ["too early to score"] : [deltaText(t), dots(t.confidence)],
+      {
+        chipNode: chip(sev),
+        note:
+          stormNote(t) ||
+          (t.since && sev !== "ok"
+            ? `flagged since ${fmtTime(t.since)}`
+            : null),
+      }
+    ),
+    projected,
+    yesterday,
+    tile(
+      "Flagged",
+      [String(flagged), vs(`of ${fmtInt(c.scored)} scored`)],
+      [extras.join(" · ") || "nothing unusual"],
+      { counts: countBadges(c) }
+    )
+  );
 }
 
+/** "Driven by sig (40 %), sig (12 %)" with badges; a link focuses its row. */
 function renderDrivers(ch) {
-  const p = $('drivers');
+  const p = $("drivers");
   const focus = focusedKey(p);
-  p.textContent = '';
-  const drivers = (ch.total?.drivers || []).filter((d) => d.share != null);
+  const drivers = (ch.total?.drivers || []).filter(d => d.share != null);
   const note = stormNote(ch.total);
   p.hidden = !drivers.length && !note;
-  if (p.hidden) return;
-  if (note) p.append(el('span', { class: 'storm-note' }, note.charAt(0).toUpperCase() + note.slice(1)), drivers.length ? ' · ' : '');
-  if (!drivers.length) return;
-  p.append('Driven by ');
+  const parts = [];
+  if (note) {
+    parts.push(
+      el(
+        "span",
+        { class: "storm-note" },
+        note.charAt(0).toUpperCase() + note.slice(1)
+      ),
+      drivers.length ? " · " : null
+    );
+  }
+  if (drivers.length) {
+    parts.push("Driven by ");
+  }
   drivers.forEach((d, i) => {
-    if (i) p.append(', ');
-    const link = el('a', { href: '#', title: d.signature, 'data-sig': d.signature, 'data-focus': `driver:${d.signature}` }, `${midTruncate(d.signature, 48)} (${Math.round(d.share * 100)} %)`);
-    link.addEventListener('click', (e) => { e.preventDefault(); focusSignature(d.signature); });
-    p.append(link);
-    if (d.storm) p.append(' ', badge('crash-loop'), d.installs != null ? ` ${plural(d.installs, 'install')}` : '');
-    if (d.noise) p.append(' ', badge('noise'));
+    if (i) {
+      parts.push(", ");
+    }
+    parts.push(
+      el(
+        "a",
+        {
+          href: "#",
+          title: d.signature,
+          "data-sig": d.signature,
+          "data-focus": `driver:${d.signature}`,
+        },
+        `${midTruncate(d.signature, 48)} (${Math.round(d.share * 100)} %)`
+      )
+    );
+    if (d.storm) {
+      parts.push(
+        " ",
+        badge("crash-loop"),
+        d.installs != null ? ` ${plural(d.installs, "install")}` : null
+      );
+    }
+    if (d.noise) {
+      parts.push(" ", badge("noise"));
+    }
   });
+  fill(p, ...parts);
   restoreFocus(p, focus);
 }
 
@@ -897,665 +1349,1261 @@ function productOf(data) {
   return data.product || data.row?.product || app.channel?.product;
 }
 
-function dailySpec(data, extra = {}) {
-  const daily = data.daily || { start: [] };
-  return { ...daily, dates: daily.start || [], releases: data.releases || app.channel?.releases || [], events: eventsFor(productOf(data)), height: CHART_HEIGHT, ...extra };
+function dailySpec(data, extra) {
+  const daily = data.daily || {};
+  return {
+    ...daily,
+    dates: daily.start || [],
+    releases: data.releases || app.channel?.releases || [],
+    events: eventsFor(productOf(data)),
+    height: CHART_HEIGHT,
+    ...extra,
+  };
 }
 
-function hourlySpec(data, extra = {}) {
-  // the day lets the chart translate UTC hour buckets into local time
-  return { ...(data.hourly || { hours: [] }), day: data.day || data.row?.day || app.channel?.day, events: eventsFor(productOf(data)), height: CHART_HEIGHT, ...extra };
+/** The day lets the chart translate UTC hour buckets into local time. */
+function hourlySpec(data, extra) {
+  return {
+    hours: [],
+    ...data.hourly,
+    day: data.day || data.row?.day || app.channel?.day,
+    events: eventsFor(productOf(data)),
+    height: CHART_HEIGHT,
+    ...extra,
+  };
 }
 
-/** Every "Today by hour" title shows the clock in use (UTC or the local zone). */
+/** Every "Today by hour" title shows the clock in use (UTC or local zone). */
 function renderZoneLabels() {
   const label = zoneLabel();
-  for (const n of document.querySelectorAll('.tz-label')) n.textContent = label;
-}
-
-function renderCharts(ch) {
-  $('daily-sub').textContent = `${ch.daily?.start?.length || 0} ${ch.daily?.granularity === 'week' ? 'weeks' : 'days'}`;
-  const names = { hourly: { ariaLabel: `Crashes per hour today, ${ch.product} ${ch.channel}` },
-    daily: { ariaLabel: `Daily crashes, ${ch.product} ${ch.channel}` } };
-  if (!app.charts.intraday) {
-    app.charts.intraday = barChart($('intraday-chart'), hourlySpec(ch, names.hourly));
-    app.charts.daily = lineChart($('daily-chart'), dailySpec(ch, names.daily));
-  } else {
-    app.charts.intraday.update(hourlySpec(ch, names.hourly));
-    app.charts.daily.update(dailySpec(ch, names.daily));
+  for (const n of document.querySelectorAll(".tz-label")) {
+    n.textContent = label;
   }
 }
 
-// ---------------------------------------------------------------- model explanation
-/** 1-based day of the cycle: explicit when the API gives it, else an unambiguous factor match. */
-function cycleDay(model) {
-  const explicit = model.today_factors?.cycle_day ?? model.cycle_day;
-  if (explicit != null) return explicit;
-  const f = model.today_factors?.cycle;
-  const arr = model.factors?.cycle || [];
-  if (f == null || !arr.length) return null;
-  const hits = arr.map((v, i) => (Math.abs(v - f) < 1e-6 ? i + 1 : null)).filter((v) => v != null);
-  return hits.length === 1 ? hits[0] : null;
+function renderCharts(ch) {
+  const n = ch.daily?.start?.length || 0;
+  $("daily-sub").textContent =
+    `${n} ${ch.daily?.granularity === "week" ? "weeks" : "days"}`;
+  const hourly = hourlySpec(ch, {
+    ariaLabel: `Crashes per hour today, ${ch.product} ${ch.channel}`,
+  });
+  const daily = dailySpec(ch, {
+    ariaLabel: `Daily crashes, ${ch.product} ${ch.channel}`,
+  });
+  if (app.charts.intraday) {
+    app.charts.intraday.update(hourly);
+    app.charts.daily.update(daily);
+  } else {
+    app.charts.intraday = barChart($("intraday-chart"), hourly);
+    app.charts.daily = lineChart($("daily-chart"), daily);
+  }
 }
 
-function modelSummaryText(model, day) {
-  if (!model) return '';
-  const parts = [];
-  const wd = WDAYS[new Date(parseDay(day)).getUTCDay()];
-  const tf = model.today_factors || {};
-  const comp = model.components || {};
-  parts.push(`Today: ${wd}${tf.weekly != null ? ` ×${tf.weekly.toFixed(2)}` : ''}`);
-  if (comp.cycle?.active && tf.cycle != null) {
-    const d = cycleDay(model);
-    let when = '';
-    if (d && isReleaseCycle(model)) when = d === 1 ? ': release day' : `: day ${d - 1} after the release`;
-    else if (d) when = ` day ${d}/${model.factors.cycle.length}`;
-    parts.push(`${cycleName(model)}${when} ×${tf.cycle.toFixed(2)}`);
-  } else if (comp.cycle) parts.push(`${cycleName(model)} n/a (${comp.cycle.cycles} / ${comp.cycle.min_cycles} cycles)`);
-  if (comp.yearly) parts.push(comp.yearly.active ? `yearly${tf.yearly != null ? ` ×${tf.yearly.toFixed(2)}` : ' active'}` : `yearly n/a (${comp.yearly.cycles} / ${comp.yearly.min_cycles} cycles)`);
-  parts.push(`level ${fmtCompact(model.level)}`);
-  parts.push(`dispersion ${model.dispersion != null ? model.dispersion.toFixed(1) : '—'}`);
-  return parts.join(' · ');
-}
-
-// the current scope counts the 28-day cycle from the version's release:
-// its factors are the rollout ramp of a new version
+// ----------------------------------------------------------- model explanation
+// In the current scope the 28-day cycle counts from the version's release:
+// its factors are the rollout ramp of a new version.
 function isReleaseCycle(model) {
-  return model?.cycle_from === 'release';
+  return model?.cycle_from === "release";
 }
 
 function cycleName(model) {
-  return isReleaseCycle(model) ? 'rollout' : 'cycle';
+  return isReleaseCycle(model) ? "rollout" : "cycle";
 }
 
-function componentLine(name, c, borrowed, model) {
-  const cycleLabel = isReleaseCycle(model) ? 'rollout ramp (days since the release)' : 'release cycle (28 days)';
-  const label = { weekly: 'weekly seasonality', cycle: cycleLabel, yearly: 'yearly seasonality' }[name] || name;
-  if (!c) return `${label}: unknown`;
-  const src = borrowed?.includes(name) ? ', borrowed from the channel' : '';
-  return c.active ? `${label}: active (${c.cycles} cycles${src})` : `${label}: not enough history (${c.cycles} / ${c.min_cycles} cycles)`;
+/** 1-based day of the cycle: from the API, else an unambiguous factor match. */
+function cycleDay(model) {
+  const explicit = model.today_factors?.cycle_day ?? model.cycle_day;
+  if (explicit != null) {
+    return explicit;
+  }
+  const f = model.today_factors?.cycle;
+  if (f == null) {
+    return null;
+  }
+  const hits = (model.factors?.cycle || []).flatMap((v, i) =>
+    Math.abs(v - f) < 1e-6 ? [i + 1] : []
+  );
+  return hits.length === 1 ? hits[0] : null;
+}
+
+const factor = x => `×${x.toFixed(2)}`;
+const fmtDispersion = model =>
+  model.dispersion != null ? model.dispersion.toFixed(1) : "—";
+
+function modelSummaryText(model, day) {
+  if (!model) {
+    return "";
+  }
+  const tf = model.today_factors || {};
+  const comp = model.components || {};
+  const parts = [
+    `Today: ${WDAYS[new Date(parseDay(day)).getUTCDay()]}${tf.weekly != null ? ` ${factor(tf.weekly)}` : ""}`,
+  ];
+  if (comp.cycle?.active && tf.cycle != null) {
+    const d = cycleDay(model);
+    let when = "";
+    if (d && isReleaseCycle(model)) {
+      when = d === 1 ? ": release day" : `: day ${d - 1} after the release`;
+    } else if (d) {
+      when = ` day ${d}/${model.factors.cycle.length}`;
+    }
+    parts.push(`${cycleName(model)}${when} ${factor(tf.cycle)}`);
+  } else if (comp.cycle) {
+    parts.push(
+      `${cycleName(model)} n/a (${comp.cycle.cycles} / ${comp.cycle.min_cycles} cycles)`
+    );
+  }
+  if (comp.yearly?.active) {
+    parts.push(
+      tf.yearly != null ? `yearly ${factor(tf.yearly)}` : "yearly active"
+    );
+  } else if (comp.yearly) {
+    parts.push(
+      `yearly n/a (${comp.yearly.cycles} / ${comp.yearly.min_cycles} cycles)`
+    );
+  }
+  parts.push(
+    `level ${fmtCompact(model.level)}`,
+    `dispersion ${fmtDispersion(model)}`
+  );
+  return parts.join(" · ");
+}
+
+function componentLine(name, c, model) {
+  const label = {
+    weekly: "weekly seasonality",
+    cycle: isReleaseCycle(model)
+      ? "rollout ramp (days since the release)"
+      : "release cycle (28 days)",
+    yearly: "yearly seasonality",
+  }[name];
+  if (!c) {
+    return `${label}: unknown`;
+  }
+  if (!c.active) {
+    return `${label}: not enough history (${c.cycles} / ${c.min_cycles} cycles)`;
+  }
+  const src = model.borrowed?.includes(name)
+    ? ", borrowed from the channel"
+    : "";
+  return `${label}: active (${c.cycles} cycles${src})`;
 }
 
 function renderModel(model, ch) {
-  $('model-summary').textContent = modelSummaryText(model, ch.day);
-  const body = $('model-body');
-  body.textContent = '';
-  if (!model) return;
-  const todayIdx = (new Date(parseDay(ch.day)).getUTCDay() + 6) % 7;
-  const weekly = el('div', { class: 'model-block' }, el('h4', {}, 'Weekday factors'));
-  const wMini = el('div');
-  weekly.append(wMini);
-  body.append(weekly);
-  if (model.factors?.weekly) miniFactors(wMini, { values: model.factors.weekly, labels: ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'], highlight: todayIdx, kind: 'bar' });
-  const cycle = el('div', { class: 'model-block' }, el('h4', {}, isReleaseCycle(model)
-    ? 'Rollout factors (day 1 = release day, then the days after it)'
-    : 'Release-cycle factors (day of the 28-day cycle)'));
-  const cMini = el('div');
-  cycle.append(cMini);
-  body.append(cycle);
-  if (model.factors?.cycle) miniFactors(cMini, { values: model.factors.cycle, highlight: (cycleDay(model) || 0) - 1, kind: 'line', ticks: [1, 8, 15, 22, 28] });
-  const comps = el('ul');
-  for (const k of ['weekly', 'cycle', 'yearly']) comps.append(el('li', {}, componentLine(k, model.components?.[k], model.borrowed, model)));
-  const disp = model.dispersion != null ? model.dispersion.toFixed(1) : '—';
-  body.append(el('div', { class: 'model-block' }, el('h4', {}, 'Components and band'), comps,
-    el('p', {}, `Expected = level (${fmtInt(model.level)}, median of the last 14 de-seasonalised days) × weekday factor × ${isReleaseCycle(model) ? 'rollout' : 'cycle'} factor${model.components?.yearly?.active ? ' × yearly factor' : ''}. `
-      + `Residuals are measured on the Anscombe scale, 2·(√(observed + ⅜) − √(expected + ⅜)), and divided by the dispersion ${disp}; `
-      + `the grey bands are ±3 (watch) and ±5 (spike) dispersions around the expectation. History: ${model.history_days ?? '—'} days.`)));
+  $("model-summary").textContent = modelSummaryText(model, ch.day);
+  const body = $("model-body");
+  if (!model) {
+    body.textContent = "";
+    return;
+  }
+  const weekly = el("div");
+  if (model.factors?.weekly) {
+    miniFactors(weekly, {
+      values: model.factors.weekly,
+      labels: ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"],
+      highlight: (new Date(parseDay(ch.day)).getUTCDay() + 6) % 7,
+      kind: "bar",
+    });
+  }
+  const cycle = el("div");
+  if (model.factors?.cycle) {
+    miniFactors(cycle, {
+      values: model.factors.cycle,
+      highlight: (cycleDay(model) || 0) - 1,
+      kind: "line",
+      ticks: [1, 8, 15, 22, 28],
+    });
+  }
+  const yearly = model.components?.yearly?.active ? " × yearly factor" : "";
+  fill(
+    body,
+    el(
+      "div",
+      { class: "model-block" },
+      el("h4", {}, "Weekday factors"),
+      weekly
+    ),
+    el(
+      "div",
+      { class: "model-block" },
+      el(
+        "h4",
+        {},
+        isReleaseCycle(model)
+          ? "Rollout factors (day 1 = release day, then the days after it)"
+          : "Release-cycle factors (day of the 28-day cycle)"
+      ),
+      cycle
+    ),
+    el(
+      "div",
+      { class: "model-block" },
+      el("h4", {}, "Components and band"),
+      el(
+        "ul",
+        {},
+        ...["weekly", "cycle", "yearly"].map(k =>
+          el("li", {}, componentLine(k, model.components?.[k], model))
+        )
+      ),
+      el(
+        "p",
+        {},
+        `Expected = level (${fmtInt(model.level)}, median of the last 14 de-seasonalised days) × weekday factor × ${cycleName(model)} factor${yearly}. ` +
+          `Residuals are measured on the Anscombe scale, 2·(√(observed + ⅜) − √(expected + ⅜)), and divided by the dispersion ${fmtDispersion(model)}; ` +
+          `the grey bands are ±3 (watch) and ±5 (spike) dispersions around the expectation. History: ${model.history_days ?? "—"} days.`
+      )
+    )
+  );
 }
 
-// ---------------------------------------------------------------- signature table
+// ------------------------------------------------------------- signature table
 function readFilters() {
-  const data = new FormData($('sig-filters'));
+  const data = new FormData($("sig-filters"));
   return {
-    severities: new Set(data.getAll('sev')),
-    text: String(data.get('query') || '').trim().toLowerCase(),
-    hideNoise: data.has('hide-noise'),
-    minCrashes: Math.max(0, Number(data.get('min-crashes')) || 0),
-    showStorms: data.has('show-storms'),
-    showUnflagged: data.has('show-unflagged'),
+    severities: new Set(data.getAll("sev")),
+    text: String(data.get("query") || "")
+      .trim()
+      .toLowerCase(),
+    hideNoise: data.has("hide-noise"),
+    minCrashes: Math.max(0, Number(data.get("min-crashes")) || 0),
+    showStorms: data.has("show-storms"),
+    showUnflagged: data.has("show-unflagged"),
   };
 }
 
 function rowCategory(row) {
-  if (sevOf(row) !== 'ok' || isNew(row)) return 'flagged';
-  return row.storm ? 'storm' : 'unflagged';
+  if (isFlagged(row)) {
+    return "flagged";
+  }
+  return row.storm ? "storm" : "unflagged";
 }
 
 function matchesSeverityFilter(row, severities) {
   const severity = sevOf(row);
-  return (severity !== 'ok' && severities.has(severity)) || (isNew(row) && severities.has('new'));
+  return (
+    (severity !== "ok" && severities.has(severity)) ||
+    (isNew(row) && severities.has("new"))
+  );
 }
 
 function visibleRows() {
   const rows = app.channel?.signatures || [];
   const filters = readFilters();
   const shown = [];
-  let unflaggedCount = 0;
-  let stormCount = 0;
+  const counts = { storm: 0, unflagged: 0 };
   for (const row of rows) {
-    if ((filters.hideNoise && row.noise) || (row.observed || 0) < filters.minCrashes ||
-        (filters.text && !row.signature.toLowerCase().includes(filters.text))) continue;
+    if (
+      (filters.hideNoise && row.noise) ||
+      (row.observed || 0) < filters.minCrashes ||
+      (filters.text && !row.signature.toLowerCase().includes(filters.text))
+    ) {
+      continue;
+    }
     const category = rowCategory(row);
-    if (category === 'storm') stormCount += 1;
-    else if (category === 'unflagged') unflaggedCount += 1;
-    if ((category === 'flagged' && matchesSeverityFilter(row, filters.severities)) ||
-        (category === 'storm' && filters.showStorms) ||
-        (category === 'unflagged' && filters.showUnflagged)) shown.push(row);
+    let wanted;
+    if (category === "flagged") {
+      wanted = matchesSeverityFilter(row, filters.severities);
+    } else {
+      counts[category] += 1;
+      wanted =
+        category === "storm" ? filters.showStorms : filters.showUnflagged;
+    }
+    if (wanted) {
+      shown.push(row);
+    }
   }
-  return { shown, unflaggedCount, stormCount, total: rows.length };
+  return {
+    shown,
+    stormCount: counts.storm,
+    unflaggedCount: counts.unflagged,
+    total: rows.length,
+  };
 }
 
 const SORTERS = {
-  severity: (r) => rowRank(r) * 1e12 - Math.abs(r.excess || 0),
-  channel: (r) => channelKey(r),
-  signature: (r) => r.signature.toLowerCase(),
-  observed: (r) => r.observed,
-  expected: (r) => r.expected,
-  excess: (r) => r.excess,
-  recent: (r) => r.recent?.excess ?? null,
-  installs: (r) => r.installs,
-  since: (r) => (sevOf(r) === 'ok' && !isNew(r) ? null : sinceValue(r)),
-  trend: (r) => r.level_change_28,
-  bug: (r) => shownBug(r)?.id ?? null,
+  severity: r => rowRank(r) * 1e12 - Math.abs(r.excess || 0),
+  channel: channelKey,
+  signature: r => r.signature.toLowerCase(),
+  observed: r => r.observed,
+  expected: r => r.expected,
+  excess: r => r.excess,
+  recent: r => r.recent?.excess ?? null,
+  installs: r => r.installs,
+  since: r => (isFlagged(r) ? sinceValue(r) : null),
+  trend: r => r.level_change_28,
+  bug: r => shownBug(r)?.id ?? null,
 };
-const DEFAULT_DIR = { severity: 'asc', channel: 'asc', signature: 'asc', since: 'desc' };
+const DEFAULT_DIR = {
+  severity: "asc",
+  channel: "asc",
+  signature: "asc",
+  since: "desc",
+};
 
+/** Sort by app.sort; rows without a value go last whatever the direction. */
 function sortRows(rows) {
   const { key, dir } = app.sort;
   const get = SORTERS[key] || SORTERS.severity;
-  const sign = dir === 'asc' ? 1 : -1;
-  return rows.slice().sort((a, b) => {
+  const sign = dir === "asc" ? 1 : -1;
+  return rows.toSorted((a, b) => {
     const va = get(a);
     const vb = get(b);
-    if (va == null && vb == null) return 0;
-    if (va == null) return 1;
-    if (vb == null) return -1;
-    if (typeof va === 'string') return sign * va.localeCompare(vb);
-    return sign * (va - vb);
+    if (va == null || vb == null) {
+      return (va == null) - (vb == null);
+    }
+    return typeof va === "string"
+      ? sign * va.localeCompare(vb)
+      : sign * (va - vb);
   });
+}
+
+function rowElement(sig) {
+  return document.querySelector(
+    `#signature-table tr.row[data-sig="${CSS.escape(sig)}"]`
+  );
 }
 
 function renderSignatures() {
   const { shown, unflaggedCount, stormCount, total } = visibleRows();
-  $('unflagged-count').textContent = String(unflaggedCount);
-  $('storm-count').textContent = plural(stormCount, 'storm');
+  $("unflagged-count").textContent = String(unflaggedCount);
+  $("storm-count").textContent = plural(stormCount, "storm");
+  const noMatch = shown.length
+    ? ""
+    : " — no signature matches the current filters";
   const metaText = total
-    ? `${shown.length} of ${total} scored signatures shown${shown.length ? '' : ' — no signature matches the current filters'}`
-    : 'No scored signatures yet';
-  const meta = $('signatures-meta');
-  if (meta.textContent !== metaText) meta.textContent = metaText; // role=status: announce changes only
-  const wrap = $('signature-table');
-  const focus = focusedKey(wrap); // the table is rebuilt: keep the keyboard user's place
-  wrap.textContent = '';
-  const open = new Set(app.expanded.keys());
-  if (!shown.length) {
-    wrap.append(el('div', { class: 'table-empty' }, total ? 'No signature matches the current filters' : 'No scored signatures yet'));
-    return;
+    ? `${shown.length} of ${total} scored signatures shown${noMatch}`
+    : "No scored signatures yet";
+  const meta = $("signatures-meta");
+  if (meta.textContent !== metaText) {
+    meta.textContent = metaText; // role=status: announce changes only
   }
-  wrap.append(buildTable(sortRows(shown), { withChannel: false, sortable: true, onRow: toggleRow }));
-  for (const sig of open) {
-    const tr = wrap.querySelector(`tr.row[data-sig="${cssEscape(sig)}"]`);
-    if (tr) reattachExpanded(tr, sig);
-    else app.expanded.delete(sig);
+  const wrap = $("signature-table");
+  const focus = focusedKey(wrap); // keep the keyboard user's place across the rebuild
+  if (shown.length) {
+    fill(
+      wrap,
+      buildTable(sortRows(shown), {
+        withChannel: false,
+        sortable: true,
+        onRow: toggleRow,
+      })
+    );
+  } else {
+    fill(
+      wrap,
+      el(
+        "div",
+        { class: "table-empty" },
+        total
+          ? "No signature matches the current filters"
+          : "No scored signatures yet"
+      )
+    );
+  }
+  for (const sig of app.expanded.keys()) {
+    const tr = rowElement(sig);
+    if (tr) {
+      reattachExpanded(tr, sig);
+    } else {
+      collapseRow(sig); // filtered out: its panel goes with it
+    }
   }
   restoreFocus(wrap, focus);
 }
 
-function cssEscape(s) {
-  return typeof CSS !== 'undefined' && CSS.escape ? CSS.escape(s) : s.replace(/["\\]/g, '\\$&');
-}
-
 function columns(withChannel) {
-  const hours = app.channel?.signatures?.find((r) => r.recent)?.recent?.hours || app.summary?.alerts?.find((r) => r.recent)?.recent?.hours || 3;
+  const recentHours = rows => rows?.find(r => r.recent)?.recent.hours;
+  const hours =
+    recentHours(app.channel?.signatures) ||
+    recentHours(app.summary?.alerts) ||
+    3;
   return [
-    { key: 'severity', label: 'Severity' },
-    ...(withChannel ? [{ key: 'channel', label: 'Channel' }] : []),
-    { key: 'signature', label: 'Signature' },
-    { key: 'observed', label: 'Today so far', num: true },
-    { key: 'expected', label: 'Expected', num: true },
-    { key: 'excess', label: 'Delta', num: true },
-    { key: 'recent', label: `Last ${hours}h`, num: true, hint: 'observed / expected', title: 'observed / expected over the last hours' },
-    { key: 'installs', label: 'Installs', num: true },
-    { key: 'since', label: 'Since' },
-    { key: 'trend', label: '28 days' },
-    { key: 'bug', label: 'Bug', title: 'Bugs whose crash signature is this one. Green: filed for this spike (once the crash was there). Red: only bugs from before the spike (a known crash, spiking again).' },
-  ];
+    { key: "severity", label: "Severity" },
+    withChannel ? { key: "channel", label: "Channel" } : null,
+    { key: "signature", label: "Signature" },
+    { key: "observed", label: "Today so far", num: true },
+    { key: "expected", label: "Expected", num: true },
+    { key: "excess", label: "Delta", num: true },
+    {
+      key: "recent",
+      label: `Last ${hours}h`,
+      num: true,
+      hint: "observed / expected",
+      title: "observed / expected over the last hours",
+    },
+    { key: "installs", label: "Installs", num: true },
+    { key: "since", label: "Since" },
+    { key: "trend", label: "28 days" },
+    {
+      key: "bug",
+      label: "Bug",
+      title:
+        "Bugs whose crash signature is this one. Green: filed for this spike (once the crash was there). Red: only bugs from before the spike (a known crash, spiking again).",
+    },
+  ].filter(Boolean);
 }
 
-function buildTable(rows, { withChannel, sortable, onRow }) {
-  const cols = columns(withChannel);
-  const table = el('table', { class: 'rows' });
-  const thead = el('thead');
-  const hr = el('tr');
-  for (const c of cols) {
-    const th = el('th', { scope: 'col', class: c.num ? 'num' : null, title: c.title || null });
-    if (sortable) {
-      const active = app.sort.key === c.key;
-      if (active) th.setAttribute('aria-sort', app.sort.dir === 'asc' ? 'ascending' : 'descending');
-      const btn = el('button', { type: 'button', 'data-focus': `sort:${c.key}` }, c.label,
-        c.hint ? el('span', { class: 'visually-hidden' }, `, ${c.hint}`) : '',
-        el('span', { class: 'sort-ind', 'aria-hidden': 'true' }, active ? (app.sort.dir === 'asc' ? '▲' : '▼') : ''));
-      btn.addEventListener('click', () => {
-        if (app.sort.key === c.key) app.sort.dir = app.sort.dir === 'asc' ? 'desc' : 'asc';
-        else app.sort = { key: c.key, dir: DEFAULT_DIR[c.key] || 'desc' };
-        renderSignatures();
-      });
-      th.append(btn);
-    } else {
-      th.append(c.label);
-      if (c.hint) th.append(el('span', { class: 'visually-hidden' }, `, ${c.hint}`));
-    }
-    hr.append(th);
+function headerCell(c, sortable) {
+  const attrs = {
+    scope: "col",
+    class: c.num ? "num" : null,
+    title: c.title || null,
+  };
+  const hint = c.hint
+    ? el("span", { class: "visually-hidden" }, `, ${c.hint}`)
+    : null;
+  if (!sortable) {
+    return el("th", attrs, c.label, hint);
   }
-  thead.append(hr);
-  const tbody = el('tbody');
-  for (const row of rows) tbody.append(buildRow(row, withChannel, onRow));
-  table.append(thead, tbody);
+  const active = app.sort.key === c.key;
+  const asc = app.sort.dir === "asc";
+  let indicator = "";
+  if (active) {
+    attrs["aria-sort"] = asc ? "ascending" : "descending";
+    indicator = asc ? "▲" : "▼";
+  }
+  const btn = el(
+    "button",
+    { type: "button", "data-focus": `sort:${c.key}` },
+    c.label,
+    hint,
+    el("span", { class: "sort-ind", "aria-hidden": "true" }, indicator)
+  );
+  btn.addEventListener("click", () => {
+    if (active) {
+      app.sort.dir = asc ? "desc" : "asc";
+    } else {
+      app.sort = { key: c.key, dir: DEFAULT_DIR[c.key] || "desc" };
+    }
+    renderSignatures();
+  });
+  return el("th", attrs, btn);
+}
+
+/** The rows table.  Interactions are delegated to the table: a click on a
+ * row, its expander or its channel button calls onRow(row, tr); the copy and
+ * permalink buttons act on the row's signature. */
+function buildTable(rows, { withChannel, sortable, onRow }) {
+  const rowOf = new Map(); // tr -> row
+  const tbody = el("tbody");
+  for (const row of rows) {
+    const tr = buildRow(row, withChannel);
+    rowOf.set(tr, row);
+    tbody.append(tr);
+  }
+  const head = el(
+    "tr",
+    {},
+    ...columns(withChannel).map(c => headerCell(c, sortable))
+  );
+  const table = el("table", { class: "rows" }, el("thead", {}, head), tbody);
+  table.addEventListener("click", e => {
+    const tr = e.target.closest("tr.row");
+    if (!tr) {
+      return;
+    }
+    const row = rowOf.get(tr);
+    const control = e.target.closest("a, button, input");
+    if (!control) {
+      onRow(row, tr);
+    } else if (control.matches(".row-expander, .chip-btn")) {
+      onRow(row, tr);
+    } else if (control.matches(".copy-btn")) {
+      copySignature(control, row.signature);
+    } else if (control.matches(".perma-btn")) {
+      e.preventDefault();
+      history.replaceState(null, "", control.getAttribute("href"));
+      focusSignature(row.signature);
+      announce("Link to this signature is in the address bar");
+    }
+  });
+  table.addEventListener("keydown", e => {
+    // Enter or Space on a focused row; controls inside handle their own keys
+    if (!e.target.matches("tr.row") || (e.key !== "Enter" && e.key !== " ")) {
+      return;
+    }
+    e.preventDefault();
+    onRow(rowOf.get(e.target), e.target);
+  });
   return table;
 }
 
-function buildRow(row, withChannel, onRow) {
-  const sev = sevOf(row);
-  // the row is clickable; keyboard users get a real button (the expander,
-  // or the channel chip in the cross-channel table)
-  const tr = el('tr', { class: 'row', tabindex: -1, 'data-sig': row.signature });
-  // severity + badges
-  const badges = el('div', { class: 'badge-set' });
-  const fresh = isNew(row);
-  if (sev !== 'ok' || !fresh) badges.append(chip(sev));
-  if (fresh) badges.append(chip('new'));
-  // a flag carried over from a previous day (scores are per UTC day; the flag
-  // window keeps yesterday's spikes listed): say so, with that day's numbers
-  if (row.flag && flagAge(row) > 0 && (sev !== 'ok' || fresh)) badges.append(el('span', { class: 'flag-when', title: flagTitle(row) }, flagWhen(row)));
-  if (row.storm) badges.append(badge('storm'));
-  if (row.noise) badges.append(badge('noise'));
-  tr.append(el('td', {}, badges));
-  if (withChannel) {
-    const open = el('button', { type: 'button', class: 'chip chip-neutral chip-btn', 'data-focus': `open:${row.signature}`,
-      'aria-label': `Open ${row.product} ${row.channel} at this signature` }, `${row.product} ${row.channel}`);
-    open.addEventListener('click', (e) => { e.stopPropagation(); onRow(row, tr); });
-    tr.append(el('td', {}, open));
+async function copySignature(btn, signature) {
+  try {
+    await navigator.clipboard.writeText(signature);
+    btn.textContent = "✓";
+    announce("Signature copied");
+    setTimeout(() => {
+      btn.textContent = "⧉";
+    }, 1200);
+  } catch {
+    announce("Could not copy the signature");
   }
-  // signature
-  const sigCell = el('td', { class: 'sig' });
-  if (!withChannel) {
-    const expander = el('button', { type: 'button', class: 'row-expander', 'aria-expanded': 'false', 'data-focus': `exp:${row.signature}`,
-      'aria-label': `Details of ${midTruncate(row.signature, 60)}` }, '▸');
-    expander.addEventListener('click', (e) => { e.stopPropagation(); onRow(row, tr); });
-    sigCell.append(expander);
+}
+
+// Row elements are reused across re-sorts and filter changes; the cache
+// empties with the data (new row objects) and with app.hideDrops.
+let rowCache = new WeakMap(); // row -> tr
+
+function buildRow(row, withChannel) {
+  let tr = rowCache.get(row);
+  if (!tr) {
+    tr = renderRow(row, withChannel);
+    rowCache.set(row, tr);
   }
-  sigCell.append(el('a', { href: row.socorro_url || '#', title: row.signature, target: '_blank', rel: 'noopener', 'data-focus': `link:${row.signature}` }, midTruncate(row.signature, 70),
-    el('span', { class: 'visually-hidden' }, ' (crash-stats, opens in a new tab)')));
-  const copy = el('button', { type: 'button', class: 'copy-btn', 'aria-label': 'Copy signature', title: 'Copy signature', 'data-focus': `copy:${row.signature}` }, '⧉');
-  copy.addEventListener('click', async (e) => {
-    e.stopPropagation();
-    try {
-      await navigator.clipboard.writeText(row.signature);
-      copy.textContent = '✓';
-      announce('Signature copied');
-      setTimeout(() => { copy.textContent = '⧉'; }, 1200);
-    } catch { announce('Could not copy the signature'); }
-  });
-  sigCell.append(copy);
-  if (!withChannel) {
-    const permalink = el('a', { class: 'perma-btn', href: channelHash(row.product || app.selected?.product, row.channel || app.selected?.channel, row.signature),
-      title: 'Link to this signature', 'aria-label': 'Link to this signature', 'data-focus': `perma:${row.signature}` }, '#');
-    permalink.addEventListener('click', (e) => {
-      e.stopPropagation();
-      e.preventDefault();
-      history.replaceState(null, '', permalink.getAttribute('href'));
-      focusSignature(row.signature);
-      announce('Link to this signature is in the address bar');
-    });
-    sigCell.append(permalink);
-  }
-  tr.append(sigCell);
-  tr.append(el('td', { class: 'num' }, fmtInt(row.observed)));
-  tr.append(el('td', { class: 'num' }, fmtInt(row.expected)));
-  const ratio = fmtRatio(row.ratio);
-  // scores live in title attributes for mouse users and as hidden text for the rest
-  const hidden = (text) => el('span', { class: 'visually-hidden' }, text);
-  tr.append(el('td', { class: 'num', title: row.z != null ? `z ${fmtZ(row.z)}` : 'not scored' }, `${fmtSigned(row.excess)}${ratio ? ` ${ratio}` : ''}`, dots(row.confidence),
-    row.z != null ? hidden(` (z ${fmtZ(row.z)})`) : ''));
-  if (row.recent && row.recent.z != null) {
-    tr.append(el('td', { class: 'num', title: `z ${fmtZ(row.recent.z)}${row.recent.ratio != null ? ` · ${fmtRatio(row.recent.ratio)}` : ''}` },
-      `${fmtInt(row.recent.observed)} / ${fmtInt(row.recent.expected)}`, hidden(` (z ${fmtZ(row.recent.z)})`)));
-  } else if (row.recent) {
-    // too few expected crashes to score the window: show the activity, muted
-    tr.append(el('td', { class: 'num muted', title: row.recent_reason || 'not scored' }, `${fmtInt(row.recent.observed)} / ${fmtInt(row.recent.expected)}`,
-      hidden(` (${row.recent_reason || 'not scored'})`)));
-  } else {
-    tr.append(el('td', { class: 'num' }, el('span', { class: 'dash', title: row.recent_reason || 'not scorable' }, '—'), hidden(row.recent_reason || 'not scorable')));
-  }
-  const inst = el('td', { class: 'num', title: installsTitle(row) }, fmtInt(row.installs), el('span', { class: 'visually-hidden' }, ` (${installsTitle(row)})`));
-  if (row.storm) inst.append(' ', badge('crash-loop'));
-  tr.append(inst);
-  tr.append(el('td', { class: 'since' }, sev === 'ok' && !row.is_new ? '—' : sinceText(row)));
-  const sparkCell = el('td', { class: 'spark' });
-  if (row.spark?.dates?.length) sparkline(sparkCell, { ...row.spark, severity: sev, partial: row.partial !== false });
-  tr.append(sparkCell);
-  tr.append(bugCell(row));
-  tr.addEventListener('click', (e) => {
-    if (e.target.closest('a, button, input')) return;
-    onRow(row, tr);
-  });
-  tr.addEventListener('keydown', (e) => {
-    if (e.target !== tr) return; // buttons and links inside handle their own keys
-    if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); onRow(row, tr); }
-  });
   return tr;
 }
 
-const RESOLVED = new Set(['RESOLVED', 'VERIFIED', 'CLOSED']);
+const hidden = text => el("span", { class: "visually-hidden" }, text);
 
-/** The bug a row shows: the newest one filed after its spike started, else the newest. */
+function renderRow(row, withChannel) {
+  const sev = sevOf(row);
+  const fresh = isNew(row);
+  const sig = row.signature;
+  // the row is clickable; keyboard users get a real button (the expander,
+  // or the channel button in the cross-channel table)
+  const tr = el("tr", { class: "row", tabindex: -1, "data-sig": sig });
+
+  const badges = el("div", { class: "badge-set" });
+  if (sev !== "ok" || !fresh) {
+    badges.append(chip(sev));
+  }
+  if (fresh) {
+    badges.append(chip("new"));
+  }
+  // a flag carried over from a previous day (scores are per UTC day; the
+  // flag window keeps yesterday's spikes listed)
+  if (row.flag && flagAge(row) > 0 && isFlagged(row)) {
+    badges.append(
+      el("span", { class: "flag-when", title: flagTitle(row) }, flagWhen(row))
+    );
+  }
+  if (row.storm) {
+    badges.append(badge("storm"));
+  }
+  if (row.noise) {
+    badges.append(badge("noise"));
+  }
+  tr.append(el("td", {}, badges));
+
+  if (withChannel) {
+    const open = el(
+      "button",
+      {
+        type: "button",
+        class: "chip chip-neutral chip-btn",
+        "data-focus": `open:${sig}`,
+        "aria-label": `Open ${row.product} ${row.channel} at this signature`,
+      },
+      `${row.product} ${row.channel}`
+    );
+    tr.append(el("td", {}, open));
+  }
+  const expander = withChannel
+    ? null
+    : el(
+        "button",
+        {
+          type: "button",
+          class: "row-expander",
+          "aria-expanded": "false",
+          "data-focus": `exp:${sig}`,
+          "aria-label": `Details of ${midTruncate(sig, 60)}`,
+        },
+        "▸"
+      );
+  const permalink = withChannel
+    ? null
+    : el(
+        "a",
+        {
+          class: "perma-btn",
+          href: channelHash(
+            row.product || app.selected?.product,
+            row.channel || app.selected?.channel,
+            sig
+          ),
+          title: "Link to this signature",
+          "aria-label": "Link to this signature",
+          "data-focus": `perma:${sig}`,
+        },
+        "#"
+      );
+  tr.append(
+    el(
+      "td",
+      { class: "sig" },
+      expander,
+      el(
+        "a",
+        {
+          href: row.socorro_url || "#",
+          title: sig,
+          target: "_blank",
+          rel: "noopener",
+          "data-focus": `link:${sig}`,
+        },
+        midTruncate(sig, 70),
+        hidden(" (crash-stats, opens in a new tab)")
+      ),
+      el(
+        "button",
+        {
+          type: "button",
+          class: "copy-btn",
+          "aria-label": "Copy signature",
+          title: "Copy signature",
+          "data-focus": `copy:${sig}`,
+        },
+        "⧉"
+      ),
+      permalink
+    ),
+    el("td", { class: "num" }, fmtInt(row.observed)),
+    el("td", { class: "num" }, fmtInt(row.expected))
+  );
+
+  // scores are in title attributes for mouse users and hidden text for the rest
+  const ratio = fmtRatio(row.ratio);
+  const z = row.z != null ? `z ${fmtZ(row.z)}` : null;
+  tr.append(
+    el(
+      "td",
+      { class: "num", title: z || "not scored" },
+      `${fmtSigned(row.excess)}${ratio ? ` ${ratio}` : ""}`,
+      dots(row.confidence),
+      z ? hidden(` (${z})`) : null
+    )
+  );
+  tr.append(recentCell(row));
+  const inst = el(
+    "td",
+    { class: "num", title: installsTitle(row) },
+    fmtInt(row.installs),
+    hidden(` (${installsTitle(row)})`)
+  );
+  if (row.storm) {
+    inst.append(" ", badge("crash-loop"));
+  }
+  tr.append(
+    inst,
+    el("td", { class: "since" }, isFlagged(row) ? sinceText(row) : "—")
+  );
+  const spark = el("td", { class: "spark" });
+  if (row.spark?.dates?.length) {
+    sparkline(spark, {
+      ...row.spark,
+      severity: sev,
+      partial: row.partial !== false,
+    });
+  }
+  tr.append(spark, bugCell(row));
+  return tr;
+}
+
+/** "Last Nh" cell: observed / expected, muted when the window is unscored. */
+function recentCell(row) {
+  const r = row.recent;
+  if (!r) {
+    const why = row.recent_reason || "not scorable";
+    return el(
+      "td",
+      { class: "num" },
+      el("span", { class: "dash", title: why }, "—"),
+      hidden(why)
+    );
+  }
+  const text = `${fmtInt(r.observed)} / ${fmtInt(r.expected)}`;
+  if (r.z == null) {
+    const why = row.recent_reason || "not scored";
+    return el(
+      "td",
+      { class: "num muted", title: why },
+      text,
+      hidden(` (${why})`)
+    );
+  }
+  const z = `z ${fmtZ(r.z)}`;
+  return el(
+    "td",
+    {
+      class: "num",
+      title: r.ratio != null ? `${z} · ${fmtRatio(r.ratio)}` : z,
+    },
+    text,
+    hidden(` (${z})`)
+  );
+}
+
+const RESOLVED = new Set(["RESOLVED", "VERIFIED", "CLOSED"]);
+
+/** The bug a row shows: the newest filed after the spike, else the newest. */
 function shownBug(row) {
   const bugs = row.bugs || [];
-  return bugs.find((b) => b.after) || bugs[0] || null;
+  return bugs.find(b => b.after) || bugs[0] || null;
 }
 
 function bugTitle(b) {
-  if (b.restricted) return 'Restricted bug';
-  const filed = b.created ? `filed ${b.created.slice(0, 16).replace('T', ' ')} UTC` : 'filing time unknown';
-  const when = b.after === true ? ', for this spike (once the crash was there)' : b.after === false ? ', before the spike: a known crash' : '';
-  const state = [b.status, b.resolution].filter(Boolean).join(' ');
-  return `Bug ${b.id}${b.summary ? `: ${b.summary}` : ''}\n${filed}${when}${state ? ` · ${state}` : ''}`;
+  if (b.restricted) {
+    return "Restricted bug";
+  }
+  const filed = b.created
+    ? `filed ${b.created.slice(0, 16).replace("T", " ")} UTC`
+    : "filing time unknown";
+  let when = "";
+  if (b.after === true) {
+    when = ", for this spike (once the crash was there)";
+  } else if (b.after === false) {
+    when = ", before the spike: a known crash";
+  }
+  const state = [b.status, b.resolution].filter(Boolean).join(" ");
+  return `Bug ${b.id}${b.summary ? `: ${b.summary}` : ""}\n${filed}${when}${state ? ` · ${state}` : ""}`;
 }
 
-/** The bug column: the newest bug filed after the spike started (green), else the
- * newest bug (red while the row is flagged: known before the spike), the others in
- * the tooltip; struck through when resolved. */
+/** Bug column: the shown bug (green when filed for the spike, red when only
+ * known before it, struck through when resolved); the others in a tooltip. */
 function bugCell(row) {
-  const td = el('td', { class: 'num' });
-  const bugs = row.bugs || [];
   const b = shownBug(row);
-  if (!b) { td.append(el('span', { class: 'dash' }, '—')); return td; }
-  const cls = ['bug', b.after === true ? 'bug-after' : b.after === false ? 'bug-before' : null, RESOLVED.has(b.status) ? 'bug-closed' : null, b.restricted ? 'bug-restricted' : null].filter(Boolean).join(' ');
-  const hidden = b.after === true ? ' (filed for this spike)' : b.after === false ? ' (filed before the spike)' : b.restricted ? ' (restricted bug)' : '';
-  const link = el('a', { class: cls, href: `https://bugzilla.mozilla.org/${b.id}`, target: '_blank', rel: 'noopener', title: bugTitle(b) });
-  if (b.restricted) { const lock = iconSvg('lock', 11); lock.classList.add('bug-lock'); link.append(lock); }
-  if (b.after === true) link.append(el('span', { class: 'bug-mark', 'aria-hidden': 'true' }, '✓ ')); // not colour alone
-  link.append(String(b.id), el('span', { class: 'visually-hidden' }, `${hidden}, opens in a new tab`));
-  td.append(link);
-  const others = bugs.filter((x) => x !== b);
-  if (others.length) td.append(el('span', { class: 'bug-more', title: others.map(bugTitle).join('\n\n') }, ` +${others.length}`));
-  return td;
+  if (!b) {
+    return el("td", { class: "num" }, el("span", { class: "dash" }, "—"));
+  }
+  const classes = ["bug"];
+  let note = "";
+  if (b.after === true) {
+    classes.push("bug-after");
+    note = " (filed for this spike)";
+  } else if (b.after === false) {
+    classes.push("bug-before");
+    note = " (filed before the spike)";
+  } else if (b.restricted) {
+    note = " (restricted bug)";
+  }
+  if (RESOLVED.has(b.status)) {
+    classes.push("bug-closed");
+  }
+  let lock = null;
+  if (b.restricted) {
+    classes.push("bug-restricted");
+    lock = iconSvg("lock", 11);
+    lock.classList.add("bug-lock");
+  }
+  const link = el(
+    "a",
+    {
+      class: classes.join(" "),
+      href: `https://bugzilla.mozilla.org/${b.id}`,
+      target: "_blank",
+      rel: "noopener",
+      title: bugTitle(b),
+    },
+    lock,
+    b.after === true
+      ? el("span", { class: "bug-mark", "aria-hidden": "true" }, "✓ ")
+      : null, // not colour alone
+    String(b.id),
+    hidden(`${note}, opens in a new tab`)
+  );
+  const others = (row.bugs || []).filter(x => x !== b);
+  return el(
+    "td",
+    { class: "num" },
+    link,
+    others.length
+      ? el(
+          "span",
+          { class: "bug-more", title: others.map(bugTitle).join("\n\n") },
+          ` +${others.length}`
+        )
+      : null
+  );
 }
 
-// ---------------------------------------------------------------- row expansion
+// --------------------------------------------------------------- row expansion
 function toggleRow(row, tr) {
-  if (app.expanded.has(row.signature)) collapseRow(row.signature);
-  else expandRow(row, tr);
+  if (app.expanded.has(row.signature)) {
+    collapseRow(row.signature);
+  } else {
+    expandRow(row, tr);
+  }
+}
+
+function markExpanded(tr, on) {
+  tr.classList.toggle("is-expanded", on);
+  const btn = tr.querySelector(".row-expander");
+  if (btn) {
+    btn.setAttribute("aria-expanded", String(on));
+    btn.textContent = on ? "▾" : "▸";
+  }
 }
 
 function collapseRow(sig) {
   const st = app.expanded.get(sig);
-  if (!st) return;
-  st.tr.classList.remove('is-expanded');
-  const btn = st.tr.querySelector('.row-expander');
-  if (btn) { btn.setAttribute('aria-expanded', 'false'); btn.textContent = '▸'; }
+  if (!st) {
+    return;
+  }
+  markExpanded(st.tr, false);
   st.detail.remove();
-  for (const c of Object.values(st.charts)) c.destroy?.();
+  for (const c of Object.values(st.charts)) {
+    c.destroy();
+  }
   app.expanded.delete(sig);
 }
 
 function expandRow(row, tr) {
-  const detail = el('tr', { class: 'row-detail' });
-  const td = el('td', { colspan: String(tr.children.length) });
-  detail.append(td);
+  const status = el("p", { class: "detail-note", role: "status" });
+  const td = el("td", { colspan: String(tr.children.length) }, status);
+  const detail = el("tr", { class: "row-detail" }, td);
   tr.after(detail);
-  tr.classList.add('is-expanded');
-  const btn = tr.querySelector('.row-expander');
-  if (btn) { btn.setAttribute('aria-expanded', 'true'); btn.textContent = '▾'; }
-  const status = el('p', { class: 'detail-note', role: 'status' });
-  const st = { tr, detail, td, charts: {}, row, data: null, statusEl: status };
+  markExpanded(tr, true);
+  const st = {
+    tr,
+    detail,
+    td,
+    statusEl: status,
+    charts: {},
+    row,
+    data: null,
+    panel: null,
+  };
   app.expanded.set(row.signature, st);
-  td.append(status);
-  setTimeout(() => { if (!st.panel) status.textContent = 'Loading…'; }, 50); // live region exists before its text
+  setTimeout(() => {
+    if (!st.panel) {
+      status.textContent = "Loading…"; // the live region exists before its text
+    }
+  }, 50);
   loadSignature(st);
 }
 
 function reattachExpanded(tr, sig) {
   const st = app.expanded.get(sig);
   tr.after(st.detail);
-  tr.classList.add('is-expanded');
-  const btn = tr.querySelector('.row-expander');
-  if (btn) { btn.setAttribute('aria-expanded', 'true'); btn.textContent = '▾'; }
+  markExpanded(tr, true);
   st.tr = tr;
 }
 
 async function loadSignature(st) {
   const { product, channel } = app.selected;
   try {
-    const data = await fetchJSON('signature', { product, channel, signature: st.row.signature, days: app.days, granularity: app.granularity });
-    // same data as what the panel shows: nothing to redraw
-    if (st.panel && data === st.data) return;
+    const data = await fetchJSON("signature", {
+      ...channelParams(product, channel),
+      signature: st.row.signature,
+    });
+    if (
+      app.expanded.get(st.row.signature) !== st ||
+      (st.panel && data === st.data)
+    ) {
+      return; // collapsed meanwhile, or same data as shown
+    }
     st.data = data;
     renderSignaturePanel(st);
   } catch (e) {
     st.panel = null;
-    st.td.textContent = '';
-    st.statusEl.className = 'detail-note';
+    st.statusEl.className = "detail-note";
     st.statusEl.textContent = `Could not load this signature (${e.message})`;
-    st.td.append(st.statusEl);
+    st.td.replaceChildren(st.statusEl);
   }
 }
 
 function signatureNotes(data, r) {
   const notes = [];
-  if (!data.hourly) notes.push('No hourly data for this signature (it was below the per-hour top-200 cut).');
-  if (r.recent == null || r.recent.z == null) notes.push(`Last hours not scored${r.recent_reason ? `: ${r.recent_reason}` : ''}.`);
-  if (r.z == null) notes.push('Today not scored yet (expected so far is too small).');
-  return notes.join(' ');
+  if (!data.hourly) {
+    notes.push(
+      "No hourly data for this signature (it was below the per-hour top-200 cut)."
+    );
+  }
+  if (r.recent?.z == null) {
+    notes.push(
+      `Last hours not scored${r.recent_reason ? `: ${r.recent_reason}` : ""}.`
+    );
+  }
+  if (r.z == null) {
+    notes.push("Today not scored yet (expected so far is too small).");
+  }
+  return notes.join(" ");
 }
 
 function signatureModelText(data, r) {
-  return modelSummaryText(data.model, r.day || app.channel.day)
-    + (data.model?.borrowed?.length ? ` · ${data.model.borrowed.join(' and ')} factors borrowed from the channel` : '')
-    + (data.hourly?.profile_source ? ` · hourly profile: ${data.hourly.profile_source === 'own' ? 'this signature' : 'channel'}` : '');
+  const parts = [modelSummaryText(data.model, r.day || app.channel.day)];
+  if (data.model?.borrowed?.length) {
+    parts.push(
+      `${data.model.borrowed.join(" and ")} factors borrowed from the channel`
+    );
+  }
+  if (data.hourly?.profile_source) {
+    parts.push(
+      `hourly profile: ${data.hourly.profile_source === "own" ? "this signature" : "channel"}`
+    );
+  }
+  return parts.join(" · ");
 }
 
 function createSignaturePanel(st) {
-  st.td.textContent = '';
-  if (st.statusEl) {
-    st.statusEl.className = 'visually-hidden';
-    st.statusEl.textContent = 'Details loaded';
-    st.td.append(st.statusEl);
+  st.statusEl.className = "visually-hidden";
+  st.statusEl.textContent = "Details loaded";
+  st.modelEl = el("p", { class: "detail-model full" });
+  st.noteEl = el("p", { class: "detail-note full", hidden: true });
+  st.intradayEl = el("div");
+  st.dailyEl = el("div");
+  st.panel = el(
+    "div",
+    { class: "detail-panel" },
+    st.modelEl,
+    st.noteEl,
+    el(
+      "div",
+      { class: "chart-card" },
+      el(
+        "h3",
+        {},
+        "Today by hour ",
+        el("span", { class: "sub tz-label" }, zoneLabel())
+      ),
+      st.intradayEl
+    ),
+    el(
+      "div",
+      { class: "chart-card" },
+      el("h3", {}, "Daily crashes"),
+      st.dailyEl
+    )
+  );
+  st.td.replaceChildren(st.statusEl, st.panel);
+  for (const c of Object.values(st.charts)) {
+    c.destroy();
   }
-  const panel = el('div', { class: 'detail-panel' });
-  st.modelEl = el('p', { class: 'detail-model full' });
-  panel.append(st.modelEl);
-  st.noteEl = el('p', { class: 'detail-note full', hidden: true });
-  panel.append(st.noteEl);
-  const intradayCard = el('div', { class: 'chart-card' }, el('h3', {}, 'Today by hour ', el('span', { class: 'sub tz-label' }, zoneLabel())));
-  st.intradayEl = el('div');
-  intradayCard.append(st.intradayEl);
-  const dailyCard = el('div', { class: 'chart-card' }, el('h3', {}, 'Daily crashes'));
-  st.dailyEl = el('div');
-  dailyCard.append(st.dailyEl);
-  panel.append(intradayCard, dailyCard);
-  st.td.append(panel);
-  st.panel = panel;
-  for (const c of Object.values(st.charts)) c.destroy?.();
   st.charts = {};
 }
 
-/** Build the expanded panel once; later refreshes update its text and charts in place
- * (keeps chart zoom, log/table toggles and focus). */
+/** Build the panel once; later refreshes update text and charts in place
+ * (keeps zoom, log/table toggles and focus). */
 function renderSignaturePanel(st) {
   const { data, row } = st;
   const r = data.row || row;
-  const shortSignature = midTruncate(r.signature, 60);
-  const intraday = hourlySpec(data, { emptyMessage: 'No hourly data for this signature', ariaLabel: `Crashes per hour today, ${shortSignature}` });
-  const daily = dailySpec(data, { ariaLabel: `Daily crashes, ${shortSignature}` });
-  const create = !st.panel || !st.panel.isConnected;
-  if (create) createSignaturePanel(st);
-
+  const short = midTruncate(r.signature, 60);
+  const hourly = hourlySpec(data, {
+    emptyMessage: "No hourly data for this signature",
+    ariaLabel: `Crashes per hour today, ${short}`,
+  });
+  const daily = dailySpec(data, { ariaLabel: `Daily crashes, ${short}` });
+  const create = !st.panel?.isConnected;
+  if (create) {
+    createSignaturePanel(st);
+  }
   st.modelEl.textContent = signatureModelText(data, r);
   const notes = signatureNotes(data, r);
   st.noteEl.textContent = notes;
   st.noteEl.hidden = !notes;
   if (create) {
-    st.charts.intraday = barChart(st.intradayEl, intraday);
+    st.charts.intraday = barChart(st.intradayEl, hourly);
     st.charts.daily = lineChart(st.dailyEl, daily);
   } else {
-    st.charts.intraday.update(intraday);
+    st.charts.intraday.update(hourly);
     st.charts.daily.update(daily);
   }
 }
 
-async function refreshExpanded() {
-  await Promise.all([...app.expanded.values()].map((st) => loadSignature(st)));
+function refreshExpanded() {
+  return Promise.all([...app.expanded.values()].map(loadSignature));
 }
 
 function clearExpanded() {
-  for (const sig of [...app.expanded.keys()]) collapseRow(sig);
+  for (const sig of app.expanded.keys()) {
+    collapseRow(sig);
+  }
 }
 
+/** Scroll to, expand and focus a signature row, relaxing filters hiding it. */
 function focusSignature(sig) {
-  const rows = app.channel?.signatures || [];
-  const row = rows.find((r) => r.signature === sig);
-  if (!row) { showError(`No scored row today for "${midTruncate(sig, 80)}" in ${app.selected?.product} ${app.selected?.channel}`); return; }
+  const row = (app.channel?.signatures || []).find(r => r.signature === sig);
+  if (!row) {
+    showError(
+      `No scored row today for "${midTruncate(sig, 80)}" in ${app.selected?.product} ${app.selected?.channel}`
+    );
+    return;
+  }
   const filters = readFilters();
   const category = rowCategory(row);
   let changed = false;
-  if (row.noise && filters.hideNoise) { $('hide-noise').checked = false; changed = true; }
-  if (category === 'storm' && !filters.showStorms) { $('show-storms').checked = true; changed = true; }
-  else if (category === 'unflagged' && !filters.showUnflagged) { $('show-unflagged').checked = true; changed = true; }
-  if (filters.text && !sig.toLowerCase().includes(filters.text)) { $('sig-search').value = ''; changed = true; }
-  if ((row.observed || 0) < filters.minCrashes) { $('min-crashes').value = '0'; changed = true; }
-  if (category === 'flagged' && !matchesSeverityFilter(row, filters.severities)) {
-    const severity = sevOf(row) === 'ok' ? 'new' : sevOf(row);
-    document.querySelector(`#sig-filters input[value="${severity}"]`).checked = true;
+  const relax = (id, prop, value) => {
+    $(id)[prop] = value;
+    changed = true;
+  };
+  if (row.noise && filters.hideNoise) {
+    relax("hide-noise", "checked", false);
+  }
+  if (category === "storm" && !filters.showStorms) {
+    relax("show-storms", "checked", true);
+  }
+  if (category === "unflagged" && !filters.showUnflagged) {
+    relax("show-unflagged", "checked", true);
+  }
+  if (filters.text && !sig.toLowerCase().includes(filters.text)) {
+    relax("sig-search", "value", "");
+  }
+  if ((row.observed || 0) < filters.minCrashes) {
+    relax("min-crashes", "value", "0");
+  }
+  if (
+    category === "flagged" &&
+    !matchesSeverityFilter(row, filters.severities)
+  ) {
+    const severity = sevOf(row) === "ok" ? "new" : sevOf(row);
+    document.querySelector(`#sig-filters input[value="${severity}"]`).checked =
+      true;
     changed = true;
   }
-  if (changed || !document.querySelector(`#signature-table tr.row[data-sig="${cssEscape(sig)}"]`)) renderSignatures();
-  const tr = document.querySelector(`#signature-table tr.row[data-sig="${cssEscape(sig)}"]`);
-  if (!tr) return;
-  if (!app.expanded.has(sig)) expandRow(row, tr);
-  tr.scrollIntoView({ behavior: scrollBehavior(), block: 'start' }); // scroll-padding keeps it below the toolbar
-  tr.classList.add('is-target');
+  if (changed || !rowElement(sig)) {
+    renderSignatures();
+  }
+  const tr = rowElement(sig);
+  if (!tr) {
+    return;
+  }
+  if (!app.expanded.has(sig)) {
+    expandRow(row, tr);
+  }
+  tr.scrollIntoView({ behavior: scrollBehavior(), block: "start" }); // scroll-padding keeps it below the toolbar
+  tr.classList.add("is-target");
   tr.focus({ preventScroll: true });
-  setTimeout(() => tr.classList.remove('is-target'), 2500);
+  setTimeout(() => tr.classList.remove("is-target"), 2500);
 }
 
-// ---------------------------------------------------------------- thresholds help (?)
+// --------------------------------------------------------- thresholds help (?)
 // Every threshold is learned from each channel's own data by the scheduler
 // (calibration.py); this view shows the current values and the method.
 function fmtPct(x, digits = 2) {
-  return x == null ? '—' : `${(x * 100).toFixed(digits)} %`;
+  return x == null ? "—" : `${(x * 100).toFixed(digits)} %`;
 }
 
-function renderHelp() {
-  const body = $('help-body');
-  body.textContent = '';
-  const channels = app.summary?.channels || [];
-  const calib = channels.find((c) => c.calibration)?.calibration;
-  const rates = calib?.rates || { watch: 0.015, spike: 0.0015, major: 0.00015, drop: 0.0015 };
-  const method = el('div', { class: 'help-method' });
-  method.append(el('h3', {}, 'How'));
-  const ul = el('ul');
-  const li = (...nodes) => ul.append(el('li', {}, ...nodes));
-  li(el('b', {}, 'Score. '), 'For every signature and day, z = distance between the observed count and the seasonal expectation, on the Anscombe scale, divided by the fitted dispersion (over-dispersion grows with the count, so no ratio gate is needed).');
-  li(el('b', {}, 'Severity thresholds. '), `Per channel, the quantiles of its own one-step-ahead z over the last months, pooled over all its scored signatures. The only setting is the false-alarm rate per signature and day each level may have: watch ${fmtPct(rates.watch)}, spike ${fmtPct(rates.spike)}, major ${fmtPct(rates.major)}, drop ${fmtPct(rates.drop)} (lower tail). A noisy channel gets a higher bar by itself.`);
-  li(el('b', {}, 'Floor. '), 'The Gaussian value for the same rate: real tails are never lighter. It is used outright when the pooled sample is under 300 series-days; when a level\'s tail holds fewer than 5 points it is extrapolated from an exponential fit of the top of the sample ("extrapolated" below).');
-  li(el('b', {}, 'Volume floors. '), `A signature must reach ${fmtPct(calib?.volume_share ?? 0.001, 1)} of its channel's expected daily crashes over the last 24 hours (installs: half of it, at least 2) to be flagged at all.`);
-  li(el('b', {}, 'Storm. '), `Crashes per install above the ${fmtPct(calib?.storm_quantile ?? 0.995, 1)} quantile of the channel's own signatures over the last 4 weeks: a badge, never an alert.`);
-  li(el('b', {}, 'Installs. '), 'An upward severity also needs the distinct-install count to deviate as much as the crash count; the final severity is the lower of the two.');
-  li(el('b', {}, 'Refresh. '), 'Recomputed at every scheduler run (5 min) from the fits cached with the models (refitted every 6 h).');
-  method.append(ul);
-  body.append(method);
+const LEVELS = ["watch", "spike", "major", "drop"];
 
-  const table = el('table', { class: 'rows help-table' });
-  const head = el('tr');
-  for (const h of ['Channel', 'watch', 'spike', 'major', 'drop', 'min crashes', 'min installs', 'storm ≥ crashes/install', 'sample', 'days above watch']) head.append(el('th', { scope: 'col' }, h));
-  table.append(el('thead', {}, head));
-  const tbody = el('tbody');
-  for (const c of channels) {
-    const k = c.calibration;
-    const tr = el('tr');
-    tr.append(el('td', {}, `${c.product} ${c.channel}`));
-    for (const level of ['watch', 'spike', 'major', 'drop']) {
-      const z = c.thresholds?.[level]?.z;
-      const how = k?.method?.[level];
-      const g = k?.gaussian?.[level];
-      const cell = el('td', { class: 'num', title: how ? `${how}${g != null ? `; Gaussian floor ${g}` : ''}` : '' }, z == null ? '—' : fmtZ(z));
-      if (how && how !== 'empirical') cell.append(el('span', { class: 'muted' }, how === 'gaussian' ? ' (Gaussian)' : ' (extrapolated)'));
-      tr.append(cell);
+function renderHelp() {
+  const channels = app.summary?.channels || [];
+  const calib = channels.find(c => c.calibration)?.calibration;
+  const rates = calib?.rates || {
+    watch: 0.015,
+    spike: 0.0015,
+    major: 0.00015,
+    drop: 0.0015,
+  };
+  const item = (title, text) => el("li", {}, el("b", {}, title), text);
+  const method = el(
+    "div",
+    { class: "help-method" },
+    el("h3", {}, "How"),
+    el(
+      "ul",
+      {},
+      item(
+        "Score. ",
+        "For every signature and day, z = distance between the observed count and the seasonal expectation, on the Anscombe scale, divided by the fitted dispersion (over-dispersion grows with the count, so no ratio gate is needed)."
+      ),
+      item(
+        "Severity thresholds. ",
+        `Per channel, the quantiles of its own one-step-ahead z over the last months, pooled over all its scored signatures. The only setting is the false-alarm rate per signature and day each level may have: watch ${fmtPct(rates.watch)}, spike ${fmtPct(rates.spike)}, major ${fmtPct(rates.major)}, drop ${fmtPct(rates.drop)} (lower tail). A noisy channel gets a higher bar by itself.`
+      ),
+      item(
+        "Floor. ",
+        'The Gaussian value for the same rate: real tails are never lighter. It is used outright when the pooled sample is under 300 series-days; when a level\'s tail holds fewer than 5 points it is extrapolated from an exponential fit of the top of the sample ("extrapolated" below).'
+      ),
+      item(
+        "Volume floors. ",
+        `A signature must reach ${fmtPct(calib?.volume_share ?? 0.001, 1)} of its channel's expected daily crashes over the last 24 hours (installs: half of it, at least 2) to be flagged at all.`
+      ),
+      item(
+        "Storm. ",
+        `Crashes per install above the ${fmtPct(calib?.storm_quantile ?? 0.995, 1)} quantile of the channel's own signatures over the last 4 weeks: a badge, never an alert.`
+      ),
+      item(
+        "Installs. ",
+        "An upward severity also needs the distinct-install count to deviate as much as the crash count; the final severity is the lower of the two."
+      ),
+      item(
+        "Refresh. ",
+        "Recomputed at every scheduler run (5 min) from the fits cached with the models (refitted every 6 h)."
+      )
+    )
+  );
+  const headers = [
+    "Channel",
+    "watch",
+    "spike",
+    "major",
+    "drop",
+    "min crashes",
+    "min installs",
+    "storm ≥ crashes/install",
+    "sample",
+    "days above watch",
+  ];
+  const table = el(
+    "table",
+    { class: "rows help-table" },
+    el(
+      "thead",
+      {},
+      el("tr", {}, ...headers.map(h => el("th", { scope: "col" }, h)))
+    ),
+    el("tbody", {}, ...channels.map(helpRow))
+  );
+  fill($("help-body"), method, el("h3", {}, "Now"), table);
+}
+
+function helpRow(c) {
+  const k = c.calibration;
+  const num = (text, title) => el("td", { class: "num", title }, text);
+  const tr = el("tr", {}, el("td", {}, `${c.product} ${c.channel}`));
+  for (const level of LEVELS) {
+    const how = k?.method?.[level];
+    const gaussian = k?.gaussian?.[level];
+    const cell = num(
+      fmtZ(c.thresholds?.[level]?.z),
+      how
+        ? `${how}${gaussian != null ? `; Gaussian floor ${gaussian}` : ""}`
+        : null
+    );
+    if (how && how !== "empirical") {
+      cell.append(
+        el(
+          "span",
+          { class: "muted" },
+          how === "gaussian" ? " (Gaussian)" : " (extrapolated)"
+        )
+      );
     }
-    tr.append(el('td', { class: 'num' }, k ? fmtInt(k.min_crashes) : '—'));
-    tr.append(el('td', { class: 'num' }, k ? fmtInt(k.min_installs) : '—'));
-    tr.append(el('td', { class: 'num' }, k?.storm_ratio != null ? k.storm_ratio.toFixed(1) : '—'));
-    tr.append(el('td', { class: 'num', title: 'series-days of one-step-ahead z pooled over the scored signatures' }, k ? `${fmtInt(k.sample)} (${fmtInt(k.series)} sig.)` : '—'));
-    tr.append(el('td', { class: 'num', title: 'share of the pooled series-days at or above the watch threshold (includes real spikes)' }, k?.tail?.watch != null ? fmtPct(k.tail.watch) : '—'));
-    tbody.append(tr);
+    tr.append(cell);
   }
-  table.append(tbody);
-  body.append(el('h3', {}, 'Now'), table);
+  tr.append(
+    num(k ? fmtInt(k.min_crashes) : "—"),
+    num(k ? fmtInt(k.min_installs) : "—"),
+    num(k?.storm_ratio != null ? k.storm_ratio.toFixed(1) : "—"),
+    num(
+      k ? `${fmtInt(k.sample)} (${fmtInt(k.series)} sig.)` : "—",
+      "series-days of one-step-ahead z pooled over the scored signatures"
+    ),
+    num(
+      k?.tail?.watch != null ? fmtPct(k.tail.watch) : "—",
+      "share of the pooled series-days at or above the watch threshold (includes real spikes)"
+    )
+  );
+  return tr;
 }
 
 function openHelp() {
   renderHelp();
-  const dlg = $('help');
-  if (typeof dlg.showModal === 'function') dlg.showModal();
-  else dlg.setAttribute('open', '');
+  $("help").showModal();
 }
 
-// ---------------------------------------------------------------- controls
+// -------------------------------------------------------------------- controls
 function bindControls() {
-  $('help-btn').addEventListener('click', openHelp);
-  $('help-close').addEventListener('click', () => $('help').close());
-  $('help').addEventListener('click', (e) => { if (e.target === e.currentTarget) e.currentTarget.close(); }); // backdrop
-  // Cards are rebuilt on refresh, so their click handler is delegated.
-  $('channel-cards').addEventListener('click', (e) => {
-    const card = e.target.closest('.card');
-    if (!card) return;
-    if (card.dataset.key === ALL_KEY) { selectAll(); scrollToContent(); return; }
-    const [product, channel] = card.dataset.key.split('/');
+  $("help-btn").addEventListener("click", openHelp);
+  $("help-close").addEventListener("click", () => $("help").close());
+  $("help").addEventListener("click", e => {
+    if (e.target === e.currentTarget) {
+      e.currentTarget.close(); // backdrop
+    }
+  });
+  $("channel-cards").addEventListener("click", e => {
+    const key = e.target.closest(".card")?.dataset.key;
+    if (!key) {
+      return;
+    }
+    if (key === ALL_KEY) {
+      selectAll();
+      scrollToContent();
+      return;
+    }
+    const [product, channel] = key.split("/");
     selectChannel(product, channel);
   });
-  $('scope-controls').addEventListener('change', (e) => {
-    if (e.target.name === 'scope') setScope(e.target.value);
+  $("drivers").addEventListener("click", e => {
+    const link = e.target.closest("a[data-sig]");
+    if (link) {
+      e.preventDefault();
+      focusSignature(link.dataset.sig);
+    }
   });
-  $('range-controls').addEventListener('change', (e) => {
-    if (e.target.name === 'days') app.days = Number(e.target.value);
-    if (e.target.name === 'granularity') app.granularity = e.target.value;
-    if (app.selected && !isAll(app.selected)) loadChannel(app.selected.product, app.selected.channel).then(() => showError(''), (err) => showError(`Could not reload (${err.message})`));
+  $("scope-controls").addEventListener("change", e => {
+    if (e.target.name === "scope") {
+      setScope(e.target.value);
+    }
   });
-  const filters = $('sig-filters');
-  filters.addEventListener('submit', (e) => e.preventDefault());
-  filters.addEventListener('change', (e) => {
-    if (e.target.id !== 'sig-search' && e.target.id !== 'min-crashes') renderSignatures();
+  $("range-controls").addEventListener("change", e => {
+    if (e.target.name === "days") {
+      app.days = Number(e.target.value);
+    }
+    if (e.target.name === "granularity") {
+      app.granularity = e.target.value;
+    }
+    if (channelSelected()) {
+      loadChannel(app.selected.product, app.selected.channel).then(
+        () => showError(""),
+        err => showError(`Could not reload (${err.message})`)
+      );
+    }
+  });
+  const filters = $("sig-filters");
+  const typed = new Set(["sig-search", "min-crashes"]); // re-rendered on input, debounced
+  filters.addEventListener("submit", e => e.preventDefault());
+  filters.addEventListener("change", e => {
+    if (!typed.has(e.target.id)) {
+      renderSignatures();
+    }
   });
   let timer = null;
-  filters.addEventListener('input', (e) => {
-    const delay = e.target.id === 'sig-search' ? 120 : e.target.id === 'min-crashes' ? 200 : null;
-    if (delay == null) return;
-    clearTimeout(timer);
-    timer = setTimeout(renderSignatures, delay);
+  filters.addEventListener("input", e => {
+    if (typed.has(e.target.id)) {
+      clearTimeout(timer);
+      timer = setTimeout(
+        renderSignatures,
+        e.target.id === "sig-search" ? 120 : 200
+      );
+    }
   });
-  window.addEventListener('hashchange', () => {
-    if (app.account) renderAccount(); // the sign-in/out "next" follows the view
+  window.addEventListener("hashchange", () => {
+    if (app.account) {
+      renderAccount(); // the sign-in/out "next" follows the view
+    }
     const h = parseHash();
-    if (!h || !app.summary) return;
-    if (h.scope && h.scope !== app.scope) { setScope(h.scope, { fromHash: true }); return; }
-    if (isAll(h)) { if (!isAll(app.selected)) selectAll(); return; }
+    if (!h || !app.summary) {
+      return;
+    }
+    if (h.scope !== app.scope) {
+      setScope(h.scope, { fromHash: true });
+      return;
+    }
+    if (isAll(h)) {
+      if (!isAll(app.selected)) {
+        selectAll();
+      }
+      return;
+    }
     const same = app.selected && channelKey(h) === channelKey(app.selected);
-    if (!same || h.signature) selectChannel(h.product, h.channel, h.signature || null);
+    if (!same || h.signature) {
+      selectChannel(h.product, h.channel, h.signature || null);
+    }
   });
-  window.addEventListener('dashboard:timezone', renderZoneLabels);
+  window.addEventListener("dashboard:timezone", renderZoneLabels);
   renderZoneLabels();
   // the sticky toolbar's height offsets anchored scrolls (scroll-margin-top)
-  const toolbar = $('toolbar');
-  const setToolbarHeight = () => document.documentElement.style.setProperty('--toolbar-h', `${toolbar.offsetHeight}px`);
+  const toolbar = $("toolbar");
+  const setToolbarHeight = () =>
+    document.documentElement.style.setProperty(
+      "--toolbar-h",
+      `${toolbar.offsetHeight}px`
+    );
   new ResizeObserver(setToolbarHeight).observe(toolbar);
   setToolbarHeight();
   const onVisible = () => {
-    if (!document.hidden && Date.now() - app.lastFetch > FOCUS_REFRESH_MS) refresh();
+    if (!document.hidden && Date.now() - app.lastFetch > FOCUS_REFRESH_MS) {
+      refresh();
+    }
   };
-  document.addEventListener('visibilitychange', onVisible);
-  window.addEventListener('focus', onVisible);
-  setInterval(() => refresh(), REFRESH_MS);
+  document.addEventListener("visibilitychange", onVisible);
+  window.addEventListener("focus", onVisible);
+  setInterval(refresh, REFRESH_MS);
 }
 
 bindControls();

@@ -46,6 +46,7 @@ uv run python -m spikes.startup -e someone@example.com      # startup crashes
 
 ```sh
 uv run ruff check .
+npm ci && npm run lint                      # JavaScript: ESLint + Prettier (npm run lint:fix)
 uv run coverage run -m unittest discover tests/
 uv run coverage report
 ```
