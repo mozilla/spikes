@@ -424,6 +424,54 @@ class Fit:
             return None
         return float(self.next_level / past)
 
+    def trend_scores(self, min_level=0.0, days=28, window=None):
+        """Score of the last *window* days against the *window* days
+        ending *days* earlier, for every day of the history.
+
+        The daily level follows a ramp within its window, so a slow rise
+        never shows in the daily z: the expectation climbs with the
+        counts.  This statistic compares two observed windows instead:
+        the total of the *window* days ending on a day with what the
+        de-seasonalised rate of the window ending *days* before predicts
+        for them (``E = O2 * S1 / S2`` with the seasonal factors summed
+        over each window).  Both totals are counts, so the scale is that
+        of a two-sample comparison: ``Var = E + c2 sum(e1^2) + (S1/S2)^2
+        (O2 + c2 sum(e2^2))``, passed to :func:`score` as a relative
+        variance (no estimated level is involved, whose error would
+        dominate).  The score stays high for as long as the rise is
+        within the span of the two windows.  NaN where the earlier
+        window's daily rate is under *min_level* (a signature that was
+        under the volume floor then is a new one, not a rising one) or
+        fewer than half of either window's days are known.  The last
+        entry is the current value.
+        """
+        window = int(window or self.level_window)
+        n = self.ndays
+        res = np.full(n, np.nan)
+        y, s = self.y, self.seasonal
+        need = max(1, window // 2)
+        for t in range(days + window - 1, n):
+            hi1, lo1 = t + 1, t - window + 1
+            hi2, lo2 = hi1 - days, lo1 - days
+            y1, s1 = y[lo1:hi1], s[lo1:hi1]
+            y2, s2 = y[lo2:hi2], s[lo2:hi2]
+            ok1 = np.isfinite(y1) & np.isfinite(s1)
+            ok2 = np.isfinite(y2) & np.isfinite(s2)
+            if ok1.sum() < need or ok2.sum() < need:
+                continue
+            o1, o2 = float(y1[ok1].sum()), float(y2[ok2].sum())
+            sum1, sum2 = float(s1[ok1].sum()), float(s2[ok2].sum())
+            if sum1 <= 0 or sum2 <= 0 or o2 <= 0 or o2 / sum2 < min_level:
+                continue
+            expected = o2 * sum1 / sum2
+            e1 = expected * s1[ok1] / sum1
+            e2 = o2 * s2[ok2] / sum2
+            rel = 1.0 / o2 + self.c2 * (
+                float((e1 ** 2).sum()) +
+                (sum1 / sum2) ** 2 * float((e2 ** 2).sum())) / expected ** 2
+            res[t] = score(o1, expected, rel)
+        return res
+
     def band(self, k, expected=None):
         e = self.expected if expected is None else expected
         return band(e, k, self.c2)

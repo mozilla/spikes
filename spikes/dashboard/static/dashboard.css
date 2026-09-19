@@ -25,6 +25,7 @@
   --st-major: #d03b3b;   /* critical */
   --st-drop: light-dark(#2a78d6, #3987e5); /* polarity, not "good" */
   --st-new: light-dark(#4a3aa7, #9085e9);  /* violet, with ★ */
+  --st-trend: light-dark(#0f766e, #5eead4); /* teal, with ↗: a slow rise */
   --st-ok: var(--muted);
   --st-bug-after: light-dark(#1a6e39, #5fc784);  /* a bug filed for the spike: >= 4.5:1 as text */
   --st-bug-before: light-dark(#b3261e, #ff8a80); /* only bugs from before it */
@@ -227,6 +228,21 @@ main > section { margin-top: 28px; }
     font-size: 10px;
     line-height: 1;
   }
+}
+.chip-trend {
+  --chip-color: var(--st-trend);
+
+  &.chip::before, &.chip-toggle span::before {
+    content: "↗";
+    background: none;
+    width: auto;
+    height: auto;
+    color: var(--st-trend);
+    font-size: 11px;
+    font-weight: 700;
+    line-height: 1;
+  }
+  &.chip .n { font-weight: 500; color: var(--ink-2); }
 }
 .chip-toggle input, .seg input { position: absolute; opacity: 0; width: 1px; height: 1px; }
 .chip-toggle {

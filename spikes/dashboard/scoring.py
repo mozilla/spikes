@@ -35,6 +35,9 @@ from . import calibration, config, intraday, models, seasonal, versions
 RANK = {'ok': 0, 'drop': 1, 'watch': 2, 'spike': 3, 'major': 4}
 UPWARD = ('watch', 'spike', 'major')
 PROFILE_HISTORY_DAYS = 56
+# the level of this many days ago is what `level_change_28` and the trend
+# score (seasonal.Fit.trend_scores) compare the present with
+TREND_DAYS = 28
 
 
 def severity_of(z, ratio, rules, expected=None, min_expected_drop=0.0):
@@ -85,7 +88,7 @@ class Cached:
     def __init__(self, level, trend, c2, dispersion, factors, borrowed,
                  components, install_share, level_change_28, last_day,
                  history_days, recent_days_seen, fitted_at, z_hist=None,
-                 seasonal_components=None):
+                 seasonal_components=None, trend_z=None, trend_hist=None):
         # the seasonal components (phase functions) the factors refer to:
         # the release-phase cycle for the ``current`` scope (versions.py)
         self.seasonal_components = seasonal_components or \
@@ -106,17 +109,29 @@ class Cached:
         # histogram of the one-step-ahead z of the history: pooled over the
         # channel's series to learn its severity thresholds
         self.z_hist = z_hist
+        # the trend score (the last two weeks vs. the two weeks ending four
+        # weeks earlier, seasonal.Fit.trend_scores) and the histogram of
+        # its history, pooled the same way for the trend threshold
+        self.trend_z = trend_z
+        self.trend_hist = trend_hist
 
     @classmethod
     def from_fit(cls, fit, last_day, install_share, recent_days_seen,
-                 fitted_at):
+                 fitted_at, keep=None, min_level=0.0):
+        """*keep* masks the days whose residual may shape the thresholds
+        (calibration.histogram); *min_level* is the volume floor a level
+        must have reached for a rise from it to be a trend."""
         s = fit.summary()
+        tz = fit.trend_scores(min_level, TREND_DAYS)
+        now = float(tz[-1]) if tz.size and np.isfinite(tz[-1]) else None
         return cls(fit.next_level, fit.next_slope, fit.c2, fit.dispersion,
                    s['factors'], s['borrowed'], s['components'],
-                   install_share, fit.level_change(28), last_day,
+                   install_share, fit.level_change(TREND_DAYS), last_day,
                    s['history_days'], recent_days_seen, fitted_at,
-                   calibration.histogram(fit.z, fit.expected),
-                   seasonal_components=fit.components)
+                   calibration.histogram(fit.z, fit.expected, keep=keep),
+                   seasonal_components=fit.components, trend_z=now,
+                   trend_hist=calibration.histogram(
+                       tz, bins=calibration.TREND_BINS))
 
     @classmethod
     def from_row(cls, row, components=None):
@@ -126,7 +141,9 @@ class Cached:
                    row.install_share, row.level_change_28, row.last_day,
                    row.history_days, details.get('recent_days_seen', 1),
                    row.fitted_at, details.get('z_hist'),
-                   seasonal_components=components)
+                   seasonal_components=components,
+                   trend_z=details.get('trend_z'),
+                   trend_hist=details.get('trend_hist'))
 
     def to_row(self, series_id):
         return {'series_id': series_id, 'fitted_at': self.fitted_at,
@@ -138,7 +155,9 @@ class Cached:
                 'factors': self.factors, 'borrowed': list(self.borrowed),
                 'components': {'components': self.components,
                                'recent_days_seen': self.recent_days_seen,
-                               'z_hist': self.z_hist},
+                               'z_hist': self.z_hist,
+                               'trend_z': self.trend_z,
+                               'trend_hist': self.trend_hist},
                 'level_change_28': self.level_change_28}
 
     def expected(self, date):
@@ -171,25 +190,35 @@ def build_history(daily, day_rows, start, end):
 
     *daily* is ``{day: (crashes, installs)}``; days without a row are
     censored at the channel's cutoff, or NaN when the channel has no data.
+    *installs* are the distinct installs per day, NaN when unknown (the
+    history backfill has none; the daily fetches since the dashboard went
+    live do).
     """
     ndays = (end - start).days + 1
     dates = [start + datetime.timedelta(days=i) for i in range(ndays)]
     y = np.empty(ndays)
-    installs = {}
+    installs = np.full(ndays, np.nan)
     for i, d in enumerate(dates):
         row = daily.get(d)
         if row is not None:
             y[i] = row[0]
-            if row[1] is not None and row[0] > 0:
-                installs[d] = row[1] / float(row[0])
+            if row[1] is not None:
+                installs[i] = row[1]
         else:
             y[i] = censored_value(day_rows.get(d))
     return dates, y, installs
 
 
 def fit_series(daily, day_rows, start, end, prior, min_crashes, now,
-               components=None, borrow=()):
-    """Fit one series and return a :class:`Cached`."""
+               components=None, borrow=(), min_installs=None):
+    """Fit one series and return a :class:`Cached`.
+
+    *min_crashes* / *min_installs* are the channel's volume floors: the
+    days whose distinct installs are known and under the install floor
+    could never have been flagged (the scorer gates them to ``ok``), so
+    their residuals do not enter the pooled thresholds; a level under the
+    crash floor is not a level a trend can start from.
+    """
     dates, y, installs = build_history(daily, day_rows, start, end)
     fit = seasonal.fit(dates, y, level_window=config.get('level_window', 14),
                        prior=prior,
@@ -199,11 +228,16 @@ def fit_series(daily, day_rows, start, end, prior, min_crashes, now,
     recent = [v for v in y[-config.get('new_days', 14):] if np.isfinite(v)]
     seen = sum(1 for v in recent if v >= max(3, min_crashes / 2.0))
     share = None
-    if installs:
-        vals = sorted(installs.items())[-config.get('install_share_days',
-                                                    28):]
-        share = float(np.median([v for _, v in vals]))
-    return fit, Cached.from_fit(fit, end, share, seen, now)
+    known = np.isfinite(installs) & np.isfinite(y) & (y > 0)
+    if known.any():
+        ratios = (installs[known] / y[known])[
+            -config.get('install_share_days', 28):]
+        share = float(np.median(ratios))
+    keep = None
+    if min_installs:
+        keep = ~(np.isfinite(installs) & (installs < min_installs))
+    return fit, Cached.from_fit(fit, end, share, seen, now, keep=keep,
+                                min_level=min_crashes)
 
 
 def weekly_prior_for(product, channel):
@@ -446,6 +480,17 @@ def score_today(ctx, series, cached, daily_today, hourly_today,
                   gate_crashes >= ctx.min_crashes and
                   gate_installs is not None and
                   gate_installs >= ctx.min_installs)
+    # a rising signature: the last two weeks are above what the two weeks
+    # ending four weeks earlier predict for them, by the channel's learned
+    # trend bar (the daily z has absorbed the rise); a badge, kept while
+    # the rise is within the window, under the same volume floors as an
+    # alert
+    rule = ctx.rules.get('trend')
+    trend = bool(not is_total and rule and cached.trend_z is not None and
+                 cached.trend_z >= rule['z'] and
+                 gate_crashes >= ctx.min_crashes and
+                 gate_installs is not None and
+                 gate_installs >= ctx.min_installs)
     row = {
         'series_id': series.id, 'day': ctx.today, 'as_of': ctx.as_of,
         'partial': True, 'elapsed': elapsed, 'observed': int(observed),
@@ -470,6 +515,7 @@ def score_today(ctx, series, cached, daily_today, hourly_today,
         'details': {'level': cached.level, 'dispersion': cached.dispersion,
                     'c2': cached.c2,
                     'level_change_28': cached.level_change_28,
+                    'trend': trend, 'trend_z': cached.trend_z,
                     'profile': ctx.profile.source if ctx.profile else None,
                     'pace': ctx.pace if not is_total else None,
                     'installs_ratio': per_install,
@@ -700,7 +746,8 @@ def score_channel(product, channel, today, now, fits_budget=None,
         for sid in to_fit:
             fit, c = fit_series(histories.get(sid, {}), day_rows, start,
                                 yesterday, total_fit, min_crashes, fitted_at,
-                                components=comps, borrow=borrow)
+                                components=comps, borrow=borrow,
+                                min_installs=min_installs)
             fits_by_id[sid] = fit
             cached[sid] = c
             rows.append(c.to_row(sid))
@@ -712,10 +759,12 @@ def score_channel(product, channel, today, now, fits_budget=None,
 
     # -- thresholds learned from the channel's own data: the severity
     #    levels from the pooled one-step-ahead z of the candidates' fits
-    #    (histograms cached with the models), the storm ratio from its
-    #    crashes-per-install distribution
-    calib = calibration.calibrate([cached[sid].z_hist for sid in candidates],
-                                  config.alert_rate())
+    #    (histograms cached with the models), the trend bar from their
+    #    pooled trend scores, the storm ratio from its crashes-per-install
+    #    distribution
+    calib = calibration.calibrate(
+        [cached[sid].z_hist for sid in candidates], config.alert_rate(),
+        [cached[sid].trend_hist for sid in candidates])
     rules = calib['rules']
     ratios = models.load_daily(candidates, today - datetime.timedelta(
         days=config.get('install_share_days', 28)), yesterday)
@@ -814,7 +863,7 @@ def score_channel(product, channel, today, now, fits_budget=None,
     models.upsert(models.Score, rows, ['series_id', 'day'])
 
     counts = {k: 0 for k in ('major', 'spike', 'watch', 'drop', 'new',
-                             'storm', 'noise')}
+                             'trend', 'storm', 'noise')}
     for r in sig_today:
         s = series_by_id[r['series_id']]
         if s.noise:
@@ -824,6 +873,8 @@ def score_channel(product, channel, today, now, fits_budget=None,
             counts[r['severity']] += 1
         if r['is_new']:
             counts['new'] += 1
+        if r['details'].get('trend'):
+            counts['trend'] += 1
         if r['storm']:
             counts['storm'] += 1
     counts['scored'] = len(sig_today)

@@ -424,6 +424,9 @@ def seed_channel(product, channel, today, now, ndays=60, base=10000.0,
         'IPCError-browser | ShutDownKill': dict(mean=200.0, today=5.0),
         'dropping': dict(mean=300.0, today=0.1),
         'tiny': dict(mean=1.0, today=1.0),
+        # x5 over the last three weeks: the daily expectation follows the
+        # ramp (no spike), the trend score sees it
+        'rising': dict(mean=100.0, today=5.0, ramp=21),
     }
     ids = models.series_ids(product, channel, stories.keys(),
                             noise=lambda s: s.startswith('IPCError'))
@@ -438,6 +441,11 @@ def seed_channel(product, channel, today, now, ndays=60, base=10000.0,
                 mean = st['new']
             elif partial:
                 mean = st['mean'] * st['today']
+            elif 'ramp' in st:
+                # linear from x1 `ramp` days ago to `today` yesterday
+                k = (today - d).days
+                mean = st['mean'] * (1 + (st['today'] - 1) *
+                                     max(0.0, (st['ramp'] - k) / st['ramp']))
             else:
                 mean = st['mean']
             mu = mean * w
@@ -531,6 +539,20 @@ class ScoringTest(DBTestCase):
         self.assertIsNotNone(s['spiking'].expected_installs)
         self.assertEqual(s['dropping'].severity, 'drop')
         self.assertIsNotNone(total.expected_installs)
+        # a slow rise: absorbed by the daily expectation, caught by the
+        # trend score against the level of four weeks before
+        rising = s['rising']
+        self.assertEqual(rising.severity, 'ok')
+        self.assertTrue(rising.details['trend'])
+        self.assertGreater(rising.details['trend_z'], 10)
+        self.assertGreater(rising.details['level_change_28'], 3)
+        self.assertFalse(s['stable'].details['trend'])
+        self.assertFalse(s['spiking'].details['trend'])
+        self.assertFalse(s['brand new'].details['trend'])  # no level then
+        self.assertEqual(summary['counts']['trend'], 1)
+        calib = total.details['calibration']
+        self.assertIn('trend', calib['rules'])
+        self.assertGreater(calib['trend_sample'], 100)
         # the channel's crash excess comes mostly from the crash loops:
         # explained as storm-driven, not reported as a spike
         self.assertTrue(total.details.get('storm_driven'))
@@ -1355,6 +1377,62 @@ class ApiTest(DBTestCase):
         self.assertEqual(flag['day'], '2026-09-02')
         self.assertEqual(flag['severity'], e['today'].severity)
         self.assertIn(flag['severity'], ('spike', 'major'))
+
+    def test_trend_row_is_flagged(self):
+        """A rising signature (severity ok, the daily model absorbed the
+        ramp) is listed like a flag: in the channel counts, in the
+        summary's alerts, with a trend flag of its own."""
+        ch = self.client.get('/dashboard/api/channel?product=Firefox'
+                             '&channel=release&days=30').get_json()
+        rows = {s['signature']: s for s in ch['signatures']}
+        row = rows['rising']
+        self.assertEqual(row['severity'], 'ok')
+        self.assertTrue(row['trend'])
+        self.assertGreater(row['trend_z'], 10)
+        self.assertGreater(row['level_change_28'], 3)
+        self.assertEqual(row['flag']['severity'], 'ok')
+        self.assertTrue(row['flag']['trend'])
+        self.assertFalse(row['flag']['is_new'])
+        self.assertIsNone(row['flag']['since'])
+        self.assertEqual(row['flag']['day'], '2026-09-02')
+        self.assertFalse(rows['stable']['trend'])
+        self.assertIsNone(rows['stable']['flag'])
+        self.assertEqual(ch['counts']['trend'], 1)
+        self.assertIn('trend', ch['thresholds'])
+        self.assertEqual(ch['calibration']['method']['trend'], 'gaussian')
+        self.assertGreater(ch['model']['level_change_28'], 0)
+        summary = self.client.get('/dashboard/api/summary').get_json()
+        alerts = {a['signature']: a for a in summary['alerts']}
+        self.assertIn('rising', alerts)
+        self.assertTrue(alerts['rising']['flag']['trend'])
+        self.assertNotIn('stable', alerts)
+        # its bugs are judged against the start of the trend window
+        e = api.channel_scores('Firefox', 'release', TODAY)[
+            models.get_series('Firefox', 'release', 'rising').id]
+        flag = api.flag_of(e, NOW)
+        self.assertEqual(api.since_of(None, flag),
+                         datetime.datetime(2026, 8, 5))
+        # a spike within the flag window outranks the trend but the row
+        # keeps its trend badge
+        models.upsert(models.Score, [{
+            'series_id': e['series'].id,
+            'day': TODAY - datetime.timedelta(days=1), 'as_of': NOW,
+            'partial': False, 'observed': 900, 'expected': 400.0, 'z': 9.0,
+            'excess': 500.0, 'severity': 'spike', 'peak_severity': 'spike',
+            'last_flagged_at': NOW - datetime.timedelta(hours=13),
+            'is_new': False, 'storm': False}], ['series_id', 'day'])
+        db.session.commit()
+        api.forget_caches()
+        e = api.channel_scores('Firefox', 'release', TODAY)[e['series'].id]
+        flag = api.flag_of(e, NOW)
+        self.assertEqual(flag['severity'], 'spike')
+        self.assertFalse(flag['trend'])
+        ch = self.client.get('/dashboard/api/channel?product=Firefox'
+                             '&channel=release&days=30').get_json()
+        row = {s['signature']: s for s in ch['signatures']}['rising']
+        self.assertTrue(row['trend'])
+        self.assertEqual(row['flag']['severity'], 'spike')
+        self.assertEqual(ch['counts']['trend'], 1)
 
     def test_html(self):
         r = self.client.get('/dashboard.html')

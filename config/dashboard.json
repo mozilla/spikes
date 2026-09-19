@@ -24,7 +24,7 @@
     "exclude_submitted_from": ["Infobar", "AboutCrashes"],
 
     "alert_rate": {"watch": 0.015, "spike": 0.0015, "major": 0.00015,
-                   "drop": 0.0015},
+                   "drop": 0.0015, "trend": 0.005},
     "volume_share": 0.001,
     "storm_quantile": 0.995,
     "min_expected_recent": 10,

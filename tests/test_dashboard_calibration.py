@@ -38,6 +38,26 @@ class HistogramTest(unittest.TestCase):
         # tiny expectations are left out: their z is not informative
         self.assertEqual(sum(C.histogram([5.0, 5.0], [0.5, 2.0])), 1)
 
+    def test_keep_mask_and_bins(self):
+        # the days that could not have been flagged are left out
+        z, e = [3.0, 30.0, 1.0], [10.0, 10.0, 10.0]
+        self.assertEqual(sum(C.histogram(z, e)), 3)
+        h = C.histogram(z, e, keep=[True, False, True])
+        self.assertEqual(sum(h), 2)
+        self.assertAlmostEqual(C.quantile(C.merge([h]), 1.0), 3.0, delta=0.5)
+        # the trend statistic has wider bins (it reaches far above 50)
+        h = C.histogram([-60.0, 0.0, 120.0, 250.0], bins=C.TREND_BINS)
+        self.assertEqual(len(h), C.TREND_BINS.size)
+        self.assertEqual(h[0], 1)                # -60 below the range
+        self.assertEqual(h[-1], 1)               # 250 above it
+        pooled = C.merge([h], C.TREND_BINS)
+        self.assertAlmostEqual(C.quantile(pooled, 0.75, C.TREND_BINS),
+                               120.0, delta=1.0)
+        self.assertAlmostEqual(C.share_above(pooled, 100.0, C.TREND_BINS),
+                               0.5)
+        # a histogram of the other binning does not pool
+        self.assertEqual(C.merge([h]).sum(), 0)
+
     def test_quantile_and_share(self):
         rng = np.random.default_rng(1)
         z = rng.normal(0, 1, 200000)
@@ -102,6 +122,32 @@ class CalibrateTest(unittest.TestCase):
         c = C.calibrate(normal_hists(200, 180), {'watch': 0.05})
         self.assertAlmostEqual(c['rules']['watch']['z'], 1.64, delta=0.2)
         self.assertEqual(c['rates']['spike'], 0.0015)
+
+    def test_trend_rule(self):
+        # without trend histograms: the Gaussian value for the trend rate
+        c = C.calibrate(normal_hists(200, 180))
+        self.assertEqual(c['trend_sample'], 0)
+        self.assertEqual(c['method']['trend'], 'gaussian')
+        self.assertAlmostEqual(c['rules']['trend']['z'], 2.58, places=2)
+        self.assertAlmostEqual(c['gaussian']['trend'], 2.58, places=2)
+        # a channel where 2 % of the series-days sit on a rise at z = 40:
+        # the 0.5 % bar moves above them, in the trend bins
+        rng = np.random.default_rng(5)
+        hists = []
+        for _ in range(100):
+            z = rng.normal(0.0, 3.0, 150)
+            z[:3] = 40.0
+            hists.append(C.histogram(z, bins=C.TREND_BINS))
+        c = C.calibrate([], trend_hists=hists)
+        self.assertEqual(c['trend_sample'], 15000)
+        self.assertEqual(c['method']['trend'], 'empirical')
+        self.assertGreaterEqual(c['rules']['trend']['z'], 40.0)
+        self.assertLess(c['rules']['trend']['z'], 42.0)
+        self.assertAlmostEqual(c['tail']['trend'], 0.005, delta=0.02)
+        # the severity rules are untouched by the trend histograms
+        self.assertEqual(c['method']['watch'], 'gaussian')
+        c = C.calibrate([], {'trend': 0.05}, trend_hists=hists)
+        self.assertLess(c['rules']['trend']['z'], 10.0)
 
 
 class FloorsTest(unittest.TestCase):

@@ -11,7 +11,8 @@ re-render when the version it holds is unchanged.  Responses are gzipped
 when the client accepts it.
 
 Severities (ordered worst first): `major`, `spike`, `watch`, `drop`, `ok`.
-`new`, `storm` and `noise` are orthogonal boolean badges on a row.
+`new`, `trend`, `storm` and `noise` are orthogonal boolean badges on a
+row; `new` and `trend` flag it (it is listed) even at severity `ok`.
 
 ## Shared objects
 
@@ -55,6 +56,12 @@ Severities (ordered worst first): `major`, `spike`, `watch`, `drop`, `ok`.
   "level": 20400.0,                   // de-seasonalised daily level
   "dispersion": 1.7,                  // robust scale of the residuals at expected_day
   "level_change_28": 1.05,            // level now / level 4 weeks ago, null if unknown
+  "trend_z": 1.3,                     // z of the last two weeks vs. what the two weeks ending
+                                      // four weeks earlier predict for them (null when that
+                                      // window is unknown or its rate was under the crash floor)
+  "trend": false,                     // trend_z >= the channel's learned trend bar and the
+                                      // volume floors pass: a slow rise the daily z has
+                                      // absorbed (level_change_28 says how much)
   "drivers": [                        // channel totals only: what explains the excess
     {"signature": "...", "excess": 700, "share": 0.89, "severity": "major",
      "noise": false, "installs": 4, "storm": true}
@@ -91,10 +98,11 @@ A `Score` plus:
   "spark": {"dates": ["2026-08-06", "..."], "observed": [1, 2, 3], "expected": [1.1, 2.0, 2.9]},  // 28 days
   "flag": {                                       // what the row is shown as, or null:
     "severity": "major", "is_new": false,         // today's live state, or the worst state a
-    "day": "2026-09-01",                          // previous day reached, kept for
-    "since": "2026-09-01T09:12:00Z",              // `flag_window_hours` after the last run
-    "at": "2026-09-01T23:57:00Z",                 // that flagged it (so nothing vanishes at
-    "observed": 430, "expected": 98.0,            // 00:00 UTC); the numbers are that day's
+    "trend": false,                               // previous day reached, kept for
+    "day": "2026-09-01",                          // `flag_window_hours` after the last run
+    "since": "2026-09-01T09:12:00Z",              // that flagged it (so nothing vanishes at
+    "at": "2026-09-01T23:57:00Z",                 // 00:00 UTC); the numbers are that day's
+    "observed": 430, "expected": 98.0,
     "z": 12.0, "excess": 332,
     "peak": null                                  // {"severity", "z", "excess", "at"} when the
   }                                               // day stepped down from a higher severity
@@ -103,14 +111,20 @@ A `Score` plus:
 
 Lists, counts and sort orders use `flag` (a row whose `flag.day` is not
 `day` carries yesterday's spike into today); `severity` and `is_new` stay
-today's own state.
+today's own state.  A row whose only flag is its trend has `flag.severity`
+`ok`, `flag.trend` true and no `since` (a trend is the state of today's
+model, not an event); a severity flag outranks it, and the row's own
+`trend` stays true either way.
 
 `bugs[].after` compares the bug's filing time with the start of the row's
 *episode*: 00:00 UTC of the first day of the run of consecutive flagged
 days ending on `flag.day` (followed 7 days back), less a day of grace, or
 the day the signature first appeared when that is within the previous 14
 days (a bug filed on a new crash's first report is about the spike it
-grows into).  A row without a flag
+grows into).  A row flagged only as a trend is judged against the start
+of the four-week trend window (or its last spike when that is earlier): a
+bug filed during the rise is about it, one from before is a known crash
+rising again.  A row without a flag
 is judged against its most recent spike of the last 30 days; the same
 signature's spike in the channel's other scope counts too, the earlier
 start winning, so both views of a channel agree and the verdict outlives
@@ -185,7 +199,8 @@ scopes the server collects; the page hides its switch when there is one.
   "data_health": {"status": "ok",     // ok|stale_local|stale_upstream|backfilling
                   "since": null, "detail": "..."},
   "thresholds": {"Firefox/release": {"watch": {"z": 4.3}, "spike": {"z": 9.8},
-                                     "major": {"z": 27.1}, "drop": {"z": -6.2}}},  // per channel,
+                                     "major": {"z": 27.1}, "drop": {"z": -6.2},
+                                     "trend": {"z": 44.3}}},  // per channel,
                                       // learned from its own data (see `calibration` below)
   "flag_window_hours": 48,            // how long a previous day's flag stays listed
   "channels": [
@@ -193,23 +208,29 @@ scopes the server collects; the page hides its switch when there is one.
      "day": "2026-09-02",               // version: "155" in the current scope, "155.0.1" in the strict one
      "as_of": "...", "history_days": 180,
      "total": Score, "yesterday": Score,           // yesterday may be null
-     "counts": {"major": 1, "spike": 2, "watch": 5, "drop": 0, "new": 3,
+     "counts": {"major": 1, "spike": 2, "watch": 5, "drop": 0, "new": 3, "trend": 2,
                 "storm": 1, "scored": 312, "noise": 4},   // a noise row counts there only
-     "thresholds": {"watch": {"z": 4.3}, "spike": {"z": 9.8}, "major": {"z": 27.1}, "drop": {"z": -6.2}},
+     "thresholds": {"watch": {"z": 4.3}, "spike": {"z": 9.8}, "major": {"z": 27.1}, "drop": {"z": -6.2},
+                    "trend": {"z": 44.3}},
      "calibration": {                             // how the thresholds were learned (calibration.py)
        "rules": {...},                            // == thresholds
-       "method": {"watch": "empirical", "spike": "empirical", "major": "extrapolated", "drop": "empirical"},
-       "gaussian": {"watch": 2.17, "spike": 2.97, "major": 3.62, "drop": -2.97},  // the floors
-       "rates": {"watch": 0.015, "spike": 0.0015, "major": 0.00015, "drop": 0.0015},
-       "sample": 34210, "series": 190,            // pooled series-days of one-step-ahead z, signatures
-       "tail": {"watch": 0.028, "spike": 0.004, "major": 0.0003, "drop": 0.002},  // share beyond each
+       "method": {"watch": "empirical", "spike": "empirical", "major": "extrapolated", "drop": "empirical",
+                  "trend": "empirical"},
+       "gaussian": {"watch": 2.17, "spike": 2.97, "major": 3.62, "drop": -2.97, "trend": 2.58},  // the floors
+       "rates": {"watch": 0.015, "spike": 0.0015, "major": 0.00015, "drop": 0.0015, "trend": 0.005},
+       "sample": 34210, "series": 190,            // pooled series-days of one-step-ahead z (the days that
+                                                  // could have been flagged: known installs under the
+                                                  // install floor are left out), signatures
+       "trend_sample": 16700,                     // pooled series-days of the trend score (the days whose
+                                                  // earlier window was above the crash floor)
+       "tail": {"watch": 0.028, "spike": 0.004, "major": 0.0003, "drop": 0.002, "trend": 0.005},  // share beyond each
        "min_crashes": 21, "min_installs": 10,     // volume floors: volume_share of the expected day
        "volume_share": 0.001,
        "storm_ratio": 7.4, "storm_quantile": 0.995  // crashes per install above which a storm
      }}
   ],
-  "alerts": [Row],                    // union of flagged rows across channels, <= 50,
-                                      // sorted by severity rank then excess
+  "alerts": [Row],                    // union of flagged rows across channels (a severity,
+                                      // new or trend), <= 50, sorted by severity rank then excess
   "releases": [{"date": "2026-08-19", "version": "146.0"}]   // Firefox major releases (sparklines)
 }
 ```

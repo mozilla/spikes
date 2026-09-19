@@ -219,6 +219,36 @@ class FitTest(unittest.TestCase):
         true_level = 1000.0 * (1 + 0.01 * len(dates))
         self.assertLess(abs(f.next_level - true_level) / true_level, 0.1)
 
+    def test_trend_scores(self):
+        """The daily z absorbs a ramp; the trend score (two weeks vs. the
+        level four weeks before them) does not."""
+        dates, y = simulate()
+        flat = S.fit(dates, y)
+        tz = flat.trend_scores(min_level=50)
+        self.assertEqual(tz.size, len(dates))
+        self.assertTrue(np.all(np.isnan(tz[:41])))  # two windows, 28 apart
+        ok = tz[np.isfinite(tz)]
+        self.assertGreater(ok.size, 100)
+        # a proper two-sample score: about N(0, 1) on a flat series
+        self.assertLess(np.abs(np.median(ok)), 0.7)
+        self.assertLess(np.quantile(np.abs(ok), 0.9), 2.5)
+        # x4 over the last three weeks: the daily expectation follows and
+        # the last days score low, the trend score is far out
+        ramp = y.copy()
+        k = np.arange(1, 22)[::-1]           # 21 (three weeks ago) .. 1
+        ramp[-21:] *= 1 + 3 * (21 - k) / 21.0
+        f = S.fit(dates, ramp)
+        self.assertLess(abs(f.z[-1]), 4.0)
+        tz = f.trend_scores(min_level=50)
+        self.assertGreater(tz[-1], 20.0)
+        self.assertGreater(tz[-1], tz[-15])  # grows along the ramp
+        # under the floor four weeks ago: not a rise, a new signature
+        self.assertTrue(np.all(np.isnan(f.trend_scores(min_level=5000))))
+        # a drop scores in the lower tail
+        g = S.fit(dates, np.where(np.arange(len(y)) >= len(y) - 14,
+                                  y * 0.3, y))
+        self.assertLess(g.trend_scores(min_level=50)[-1], -8.0)
+
     def test_prior_is_borrowed_by_low_volume_series(self):
         dates, y = simulate()
         prior = S.fit(dates, y)

@@ -301,9 +301,21 @@ y[t] ~ level[t] * weekly[weekday(t)] * cycle[t mod 28] * yearly[week(t)]
 * The **level** is a robust local-linear forecast (Theil-Sen slope over
   the last 14 de-seasonalised days, clipped to ±10 %/day, ignored under
   `trend_min_level`), so a rollout ramp is followed without lag while up to
-  six anomalous days are ignored.  `level_change_28` (level now vs four
-  weeks ago) is reported so a persistent regression stays visible after the
-  level has absorbed it.
+  six anomalous days are ignored.  The price is that a *slow* rise never
+  shows in the daily score: a signature climbing 6 % a day (7x in a
+  month, as `IPCError-browser | GPUProcessKill` did on Fenix release in
+  August-September 2026) keeps `expected ≈ observed` all the way.  Hence
+  the **trend score** (`Fit.trend_scores`): the total of the last two
+  weeks against what the two weeks ending four weeks earlier predict for
+  them (their de-seasonalised rate times the recent days' seasonal
+  factors), with the scale of a two-sample comparison of counts (`Var = E
+  + c2 Σe₁² + (S₁/S₂)² (O₂ + c2 Σe₂²)`; no estimated level is involved,
+  whose error would dominate).  It is computed for every day of the
+  history, only where the earlier window's daily rate was above the
+  channel's crash floor (a signature that was under it then is a *new*
+  one, not a rising one), and its histogram is cached with the fit like
+  the daily z's.  `level_change_28` (level now vs four weeks ago) says how
+  big the rise is.
 * Residuals use the Anscombe transform `2 (sqrt(y + 3/8) - sqrt(e + 3/8))`
   (~N(0, 1) for Poisson).  Real counts are over-dispersed with relative
   variance `c2` (`Var = e + c2 e^2`, measured ≈ 0.02 on release
@@ -352,6 +364,7 @@ No hand-set threshold: every one is learned from the channel's own data
 |-------|-----------|
 | `major`, `spike`, `watch` | z ≥ the channel's threshold for the level |
 | `drop` | z ≤ the channel's drop threshold and expected ≥ the volume floor (cumulative only) |
+| `trend` (a badge, severity stays `ok`) | trend score ≥ the channel's trend bar, under the same volume floors as an upward severity |
 
 The thresholds are quantiles of the channel's one-step-ahead z-scores,
 pooled over its scored signatures (each fit caches a histogram of its z
@@ -365,7 +378,22 @@ z would mean different things per channel; the learned bar is higher where
 the residuals are noisier.  The Gaussian value for the same rate is a floor
 (real tails are never lighter) and is used outright under 300 pooled
 series-days; a level whose tail holds fewer than 5 points is extrapolated
-with an exponential tail fitted on the top of the sample.  The ratio gates
+with an exponential tail fitted on the top of the sample.  Only the
+series-days that could have been flagged are pooled: a day whose distinct
+installs are known and under the install floor is gated to `ok` by the
+scorer whatever its z (one machine crashing in a loop), so its residual
+is left out rather than raising the bar for every other signature.  The
+history backfill has no install counts, so the exclusion only bites on
+the days fetched since the dashboard went live and grows with them
+(measured on Fenix release on 2026-09-19, 19 days in: watch 5.2 → 4.6,
+spike 17.1 → 16.2; the remaining heavy tail there is genuine one-day
+jumps of established signatures).  The **trend bar** is the quantile of
+the pooled trend scores for its own rate (`alert_rate.trend`, 0.5 %): a
+rise stays within the four-week window for four weeks, so the rate buys
+about 28 times fewer episodes than a one-day flag, two or three rising
+signatures at a time on a channel with 400-500 scored signatures (on
+2026-09-19 the bar was z ≈ 65 on Fenix release, z ≈ 44 on Firefox
+release; the GPUProcessKill ramp scored 75).  The ratio gates
 of the first version are gone: the over-dispersion term of the score
 already grows with the count.  The severity is the worst of the cumulative
 and the recent score, then gated:
@@ -401,14 +429,19 @@ and the recent score, then gated:
   Yesterday's spikes stay listed until the live scoring takes over or the
   window closes, and a reader in any timezone sees the same list; a spike
   that lasts longer is re-flagged by the live scores until the model has
-  absorbed it as the new level (it is then a trend, not a spike, and
-  `level_change_28` keeps it visible);
+  absorbed it as the new level, from when on the **trend** badge keeps it
+  listed for as long as the rise is within its four-week window (the
+  trend is today's model state, refreshed with every fit, so it needs no
+  window of its own; a row flagged only as a trend has no "since", and its
+  bugs are judged against the start of the trend window);
 * **lag guard** (`update.lag_guard`): when at least 4 of the 6 channel
   totals are < 70 % of expectation or have `z_recent ≤ −3` at once,
   Socorro is late, not Firefox: drops are suppressed for the run and the
   page shows a banner;
-* `new` (no day above the cut in the previous 14 days), `storm` and `noise`
-  are badges orthogonal to the severity.
+* `new` (no day above the cut in the previous 14 days), `trend`, `storm`
+  and `noise` are badges orthogonal to the severity; `new` and `trend`
+  flag the row (it is listed, counted and in the cross-channel table)
+  even at severity `ok`.
 
 Fits are cached in `dashboard_models` and refreshed oldest-first when older
 than `refit_hours` (6), at most `max_fits_per_run` per run, so the

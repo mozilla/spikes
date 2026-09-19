@@ -127,6 +127,8 @@ def score_json(score, series, final=None):
         'level': num(details.get('level'), 2),
         'dispersion': num(details.get('dispersion'), 3),
         'level_change_28': num(details.get('level_change_28'), 3),
+        'trend': bool(details.get('trend')),
+        'trend_z': num(details.get('trend_z'), 1),
     }
     if final is not None:
         res['final'] = bool(final)
@@ -505,7 +507,9 @@ def flag_of(entry, now):
     live scoring takes over or the window closes, and a reader in any
     timezone sees the same list.  A spike that lasts longer than the
     window is re-flagged by the live scores until the model absorbs it as
-    the new level.  Returns ``None`` when nothing is flagged.
+    the new level; from then on a rise that is still within the trend
+    window flags the row as a *trend* (today's model state, no window
+    needed).  Returns ``None`` when nothing is flagged.
     """
     window = datetime.timedelta(hours=config.get('flag_window_hours', 48))
     best = None
@@ -513,8 +517,10 @@ def flag_of(entry, now):
         score = entry.get(key)
         if score is None:
             continue
+        trend = False
         if key == 'today':
             sev, at = score.severity, score.as_of
+            trend = bool((score.details or {}).get('trend'))
         else:
             # the peak covers the upward severities a day reached and then
             # stepped down from; the final severity covers drops
@@ -524,22 +530,24 @@ def flag_of(entry, now):
                     score.day + datetime.timedelta(days=1), datetime.time())
             if now - at > window:
                 continue
-        if sev == 'ok' and not score.is_new:
+        if sev == 'ok' and not score.is_new and not trend:
             continue
-        rank = (scoring.RANK.get(sev, 0), bool(score.is_new))
+        rank = (scoring.RANK.get(sev, 0), bool(score.is_new), trend)
         if best is None or rank > best[0]:
-            best = (rank, key, score, sev, at)
+            best = (rank, key, score, sev, at, trend)
     if best is None:
         return None
-    _, key, score, sev, at = best
+    _, key, score, sev, at, trend = best
     peak = None
     if key != 'today' and score.peak_severity and \
             score.peak_severity != score.severity:
         peak = {'severity': score.peak_severity, 'z': num(score.peak_z, 2),
                 'excess': num(score.peak_excess, 1), 'at': ts(score.peak_at)}
-    return {'severity': sev, 'is_new': bool(score.is_new),
-            'day': day_str(score.day),
-            'since': ts(score.first_flagged_at or at), 'at': ts(at),
+    # a trend has no first flagged time: it is the state of the model
+    since = ts(score.first_flagged_at or at) \
+        if sev != 'ok' or score.is_new else None
+    return {'severity': sev, 'is_new': bool(score.is_new), 'trend': trend,
+            'day': day_str(score.day), 'since': since, 'at': ts(at),
             'observed': int(score.observed or 0),
             'expected': num(score.expected, 2), 'z': num(score.z, 2),
             'excess': num(score.excess, 1), 'peak': peak}
@@ -669,10 +677,19 @@ def verdict_since(since, first_seen):
 
 def since_of(history, flag):
     """The spike a row's bugs are judged against: the flagged one, else
-    the most recent one in *history*."""
-    if flag is not None:
+    the most recent one in *history*.  A row flagged only as a trend is
+    judged against the start of the trend window (the rise spans it), or
+    its last spike when that is earlier: a bug filed during the rise is
+    about it, one from before it is a known crash rising again."""
+    if flag is not None and (flag['severity'] != 'ok' or flag['is_new']):
         return episode_since(history, flag)
-    return last_episode_since(history)
+    last = last_episode_since(history)
+    if flag is not None and flag.get('trend'):
+        start = datetime.datetime.combine(
+            flag_day(flag) - datetime.timedelta(days=scoring.TREND_DAYS),
+            datetime.time())
+        return min(start, last) if last is not None else start
+    return last
 
 
 def signed_in():
@@ -749,7 +766,7 @@ def counts_from(by_series, ids, flags):
     the rows *ids*.  A noise row counts as noise only: the severity
     counts are what is left to look at."""
     counts = {k: 0 for k in ('major', 'spike', 'watch', 'drop', 'new',
-                             'storm', 'noise')}
+                             'trend', 'storm', 'noise')}
     for sid in ids:
         e = by_series[sid]
         if e['series'].noise:
@@ -761,6 +778,8 @@ def counts_from(by_series, ids, flags):
             counts[sev] += 1
         if flag['is_new'] if flag else today.is_new:
             counts['new'] += 1
+        if (today.details or {}).get('trend'):
+            counts['trend'] += 1
         if today.storm:
             counts['storm'] += 1
     counts['scored'] = len(ids)
@@ -991,6 +1010,7 @@ def daily_block(product, channel, series_id, today, days, granularity,
 def model_block(fit, today, cached=None, borrowed=None):
     s = fit.summary()
     return {'level': num(fit.next_level, 2),
+            'level_change_28': num(fit.level_change(scoring.TREND_DAYS), 3),
             'dispersion': num(fit.dispersion, 3), 'c2': num(fit.c2, 6),
             'history_days': s['history_days'],
             'components': s['components'], 'factors': s['factors'],

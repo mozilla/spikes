@@ -24,9 +24,17 @@ const API = new URL("../api/", import.meta.url);
 const REFRESH_MS = 5 * 60 * 1000;
 const FOCUS_REFRESH_MS = 60 * 1000;
 const ALERT_SEVERITIES = ["major", "spike", "watch", "drop"];
-const COUNT_SEVERITIES = [...ALERT_SEVERITIES, "new"];
+const COUNT_SEVERITIES = [...ALERT_SEVERITIES, "new", "trend"];
 const COUNT_KINDS = [...COUNT_SEVERITIES, "storm"];
-const SEV_RANK = { major: 0, spike: 1, watch: 2, new: 3, drop: 4, ok: 5 };
+const SEV_RANK = {
+  major: 0,
+  spike: 1,
+  watch: 2,
+  new: 3,
+  trend: 4,
+  drop: 5,
+  ok: 6,
+};
 const CHART_HEIGHT = 280;
 const ALL = { all: true }; // the cross-channel view
 const ALL_KEY = "all";
@@ -397,8 +405,15 @@ function isNew(row) {
   return !!(row?.flag ? row.flag.is_new : row?.is_new);
 }
 
+/** Rising: the last two weeks are above what the level of four weeks
+ * before predicted, by the channel's learned trend bar (today's model
+ * state, so no carried-over flag is involved). */
+function isTrend(row) {
+  return !!row?.trend;
+}
+
 function isFlagged(row) {
-  return sevOf(row) !== "ok" || isNew(row);
+  return sevOf(row) !== "ok" || isNew(row) || isTrend(row);
 }
 
 /** Days between the row's day and its flag's day (0 = today's own state). */
@@ -436,7 +451,13 @@ function visibleAlerts(summary) {
 
 function rowRank(row) {
   const s = sevOf(row);
-  return s === "ok" && isNew(row) ? SEV_RANK.new : (SEV_RANK[s] ?? SEV_RANK.ok);
+  if (s !== "ok") {
+    return SEV_RANK[s] ?? SEV_RANK.ok;
+  }
+  if (isNew(row)) {
+    return SEV_RANK.new;
+  }
+  return isTrend(row) ? SEV_RANK.trend : SEV_RANK.ok;
 }
 
 /** Severity thresholds of the channel on screen (learned per channel). */
@@ -469,6 +490,8 @@ function chipHelp(kind) {
     ? `at least ${t[kind].z} standard deviations above the seasonal expectation (this channel's learned threshold, see ?)`
     : "above the seasonal expectation by this channel's learned threshold (see ?)";
   switch (kind) {
+    case "trend":
+      return `Trend: the crashes of the last two weeks are ${above.replace("the seasonal expectation", "what the two weeks ending four weeks earlier predict for them")}. The daily scores follow a slow rise and stop seeing it; this badge is what keeps it visible, for as long as the rise is within the four-week window.`;
     case "major":
       return `Major spike: crashes today are ${above}, and the number of distinct installs rose as much. The strongest alert.`;
     case "spike":
@@ -508,6 +531,27 @@ function badge(kind, text) {
     "span",
     { class: "chip chip-neutral", title: chipHelp(kind) },
     text ?? kind
+  );
+}
+
+/** "×7.3" for a level change (one decimal under 10, none above). */
+function fmtMultiple(x) {
+  if (x == null || !Number.isFinite(x)) {
+    return null;
+  }
+  return `×${x >= 10 ? Math.round(x).toLocaleString("en-US") : x.toFixed(1)}`;
+}
+
+/** The trend chip: "trend ×7.3", the level change over four weeks. */
+function trendChip(row) {
+  const mult = fmtMultiple(row.level_change_28);
+  const z = row.trend_z != null ? ` (trend z ${fmtZ(row.trend_z)})` : "";
+  const detail = mult ? ` Level ${mult} vs 4 weeks ago${z}.` : "";
+  return el(
+    "span",
+    { class: "chip chip-trend", title: `${chipHelp("trend")}${detail}` },
+    "trend",
+    mult ? el("span", { class: "n" }, mult) : null
   );
 }
 
@@ -1235,6 +1279,7 @@ function renderTiles(ch) {
   );
   const extras = [
     c.new ? `${c.new} new` : null,
+    c.trend ? `${c.trend} rising` : null,
     c.storm ? plural(c.storm, "storm") : null,
     c.noise ? `${c.noise} noise` : null,
   ].filter(Boolean);
@@ -1471,10 +1516,12 @@ function modelSummaryText(model, day) {
       `yearly n/a (${comp.yearly.cycles} / ${comp.yearly.min_cycles} cycles)`
     );
   }
-  parts.push(
-    `level ${fmtCompact(model.level)}`,
-    `dispersion ${fmtDispersion(model)}`
-  );
+  parts.push(`level ${fmtCompact(model.level)}`);
+  const mult = fmtMultiple(model.level_change_28);
+  if (mult) {
+    parts.push(`${mult} vs 4 weeks ago`);
+  }
+  parts.push(`dispersion ${fmtDispersion(model)}`);
   return parts.join(" · ");
 }
 
@@ -1592,8 +1639,18 @@ function matchesSeverityFilter(row, severities) {
   const severity = sevOf(row);
   return (
     (severity !== "ok" && severities.has(severity)) ||
-    (isNew(row) && severities.has("new"))
+    (isNew(row) && severities.has("new")) ||
+    (isTrend(row) && severities.has("trend"))
   );
+}
+
+/** The severity toggle that reveals a flagged row hidden by the filter. */
+function toggleFor(row) {
+  const severity = sevOf(row);
+  if (severity !== "ok") {
+    return severity;
+  }
+  return isNew(row) ? "new" : "trend";
 }
 
 function visibleRows() {
@@ -1869,17 +1926,21 @@ const hidden = text => el("span", { class: "visually-hidden" }, text);
 function renderRow(row, withChannel) {
   const sev = sevOf(row);
   const fresh = isNew(row);
+  const rising = isTrend(row);
   const sig = row.signature;
   // the row is clickable; keyboard users get a real button (the expander,
   // or the channel button in the cross-channel table)
   const tr = el("tr", { class: "row", tabindex: -1, "data-sig": sig });
 
   const badges = el("div", { class: "badge-set" });
-  if (sev !== "ok" || !fresh) {
+  if (sev !== "ok" || !(fresh || rising)) {
     badges.append(chip(sev));
   }
   if (fresh) {
     badges.append(chip("new"));
+  }
+  if (rising) {
+    badges.append(trendChip(row));
   }
   // a flag carried over from a previous day (scores are per UTC day; the
   // flag window keeps yesterday's spikes listed)
@@ -2357,9 +2418,9 @@ function focusSignature(sig) {
     category === "flagged" &&
     !matchesSeverityFilter(row, filters.severities)
   ) {
-    const severity = sevOf(row) === "ok" ? "new" : sevOf(row);
-    document.querySelector(`#sig-filters input[value="${severity}"]`).checked =
-      true;
+    document.querySelector(
+      `#sig-filters input[value="${toggleFor(row)}"]`
+    ).checked = true;
     changed = true;
   }
   if (changed || !rowElement(sig)) {
@@ -2385,7 +2446,7 @@ function fmtPct(x, digits = 2) {
   return x == null ? "—" : `${(x * 100).toFixed(digits)} %`;
 }
 
-const LEVELS = ["watch", "spike", "major", "drop"];
+const LEVELS = ["watch", "spike", "major", "drop", "trend"];
 
 function renderHelp() {
   const channels = app.summary?.channels || [];
@@ -2395,6 +2456,7 @@ function renderHelp() {
     spike: 0.0015,
     major: 0.00015,
     drop: 0.0015,
+    trend: 0.005,
   };
   const item = (title, text) => el("li", {}, el("b", {}, title), text);
   const method = el(
@@ -2415,6 +2477,14 @@ function renderHelp() {
       item(
         "Floor. ",
         'The Gaussian value for the same rate: real tails are never lighter. It is used outright when the pooled sample is under 300 series-days; when a level\'s tail holds fewer than 5 points it is extrapolated from an exponential fit of the top of the sample ("extrapolated" below).'
+      ),
+      item(
+        "Eligible days. ",
+        "Only the series-days that could have been flagged shape the bars: a day whose distinct installs are known and under the install floor is gated to ok whatever its z (one machine crashing in a loop), so its residual is left out of the pool."
+      ),
+      item(
+        "Trend. ",
+        `The daily score follows a slow rise and stops seeing it. Every fit also scores its last two weeks against what the two weeks ending four weeks earlier predict for them (a two-sample comparison of counts); the trend bar is the quantile of that statistic, pooled over the channel's signatures that were already above the crash floor then, for a rate of ${fmtPct(rates.trend)} of the series-days (a rise stays in the window four weeks, so that is two or three rising signatures at a time on a large channel).`
       ),
       item(
         "Volume floors. ",
@@ -2440,6 +2510,7 @@ function renderHelp() {
     "spike",
     "major",
     "drop",
+    "trend",
     "min crashes",
     "min installs",
     "storm ≥ crashes/install",
