@@ -418,10 +418,9 @@ function isFlagged(row) {
 
 /** Days between the row's day and its flag's day (0 = today's own state). */
 function flagAge(row) {
-  if (!row?.flag || !row.day || row.flag.day === row.day) {
-    return 0;
-  }
-  return Math.round((parseDay(row.day) - parseDay(row.flag.day)) / DAY_MS);
+  return !row?.flag || !row.day || row.flag.day === row.day
+    ? 0
+    : Math.round((parseDay(row.day) - parseDay(row.flag.day)) / DAY_MS);
 }
 
 function flagWhen(row) {
