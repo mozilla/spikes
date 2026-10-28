@@ -19,7 +19,7 @@ from flask import (Blueprint, Response, jsonify, render_template, request,
 
 from spikes.logger import logger
 from . import (auth, calibration, config, events, intraday, models,
-               scoring, seasonal, socorro, versions)
+               nimbus, scoring, seasonal, socorro, versions)
 
 
 blueprint = Blueprint('dashboard', __name__, template_folder='templates',
@@ -1322,6 +1322,8 @@ def channel_payload(product, channel, today, now, days, granularity):
         'signatures': rows,
         'releases': marks + ([upcoming] if upcoming else []),
         'next_release': upcoming,
+        'nimbus': nimbus.marks(product, channel,
+                               today - datetime.timedelta(days=days)),
         'thresholds': rules,
     })
     return s
@@ -1403,4 +1405,6 @@ def signature_view():
                                entry['today'].as_of),
         'releases': marks + ([upcoming] if upcoming else []),
         'next_release': upcoming,
+        'nimbus': nimbus.marks(product, channel,
+                               today - datetime.timedelta(days=days)),
     }, run, product, channel, days, granularity, signature, now=now)

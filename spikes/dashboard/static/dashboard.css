@@ -561,6 +561,18 @@ svg {
     &.is-dim { opacity: 0.55; }
   }
   & .event-rule { stroke: var(--axis); stroke-width: 1; stroke-dasharray: 2 3; shape-rendering: crispEdges; }
+  & .nimbus-lane {
+    color: var(--ink-2);
+
+    & .hit { fill: transparent; outline: none; }
+    & .hit.has-link { cursor: pointer; }
+    & .hit:focus-visible { stroke: var(--focus); stroke-width: 1.5; }
+  }
+  & .nimbus-tick {
+    fill: var(--ink-2);
+
+    &.is-hover { fill: var(--ink); }
+  }
   & .series-observed, & .series-expected, & .series-yesterday {
     stroke-width: 2;
     fill: none;
@@ -613,6 +625,7 @@ svg {
   & .tt-val { font-weight: 600; font-variant-numeric: tabular-nums; }
   & .event-icon { flex: none; color: var(--ink-2); }
   & .tt-label { color: var(--ink-2); }
+  & .tt-wrap { white-space: normal; max-width: 440px; align-items: baseline; }
 }
 .chart-table {
   max-height: 320px;
@@ -623,6 +636,17 @@ svg {
   & th, & td { padding: 3px 8px; border-bottom: var(--border-grid); text-align: right; font-variant-numeric: tabular-nums; }
   & th:first-child, & td:first-child { text-align: left; font-variant-numeric: normal; }
   & th { position: sticky; top: 0; background: var(--surface); color: var(--ink-2); font-weight: 600; }
+  & .nimbus-cell {
+    min-width: 24em;
+    margin: 0;
+    padding: 0;
+    list-style: none;
+    text-align: left;
+    font-variant-numeric: normal;
+
+    & li + li { margin-top: 3px; }
+    & a:focus-visible { outline: var(--focus-ring); outline-offset: 1px; }
+  }
 }
 .chart-empty { color: var(--ink-2); font-size: var(--font-size-control); padding: 24px 8px; text-align: center; }
 

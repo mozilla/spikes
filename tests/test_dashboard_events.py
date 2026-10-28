@@ -178,7 +178,9 @@ PAYLOADS = {'windows-updates': WINDOWS, 'nvidia-geforce': NVIDIA,
             'android-versions': EOL_ANDROID,
             'norton': NORTON, 'avast': CHOCO_AVAST,
             'malwarebytes': CHOCO_MWB, 'eset': WINGET_ESET,
-            'defender': DEFENDER}
+            'defender': DEFENDER,
+            # Nimbus: test_dashboard_nimbus.py
+            'nimbus-desktop': [], 'nimbus-fenix': []}
 BY_URL = {(s.url(TODAY) if callable(s.url) else s.url): s.name
           for s in events.SOURCES}
 

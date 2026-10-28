@@ -371,6 +371,13 @@ function frame(container, { legend = [], buttons = [] }) {
   const buildTable = () => {
     const { caption, columns, rows } = pendingTable;
     pendingTable = null;
+    // Restore focus by event key; fall back to the table if the link vanished.
+    const focused = document.activeElement;
+    const refocus =
+      focused !== table && table.contains(focused)
+        ? (focused.getAttribute("data-key") ?? "")
+        : null;
+    const top = table.scrollTop;
     table.replaceChildren(
       el(
         "table",
@@ -388,8 +395,13 @@ function frame(container, { legend = [], buttons = [] }) {
         )
       )
     );
+    table.scrollTop = top;
+    if (refocus != null) {
+      const again = table.querySelector(`[data-key="${CSS.escape(refocus)}"]`);
+      (again || table).focus({ preventScroll: true });
+    }
   };
-  /** rows: () => string[][], called when the table is (or becomes) visible. */
+  /** rows: () => (string|Node)[][], evaluated when the table is visible. */
   f.setTable = (caption, columns, rows) => {
     pendingTable = { caption, columns, rows };
     if (!table.hidden) {
@@ -428,7 +440,8 @@ const TIP_KEY_CLASS = {
   dash: "tt-key tt-dash",
 };
 
-/** rows: [{ value, label, color, kind: 'rect'|'dot'|'dash'|'icon', source }] */
+/** rows: [{ value, label, color, kind: 'rect'|'dot'|'dash'|'icon', source,
+ * wrap }]; `wrap` allows multiline text. */
 function showTip(f, x, y, title, rows) {
   const { tip, plot } = f;
   tip.replaceChildren(
@@ -436,7 +449,7 @@ function showTip(f, x, y, title, rows) {
     ...rows.map(r =>
       el(
         "div",
-        { class: "tt-row" },
+        { class: r.wrap ? "tt-row tt-wrap" : "tt-row" },
         r.kind === "icon"
           ? iconSvg(r.source, 12)
           : el("i", {
@@ -655,12 +668,26 @@ function axisWidth(ticks) {
   return 10 + Math.max(...ticks.map(t => fmtInt(t).length)) * 6.6;
 }
 
-/** Whether keyboard focus is on the chart reader (a re-render drops it). */
-function readerFocused(f) {
-  return (
-    f.plot.contains(document.activeElement) &&
-    document.activeElement.classList.contains("overlay")
-  );
+/** The focused chart reader or Nimbus lane, to restore after a redraw. */
+function chartFocus(f) {
+  const focused = document.activeElement;
+  return f.plot.contains(focused) &&
+    focused.matches(".overlay, .nimbus-lane .hit")
+    ? focused
+    : null;
+}
+
+/** Restore the same control, or the reader if the lane vanished. */
+function restoreFocus(root, focused) {
+  if (!focused) {
+    return;
+  }
+  const selector = focused.matches(".overlay")
+    ? ".overlay"
+    : ".nimbus-lane .hit";
+  (root.querySelector(selector) || root.querySelector(".overlay"))?.focus({
+    preventScroll: true,
+  });
 }
 
 // ------------------------------------------------------- platform event badges
@@ -852,11 +879,258 @@ function drawEventBadges(root, f, box, clusters) {
   }
 }
 
+// ----------------------------------------------------------------- Nimbus lane
+// One tick per event bucket below the platform badges.
+const LANE_H = 10;
+const LANE_SPACE = LANE_H + 8; // the lane and its gap to the version labels
+const LANE_SNAP = 16; // maximum hover distance in pixels
+const NIMBUS_TIP_ITEMS = 6;
+const NIMBUS_DAY_ITEMS = 3;
+
+/** Hours and minutes with a UTC or local zone label. */
+function fmtAt(iso, local = false) {
+  const d = new Date(iso);
+  return local
+    ? `${pad2(d.getHours())}:${pad2(d.getMinutes())} ${localZoneShort()}`
+    : `${pad2(d.getUTCHours())}:${pad2(d.getUTCMinutes())} UTC`;
+}
+
+/** Up to `max` items, then an overflow count; `detail` adds wrapping rows. */
+function nimbusRows(
+  items,
+  { max, detail = false, local = false, withDay = false }
+) {
+  const rows = items.slice(0, max).flatMap(it => {
+    const row = {
+      value: it.title,
+      label: [
+        withDay ? fmtDate(parseDay(it.day)) : null,
+        it.at ? fmtAt(it.at, local) : null,
+      ]
+        .filter(Boolean)
+        .join(" "),
+      kind: "icon",
+      source: "nimbus",
+      wrap: detail,
+    };
+    return detail && it.detail
+      ? [row, { value: "", label: it.detail, wrap: true }]
+      : [row];
+  });
+  if (items.length > max) {
+    rows.push({
+      value: `+${items.length - max} more`,
+      label: "Nimbus changes",
+      kind: "icon",
+      source: "nimbus",
+    });
+  }
+  return rows;
+}
+
+/** Join the optional day, time and detail for tables and accessible labels. */
+const nimbusWhat = (it, { local = false, withDay = false } = {}) =>
+  [
+    withDay ? fmtDate(parseDay(it.day)) : null,
+    it.at ? fmtAt(it.at, local) : null,
+    it.detail,
+  ]
+    .filter(Boolean)
+    .join(" · ");
+
+/** Match table links across redraws by kind, recipe URL and time. */
+const nimbusKey = it => `${it.kind} ${it.url} ${it.at ?? ""}`;
+
+/** All event details and links for table and keyboard access. */
+function nimbusCell(items, opts) {
+  if (!items.length) {
+    return "—";
+  }
+  return el(
+    "ul",
+    { class: "nimbus-cell" },
+    ...items.map(it =>
+      el(
+        "li",
+        {},
+        it.url
+          ? el(
+              "a",
+              {
+                href: it.url,
+                target: "_blank",
+                rel: "noopener",
+                "data-key": nimbusKey(it),
+              },
+              it.title
+            )
+          : it.title,
+        " · ",
+        nimbusWhat(it, opts)
+      )
+    )
+  );
+}
+
+/** Nimbus groups for a UTC day, or [] without a day. */
+const onNimbusDay = (s, dayMs) =>
+  dayMs == null ? [] : (s.nimbus || []).filter(g => parseDay(g.day) === dayMs);
+
+/** Flatten groups, retaining each item's day. */
+const nimbusItems = groups =>
+  groups.flatMap(g => g.items.map(it => ({ ...it, day: g.day })));
+
+/**
+ * ticks: [{ key, px, title, items }]; `key` preserves focus across redraws.
+ * One tab stop with arrow/Home/End navigation; click or Enter opens the
+ * first item's link. `ruled` draws all rules rather than only the hovered one.
+ */
+function drawNimbusLane(
+  root,
+  f,
+  box,
+  y0,
+  ticks,
+  { local = false, ruled = false, withDay = false, focusKey = null } = {}
+) {
+  if (!ticks.length) {
+    return;
+  }
+  const g = svg("g", { class: "nimbus-lane" });
+  // Keep the icon's native tooltip outside the lane's hit area.
+  const icon = iconNode("nimbus", LANE_H + 2, box.left - LANE_H - 4, y0 - 1);
+  icon.append(svg("title", { text: "Nimbus experiments and rollouts" }));
+  g.append(icon);
+  const rule = x =>
+    svg("line", {
+      class: "event-rule nimbus-rule",
+      x1: x,
+      x2: x,
+      y1: box.top,
+      y2: box.bottom,
+    });
+  const marks = ticks.map(t => {
+    if (ruled) {
+      root.append(rule(t.px));
+    }
+    const m = svg("rect", {
+      class: "nimbus-tick",
+      x: t.px - 1,
+      y: y0,
+      width: 2,
+      height: LANE_H,
+      rx: 1,
+    });
+    g.append(m);
+    return m;
+  });
+  const hover = rule(0);
+  hover.setAttribute("visibility", "hidden");
+  const last = ticks.length - 1;
+  const kept = ticks.findIndex(t => t.key === focusKey);
+  const initial = kept >= 0 ? kept : last;
+  const describe = t =>
+    `${t.title}: ${t.items
+      .map(it => `${it.title} · ${nimbusWhat(it, { local, withDay })}`)
+      .join("; ")}`;
+  const hit = svg("rect", {
+    class: "hit",
+    x: box.left - 2,
+    y: y0 - 4,
+    width: Math.max(0, box.right - box.left + 6),
+    height: LANE_H + 8,
+    tabindex: 0,
+    role: "slider",
+    "aria-orientation": "horizontal",
+    "aria-valuemin": 0,
+    "aria-valuemax": last,
+    "aria-valuenow": last,
+    "aria-valuetext": describe(ticks[last]),
+    "aria-label":
+      "Nimbus changes: arrow keys move between the days with changes, Enter opens the first one in Experimenter, Escape closes; the table view links every change",
+  });
+  g.append(hit);
+  root.append(hover, g);
+
+  let current = -1;
+  const pxs = ticks.map(t => t.px);
+  const nearest = e => {
+    const x = e.clientX - root.getBoundingClientRect().left;
+    const i = nearestIndex(pxs, x);
+    return Math.abs(pxs[i] - x) <= LANE_SNAP ? i : -1;
+  };
+  const select = i => {
+    if (i === current) {
+      return;
+    }
+    marks[current]?.classList.remove("is-hover");
+    current = i;
+    if (i < 0) {
+      hover.setAttribute("visibility", "hidden");
+      hit.classList.remove("has-link");
+      hideTip(f);
+      return;
+    }
+    const t = ticks[i];
+    hit.setAttribute("data-key", t.key);
+    hit.setAttribute("aria-valuenow", i);
+    hit.setAttribute("aria-valuetext", describe(t));
+    marks[i].classList.add("is-hover");
+    hover.setAttribute("x1", t.px);
+    hover.setAttribute("x2", t.px);
+    hover.setAttribute("visibility", "visible");
+    hit.classList.toggle("has-link", !!t.items[0]?.url);
+    showTip(
+      f,
+      t.px,
+      y0 + LANE_H,
+      `Nimbus · ${t.title}`,
+      nimbusRows(t.items, {
+        max: NIMBUS_TIP_ITEMS,
+        detail: true,
+        local,
+        withDay,
+      })
+    );
+  };
+  hit.addEventListener("pointermove", e => select(nearest(e)));
+  hit.addEventListener("pointerleave", () => select(-1));
+  const open = i => {
+    const url = ticks[i]?.items[0]?.url;
+    if (url) {
+      window.open(url, "_blank", "noopener");
+    }
+  };
+  hit.addEventListener("click", e => open(nearest(e)));
+  hit.addEventListener("focus", () => select(current >= 0 ? current : initial));
+  hit.addEventListener("blur", () => select(-1));
+  hit.addEventListener("keydown", e => {
+    const cur = current >= 0 ? current : initial;
+    if (e.key === "Escape") {
+      select(-1);
+      return;
+    }
+    if (e.key === "Enter") {
+      e.preventDefault();
+      open(cur);
+      return;
+    }
+    const to = { ArrowLeft: cur - 1, ArrowRight: cur + 1, Home: 0, End: last }[
+      e.key
+    ];
+    if (to != null) {
+      e.preventDefault();
+      select(clamp(to, 0, last));
+    }
+  });
+}
+
 // ------------------------------------------------------------------ line chart
 /**
  * spec: { dates[], granularity, observed[], expected[], lo3[], hi3[], lo5[],
  *   hi5[], z[], partial[], future[], projected[], severity[],
- *   releases[{ date, version, upcoming }], events[], height, label, ariaLabel }
+ *   releases[{ date, version, upcoming }], events[], nimbus[], height, label,
+ *   ariaLabel }
  */
 const SLICED = [
   "dates",
@@ -970,7 +1244,7 @@ export function lineChart(container, spec) {
   }
 
   function render() {
-    const hadFocus = readerFocused(f);
+    const focused = chartFocus(f);
     const s = state.zoom ? sliceSpec(state.spec, ...state.zoom) : state.spec;
     const width = f.container.clientWidth;
     if (width < 40) {
@@ -985,6 +1259,8 @@ export function lineChart(container, spec) {
     const weekly = s.granularity === "week";
     const xs = s.dates.map(parseDay);
     const eventMap = bucketEvents(s.events, xs, weekly);
+    const nimbusMap = bucketEvents(s.nimbus, xs, weekly);
+    const nimbusAt = i => nimbusItems(nimbusMap.get(i) || []);
 
     // y domain; above the linear scale's clip, points become arrows so one
     // huge day cannot flatten the rest
@@ -1049,8 +1325,9 @@ export function lineChart(container, spec) {
         }))
     );
     const strip = stripHeight(badgeClusters);
-    const svgHeight = height + strip;
-    const box = { left, right, top: 22 + strip, bottom: svgHeight - 24 };
+    const lane = nimbusMap.size ? LANE_SPACE : 0;
+    const svgHeight = height + strip + lane;
+    const box = { left, right, top: 22 + strip + lane, bottom: svgHeight - 24 };
     const y = makeY(yMin, yMax, box.top, box.bottom, state.log);
     const yc = v => Math.max(box.top, y(v));
     const point = (v, i) => (v == null ? null : { x: pxs[i], y: yc(v) });
@@ -1167,6 +1444,21 @@ export function lineChart(container, spec) {
     }
 
     drawEventBadges(root, f, box, badgeClusters);
+    drawNimbusLane(
+      root,
+      f,
+      box,
+      strip + 4,
+      [...nimbusMap.keys()]
+        .sort((a, b) => a - b)
+        .map(i => ({
+          key: s.dates[i],
+          px: pxs[i],
+          title: bucketTitle(i),
+          items: nimbusAt(i),
+        })),
+      { withDay: weekly, focusKey: focused?.getAttribute("data-key") }
+    );
     root.append(
       svg("path", {
         class: "series-observed",
@@ -1294,7 +1586,10 @@ export function lineChart(container, spec) {
           kind: "dot",
         });
       }
-      rows.push(...eventRows(eventMap.get(i) || [], weekly));
+      rows.push(
+        ...eventRows(eventMap.get(i) || [], weekly),
+        ...nimbusRows(nimbusAt(i), { max: NIMBUS_DAY_ITEMS, withDay: weekly })
+      );
       return rows;
     }
 
@@ -1345,9 +1640,7 @@ export function lineChart(container, spec) {
           .join(", ")}`,
     });
     f.show(root);
-    if (hadFocus) {
-      root.querySelector(".overlay")?.focus({ preventScroll: true });
-    }
+    restoreFocus(root, focused);
 
     const range = (lo, hi, i) =>
       at(lo, i) == null ? "—" : `${fmtInt(lo[i])} – ${fmtInt(hi[i])}`;
@@ -1362,6 +1655,7 @@ export function lineChart(container, spec) {
         "z",
         "Severity",
         "Platform events",
+        "Nimbus",
       ],
       () =>
         xs.map((_, i) => {
@@ -1379,6 +1673,7 @@ export function lineChart(container, spec) {
             fmtZ(at(s.z, i)),
             s.severity?.[i] || "ok",
             eventText(eventMap.get(i) || []) || "—",
+            nimbusCell(nimbusAt(i), { withDay: weekly }),
           ];
         })
     );
@@ -1466,7 +1761,7 @@ export function hourLabel(day, h, local = useLocalTime()) {
 // -------------------------------------------------------- bar chart (intraday)
 /**
  * spec: { hours[], today[], yesterday[], expected_today[], in_progress_hour,
- *   day, events[], height, emptyMessage, ariaLabel }
+ *   day, events[], nimbus[], height, emptyMessage, ariaLabel }
  */
 export function barChart(container, spec) {
   const state = { spec };
@@ -1492,7 +1787,7 @@ export function barChart(container, spec) {
   window.addEventListener(TZ_EVENT, onTz);
 
   function render() {
-    const hadFocus = readerFocused(f);
+    const focused = chartFocus(f);
     const s = state.spec;
     const local = useLocalTime();
     const zone = zoneLabel(local);
@@ -1557,8 +1852,14 @@ export function barChart(container, spec) {
     }
     const badgeClusters = layoutEventBadges(left, right, badgePositions);
     const strip = stripHeight(badgeClusters);
-    const svgHeight = height + strip;
-    const box = { left, right, top: 20 + strip, bottom: svgHeight - 24 };
+    // Position timed events within today's UTC hours.
+    const nimbusTimed = nimbusItems(onNimbusDay(s, dayMs))
+      .filter(it => it.at)
+      .map(it => ({ it, hour: (Date.parse(it.at) - dayMs) / HOUR_MS }))
+      .filter(t => t.hour >= 0 && t.hour < 24);
+    const lane = nimbusTimed.length ? LANE_SPACE : 0;
+    const svgHeight = height + strip + lane;
+    const box = { left, right, top: 20 + strip + lane, bottom: svgHeight - 24 };
     const slot = (right - left) / n;
     const barW = clamp(slot - 2, 2, 24);
     const y = makeY(0, yMax, box.top, box.bottom, false);
@@ -1707,6 +2008,31 @@ export function barChart(container, spec) {
       }
     }
 
+    // Group events by UTC minute to keep tick keys stable across resizes.
+    const nimbusTicks = new Map();
+    for (const t of nimbusTimed) {
+      const key = t.it.at.slice(0, 16);
+      if (!nimbusTicks.has(key)) {
+        nimbusTicks.set(key, {
+          key,
+          px: Math.round(left + slot * t.hour),
+          title: fmtAt(t.it.at, local),
+          items: [],
+        });
+      }
+      nimbusTicks.get(key).items.push(t.it);
+    }
+    drawNimbusLane(
+      root,
+      f,
+      box,
+      strip + 4,
+      [...nimbusTicks.values()].sort((a, b) => a.px - b.px),
+      { local, ruled: true, focusKey: focused?.getAttribute("data-key") }
+    );
+    const nimbusIn = h =>
+      nimbusTimed.filter(t => Math.floor(t.hour) === h).map(t => t.it);
+
     const todayLabel = i => {
       if (at(s.today, i) == null) {
         return "today (not yet)";
@@ -1756,6 +2082,7 @@ export function barChart(container, spec) {
               kind: "icon",
               source: t.g.source,
             })),
+          ...nimbusRows(nimbusIn(hours[i]), { max: NIMBUS_DAY_ITEMS, local }),
         ];
         const anchorY = y(today ?? at(s.expected_today, i) ?? 0);
         showTip(
@@ -1782,19 +2109,18 @@ export function barChart(container, spec) {
       },
     });
     f.show(root);
-    if (hadFocus) {
-      root.querySelector(".overlay")?.focus({ preventScroll: true });
-    }
+    restoreFocus(root, focused);
 
     f.setTable(
       "Crashes per hour, table view",
-      [`Hour (${zone})`, "Today", "Expected", "Yesterday"],
+      [`Hour (${zone})`, "Today", "Expected", "Yesterday", "Nimbus"],
       () =>
         hours.map((h, i) => [
           hl(h) + (h === s.in_progress_hour ? " (in progress)" : ""),
           fmtInt(at(s.today, i)),
           fmtInt(at(s.expected_today, i)),
           fmtInt(at(s.yesterday, i)),
+          nimbusCell(nimbusIn(h), { local }),
         ])
     );
   }

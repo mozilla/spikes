@@ -46,6 +46,7 @@ and the afternoon peak are not spikes.
 | `scoring.py` | per-channel scoring (today, yesterday, drivers) |
 | `update.py` | one scheduler run; `python -m spikes.dashboard.update` |
 | `events.py` | platform events (Windows updates, drivers, OS releases) fetched by the scheduler, badges on the charts |
+| `nimbus.py` | Nimbus events from Experimenter and Remote Settings |
 | `api.py` | Flask blueprint (`/dashboard.html`, `/dashboard/api/*`) |
 | `auth.py` | sign-in with a Mozilla Google account (`/dashboard/login`, `/dashboard/logout`, `/dashboard/api/me`) and the `login_required` guard for routes that change something |
 | `API.md` | JSON contract used by the page |
@@ -244,6 +245,8 @@ day's `cutoff`, and a missing (series, day) value is treated as censored
 | `dashboard_bug_checks` | signature | when its bugs were last looked up, how many were found |
 | `dashboard_cache` | key | computed API payloads (the summary per scope and reader kind), versioned by run and day; written by the scheduler after every run |
 | `dashboard_cycles` | (product, channel, start) | version cycles of the `current` scope (channel `beta`: label `155`, `140.15`) and of the `strict` scope (channel `beta@strict`: label `156.0b3`, `140.15.1esr`): end, SuperSearch filter; replaced when the calendars change |
+| `dashboard_events` | (kind, ref) | platform and Nimbus events: day, optional time, title, detail, links; Nimbus events have a product and channels (NULL for all) |
+| `dashboard_nimbus` | slug | last Remote Settings recipe state, used to detect changes |
 
 `models.create_all()` (called by every run and by the web process before
 its first request) creates missing tables and adds columns that were added
@@ -490,6 +493,40 @@ serves everything grouped per day and source, a few KB gzipped, with an
 ETag that only changes when a refresh wrote something: the page fetches it
 once and its polls cost a 304.  Rows older than `events_retention_days`
 (800) are pruned.
+
+## Nimbus
+
+`nimbus.py` collects launch, change and end events for Firefox desktop and
+Fenix. Channel and signature charts show them below the platform badges,
+grouped by day or week. The hourly chart groups timed events by UTC minute.
+Hover or use arrow keys, Home and End to select a tick; click or Enter opens
+its first Experimenter link. Escape hides the tooltip. The table view
+includes all items, times, details and links.
+
+| what | source | when |
+|------|--------|------|
+| launch | Experimenter's `/api/v6/experiments/?application=` (`firefox-desktop`, `fenix`) and newly seen Remote Settings recipes | `publishedDate`, falling back to `startDate` |
+| end | Experimenter or a Remote Settings deletion | `endDate` (day only) or the deletion's `last_modified`; Experimenter does not overwrite stored ends |
+| change | Remote Settings, compared with `dashboard_nimbus` | `last_modified`; tracked fields are bucket fraction, enrollment pause, targeting and branches |
+
+Experimenter is refreshed every `events_refresh_hours`. Each scheduler run
+checks the Remote Settings monitor and fetches records newer than the
+latest stored recipe timestamp for changed collections. Known recipes
+produce no change event when their tracked fields are unchanged.
+
+Before the first poll, earlier revisions are not reconstructed. A newly
+seen recipe modified more than one hour after publication gets an event
+with unknown change details. When only `startDate` is available, the
+modification must be on a later day; without either date, only the unknown
+change is recorded. Launch percentages use the fetched recipe's bucket
+`count / total`, rather than a reconstructed launch population.
+
+Channels use the recipe's `channel` when set, otherwise recognized
+`browserSettings.update.channel == ...` or `in [...]` expressions. Without
+a recognized constraint, events appear on all configured channels. All
+scopes share the same events, served as `nimbus` in channel and signature
+payloads. `/dashboard/api/events` excludes Nimbus event rows from its
+events list and ETag.
 
 ## Web
 

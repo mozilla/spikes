@@ -207,8 +207,7 @@ class Run(db.Model):
 
 
 class Event(db.Model):
-    """A platform event shown as a badge on the charts (a Windows update,
-    an NVIDIA driver, a macOS release...), see ``events.py``."""
+    """A platform badge or product-scoped Nimbus event."""
     __tablename__ = 'dashboard_events'
 
     id = db.Column(db.Integer, primary_key=True, autoincrement=True)
@@ -222,11 +221,33 @@ class Event(db.Model):
     url = db.Column(db.String(400))
     search = db.Column(db.String(400))                   # crash-stats link
     updated_at = db.Column(db.DateTime, nullable=False)
+    # Platform events have no product. NULL channels means all; '' means none.
+    product = db.Column(db.String(16))
+    channels = db.Column(db.String(64))                  # comma-separated
 
     __table_args__ = (
         sa.UniqueConstraint('kind', 'ref', name='uq_dashboard_events_ref'),
         sa.Index('ix_dashboard_events_day', 'day'),
     )
+
+
+class NimbusRecipe(db.Model):
+    """Last Remote Settings state used to detect recipe changes."""
+    __tablename__ = 'dashboard_nimbus'
+
+    slug = db.Column(db.String(100), primary_key=True)
+    collection = db.Column(db.String(48), nullable=False)
+    last_modified = db.Column(db.BigInteger, nullable=False)  # ms, UTC
+    # NULL for unsupported apps.
+    product = db.Column(db.String(16))
+    channels = db.Column(db.String(64))
+    name = db.Column(db.String(160), nullable=False)
+    is_rollout = db.Column(db.Boolean, nullable=False, default=False)
+    population = db.Column(db.Float)          # bucket count / total
+    paused = db.Column(db.Boolean, nullable=False, default=False)
+    targeting = db.Column(db.String(16))      # digests
+    branches = db.Column(db.String(16))
+    updated_at = db.Column(db.DateTime, nullable=False)
 
 
 class Feed(db.Model):
@@ -315,8 +336,9 @@ class Cache(db.Model):
 
 TABLES = [Series.__table__, Daily.__table__, Hourly.__table__,
           Day.__table__, Model.__table__, Score.__table__, Run.__table__,
-          Event.__table__, Feed.__table__, Cycle.__table__, Bug.__table__,
-          BugCheck.__table__, Cache.__table__]
+          Event.__table__, NimbusRecipe.__table__, Feed.__table__,
+          Cycle.__table__, Bug.__table__, BugCheck.__table__,
+          Cache.__table__]
 
 
 def create_all():
@@ -697,22 +719,25 @@ def prune(today, prune_after_days, prune_min_crashes, long_after_days,
 
 
 # --------------------------------------------------------------------------
-# Platform events
+# Platform and Nimbus events
 # --------------------------------------------------------------------------
 
-def load_events(since, until=None):
+def load_events(since, until=None, product=None):
+    """Platform events, or Nimbus events when *product* is supplied."""
     q = sa.select(Event).where(Event.day >= since)
     if until is not None:
         q = q.where(Event.day <= until)
+    q = q.where(Event.product.is_(None) if product is None
+                else Event.product == product)
     return list(db.session.execute(
         q.order_by(Event.day, Event.source, Event.title)).scalars())
 
 
 def events_version():
-    """``(count, latest update)`` of the events: the ETag of the events
-    endpoint changes only when a refresh wrote something."""
+    """Platform event count and latest update, used for the events ETag."""
     n, latest = db.session.execute(sa.select(
-        sa.func.count(Event.id), sa.func.max(Event.updated_at))).one()
+        sa.func.count(Event.id), sa.func.max(Event.updated_at)).where(
+            Event.product.is_(None))).one()
     return int(n or 0), latest
 
 
@@ -722,6 +747,17 @@ def load_feeds():
 
 def prune_events(before):
     db.session.execute(sa.delete(Event).where(Event.day < before))
+
+
+def load_nimbus_recipes():
+    return {r.slug: r for r in
+            db.session.execute(sa.select(NimbusRecipe)).scalars()}
+
+
+def delete_nimbus_recipes(slugs):
+    for chunk in _chunks(slugs):
+        db.session.execute(sa.delete(NimbusRecipe).where(
+            NimbusRecipe.slug.in_(chunk)))
 
 
 # --------------------------------------------------------------------------

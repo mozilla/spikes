@@ -252,11 +252,25 @@ scopes the server collects; the page hides its switch when there is one.
   "next_release": {"date": "2026-09-15", "version": "156.0", "upcoming": true},  // or null: the end of
                                       // the forecast (nightly: the merge day, "157 merge"); from
                                       // whattrainisitnow, Thunderbird follows Firefox's dates
+  "nimbus": [Nimbus],                 // channel events since today - days
   "data_health": {...}
 }
 ```
 
 `days` in 7..730 (default 90); `granularity` `day` (default) or `week`.
+
+`Nimbus` is one day of the channel's Nimbus launches, changes and ends,
+oldest day first (Thunderbird has none):
+
+```jsonc
+{"day": "2026-10-27", "source": "nimbus", "label": "Nimbus",
+ "items": [                           // day-only items first, then by time
+   {"kind": "nimbus-launch",          // nimbus-launch, nimbus-change or nimbus-end
+    "title": "Launched: Example rollout",
+    "detail": "rollout · 100 % of eligible clients (now) · nightly · example-rollout",
+    "url": "https://experimenter.services.mozilla.com/nimbus/example-rollout/summary",
+    "at": "2026-10-27T17:16:04Z"}]}  // null when only the day is known
+```
 
 ### `GET /dashboard/api/events?days=730`
 
@@ -285,7 +299,8 @@ feeds); the `ETag` only changes when a refresh wrote something.
 ### `GET /dashboard/api/signature?product=&channel=&signature=&days=90&granularity=day`
 
 ```jsonc
-{"row": Row, "daily": {...}, "hourly": {...}, "model": {...}, "releases": [...]}
+{"row": Row, "daily": {...}, "hourly": {...}, "model": {...}, "releases": [...],
+ "nimbus": [Nimbus]}                 // the channel's, as in the channel view
 ```
 
 404 when the signature is unknown for that channel.

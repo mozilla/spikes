@@ -1408,6 +1408,7 @@ function dailySpec(data, extra) {
     dates: daily.start || [],
     releases: data.releases || app.channel?.releases || [],
     events: eventsFor(productOf(data)),
+    nimbus: data.nimbus || [],
     height: CHART_HEIGHT,
     ...extra,
   };
@@ -1420,6 +1421,7 @@ function hourlySpec(data, extra) {
     ...data.hourly,
     day: data.day || data.row?.day || app.channel?.day,
     events: eventsFor(productOf(data)),
+    nimbus: data.nimbus || [],
     height: CHART_HEIGHT,
     ...extra,
   };

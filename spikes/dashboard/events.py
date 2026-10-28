@@ -43,10 +43,12 @@ Feeds, all JSON:
   history, Microsoft Defender from the platform version shown on the
   Defender updates page (dated when first seen).  Kaspersky, McAfee and
   Bitdefender publish nothing usable and are absent.
+* **Nimbus**: Experimenter launches and ends, parsed by ``nimbus.py``.
+  Served with channel and signature views rather than platform events.
 
-Every feed is fetched in parallel with a 15 s timeout (60 s for the slow
-GeForce lookup and the Socorro queries); a failure keeps the previous
-rows, is retried after ``events_retry_hours`` and reported in the run.
+Feeds are fetched in parallel with a 15 s timeout (60 s for GeForce,
+Socorro and Experimenter). Failures keep previous rows and are retried
+after ``events_retry_hours`` and reported in the run.
 Successful feeds are refreshed every ``events_refresh_hours``.
 """
 
@@ -62,7 +64,7 @@ import requests
 
 from spikes import db
 from spikes.logger import logger
-from . import config, models
+from . import config, models, nimbus
 
 
 TIMEOUT = 15
@@ -84,8 +86,8 @@ LABEL = {'windows': 'Windows update', 'nvidia': 'NVIDIA driver',
          'amd': 'AMD driver', 'intel': 'Intel driver',
          'antivirus': 'Antivirus', 'apple': 'macOS release',
          'linux': 'Linux release', 'android': 'Android'}
-# dated by first sighting: a later refresh must not move them
-IMMUTABLE_KINDS = {'driver-seen', 'defender-platform'}
+# Feed refreshes preserve first-seen dates and stored Nimbus end times.
+IMMUTABLE_KINDS = {'driver-seen', 'defender-platform', 'nimbus-end'}
 WINDOWS_TYPES = {'Standard': 'monthly security update (Patch Tuesday)',
                  'Preview': 'optional non-security preview',
                  'Out-of-band': 'out-of-band update',
@@ -562,7 +564,9 @@ SOURCES = [
            parse_winget('eset', 'ESET.Nod32', 'ESET NOD32 Antivirus'),
            headers={'Accept': 'application/vnd.github+json'}),
     Source('defender', DEFENDER_URL, parse_defender, fmt='text'),
-]
+] + [Source('nimbus-' + app.split('-')[-1], nimbus.experimenter_url(app),
+            nimbus.parse_experimenter, timeout=nimbus.EXPERIMENTER_TIMEOUT)
+     for app in nimbus.APPLICATIONS]
 COMPUTED = 'android-bulletins'
 FEED_NAMES = [s.name for s in SOURCES] + [COMPUTED]
 

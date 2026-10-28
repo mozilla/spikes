@@ -956,6 +956,34 @@ class ApiTest(DBTestCase):
         self.assertIsNotNone(d['daily']['projected'][cur])
         self.assertGreater(len(d['daily']['start']), 7)
 
+    def test_nimbus_lane(self):
+        def row(ref, day, channels):
+            return {'source': 'nimbus', 'kind': 'nimbus-launch', 'ref': ref,
+                    'day': day, 'at': None, 'title': 'Launched: ' + ref,
+                    'detail': 'rollout', 'url': None, 'product': 'Firefox',
+                    'channels': channels, 'updated_at': NOW}
+        models.upsert(models.Event, [
+            row('release-rollout', TODAY - datetime.timedelta(days=3),
+                'release'),
+            row('nightly-rollout', TODAY - datetime.timedelta(days=3),
+                'nightly'),
+            row('older', TODAY - datetime.timedelta(days=45), None)],
+            ['kind', 'ref'])
+        db.session.commit()
+        for url in ('/dashboard/api/channel?product=Firefox&channel=release'
+                    '&days=30',
+                    '/dashboard/api/signature?product=Firefox'
+                    '&channel=release&signature=spiking&days=30'):
+            d = self.client.get(url).get_json()
+            # Filter by channel and requested date range.
+            self.assertEqual([(g['day'], [it['title'] for it in g['items']])
+                              for g in d['nimbus']],
+                             [((TODAY - datetime.timedelta(days=3))
+                               .isoformat(), ['Launched: release-rollout'])])
+        d = self.client.get('/dashboard/api/channel?product=Firefox'
+                            '&channel=release&days=60').get_json()
+        self.assertEqual(len(d['nimbus']), 2)
+
     def test_signature_and_errors(self):
         r = self.client.get('/dashboard/api/signature?product=Firefox'
                             '&channel=release&signature=spiking&days=30')

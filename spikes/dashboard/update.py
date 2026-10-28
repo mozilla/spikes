@@ -17,7 +17,8 @@ import sqlalchemy as sa
 
 from spikes import app, db
 from spikes.logger import logger
-from . import api, bugs, collect, config, events, models, scoring, versions
+from . import (api, bugs, collect, config, events, models, nimbus, scoring,
+               versions)
 from .socorro import Fetcher
 
 
@@ -142,6 +143,13 @@ def run(now=None, budget=None, max_seconds=None):
         except Exception as ex:  # the charts work without badges
             db.session.rollback()
             logger.exception('Dashboard: events refresh failed: %s', ex)
+        try:
+            polled = nimbus.poll(now)
+            if polled is not None:
+                info['nimbus'] = polled
+        except Exception as ex:  # the charts work without the Nimbus lane
+            db.session.rollback()
+            logger.exception('Dashboard: Nimbus poll failed: %s', ex)
         run_row.pruned = maybe_prune(today, now)
         run_row.status = 'ok' if not fetcher.failures and \
             'errors' not in info else 'partial'
